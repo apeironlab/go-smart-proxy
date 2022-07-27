@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/darren/gpac"
@@ -16,6 +17,7 @@ type ProxyRoute struct {
 	iface    string
 	pacUrl   string
 	pac      *gpac.Parser
+	proxyUrl string
 	user     string
 	password string
 }
@@ -56,6 +58,7 @@ func loadRoutes() {
 		routes = append(routes, &ProxyRoute{
 			gateway:  r.Gateway,
 			pacUrl:   r.PacUrl,
+			proxyUrl: r.ProxyUrl,
 			user:     user,
 			password: password,
 		})
@@ -141,6 +144,18 @@ func (p *ProxyRoute) FindProxy(urlStr string) *gpac.Proxy {
 		proxies, err := p.pac.FindProxy(urlStr)
 		if err == nil {
 			return proxies[0]
+		}
+	} else if p.proxyUrl != "" {
+		pUrl, err := url.Parse(p.proxyUrl)
+		if err != nil {
+			return &gpac.Proxy{
+				Type:    "PROXY",
+				Address: p.proxyUrl,
+			}
+		}
+		return &gpac.Proxy{
+			Type:    "PROXY",
+			Address: pUrl.Host,
 		}
 	}
 	return &gpac.Proxy{
