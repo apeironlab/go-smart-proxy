@@ -6,10 +6,14 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/textproto"
+	"net/url"
+	"os"
+	"strconv"
 	"strings"
-	"time"
 
 	"github.com/Azure/go-ntlmssp"
+	"github.com/getlantern/systray"
 )
 
 type MyRoundTripper struct {
@@ -20,186 +24,158 @@ func main() {
 
 	loadConfiguration()
 
-	server := &http.Server{
-		Addr:         configuration.Address,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		Handler:      http.HandlerFunc(ProxyFunc()),
-	}
+	go func() {
 
-	err := server.ListenAndServe()
-	if err != nil {
-		log.Fatal(err)
-	}
+		server2, err := net.Listen("tcp", configuration.Address)
+		if err != nil {
+			log.Fatal(err)
+		}
+		for {
+			c, err := server2.Accept()
+			if err != nil {
+				log.Printf("Error accepting connection: %+v", err)
+				continue
+			}
+			go handleConn(c)
+		}
+
+	}()
+
+	systray.Run(systrayReady, systrayExit)
 
 }
 
-func ProxyFunc() func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-
-		route := GetApplicableRoute()
-
-		proxy := route.FindProxy(r.URL.String())
-		var err error
-
-		if r.Method == "CONNECT" {
-			pos := strings.LastIndex(r.Host, ":")
-			ip := r.Host[:pos]
-			port := r.Host[pos+1:]
-			pIp := net.ParseIP(ip)
-			if pIp != nil && pIp.To4() == nil {
-				//ip = "[" + ip + "]"
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			var conn net.Conn
-			if proxy.Type == "DIRECT" {
-				conn, err = net.Dial("tcp", ip+":"+port)
+func handleConn(c net.Conn) {
+	br := bufio.NewReader(c)
+	reader := textproto.NewReader(br)
+	line, err := reader.ReadLine()
+	if err != nil {
+		handleError(c, http.StatusBadRequest)
+	} else {
+		method, rest, ok := strings.Cut(line, " ")
+		uri, proto, ok2 := strings.Cut(rest, " ")
+		if !ok || !ok2 {
+			handleError(c, http.StatusBadRequest)
+		} else {
+			var pUrl *url.URL
+			if method == "CONNECT" {
+				pUrl, err = url.Parse("http://" + uri)
 				if err != nil {
-					w.WriteHeader(http.StatusBadGateway)
+					handleError(c, http.StatusBadRequest)
 					return
 				}
+			} else {
+				pUrl, err = url.Parse(uri)
+				if err != nil {
+					handleError(c, http.StatusBadRequest)
+					return
+				}
+			}
 
-				hijack(w, conn)
+			route := GetApplicableRoute()
+
+			proxy := route.FindProxy(pUrl.String())
+
+			//log.Printf("Using %s for %s", proxy.Type, pUrl.String())
+
+			pos := strings.Index(pUrl.Host, ":")
+			if pos >= 0 {
+				pos := strings.Index(pUrl.Host[pos+1:], ":")
+				if pos >= 0 {
+					if pUrl.Host[0] != '[' {
+						pos := strings.LastIndex(pUrl.Host, ":")
+						pUrl.Host = "[" + pUrl.Host[:pos] + "]" + pUrl.Host[pos:]
+					}
+				}
+			}
+			host, port, err := net.SplitHostPort(pUrl.Host)
+			if err != nil {
+				host = pUrl.Host
+				port = "80"
+			} else if strings.Contains(host, ":") {
+				host = "[" + host + "]"
+			}
+
+			if proxy.Type == "DIRECT" {
+
+				upstream, err := net.Dial("tcp", host+":"+port)
+				if err != nil {
+					handleError(c, http.StatusBadGateway)
+					log.Printf("Error connecting to %s:%s: %+v", host, port, err)
+					return
+				}
+				if method == "CONNECT" {
+					c.Write([]byte(proto + " 200 Connection Established\r\n\r\n"))
+				} else {
+					upstream.Write([]byte(method + " " + pUrl.Path + " " + proto + "\r\n"))
+					for {
+						line, _ = reader.ReadLine()
+						upstream.Write([]byte(line + "\r\n"))
+						if strings.TrimSpace(line) == "" {
+							break
+						}
+					}
+				}
+
+				transfer(c, upstream)
 
 			} else {
-				conn, err = net.Dial("tcp", proxy.Address)
+
+				upstream, err := net.Dial("tcp", proxy.Address)
 				if err != nil {
-					w.WriteHeader(http.StatusBadGateway)
+					handleError(c, http.StatusBadGateway)
 					return
 				}
-				newReq, err := http.NewRequest(r.Method, ip+":"+port, nil)
+				newReq, err := http.NewRequest("CONNECT", host+":"+port, nil)
 				if err != nil {
-					w.WriteHeader(http.StatusInternalServerError)
+					handleError(c, http.StatusInternalServerError)
 					return
 				}
-				newReq.Host = ip + ":" + port
-				newReq.SetBasicAuth(route.user, route.password)
+				newReq.Host = host + ":" + port
+				if route.user != "" && route.password != "" {
+					newReq.SetBasicAuth(route.user, route.password)
+				}
 				transp := ntlmssp.Negotiator{
 					RoundTripper: MyRoundTripper{
-						conn: conn,
+						conn: upstream,
 					},
 				}
 				resp, err := transp.RoundTrip(newReq)
 				if err != nil {
 					log.Printf("Error: %+v", err)
-					w.WriteHeader(http.StatusBadGateway)
+					handleError(c, http.StatusBadGateway)
 					return
 				}
 
 				if resp.StatusCode == 200 {
 
-					hijack(w, conn)
-
-				} else {
-					resp.Write(w)
-				}
-			}
-		} else {
-			if strings.Contains(r.Header.Get("Connection"), "Upgrade") {
-				var conn net.Conn
-				if proxy.Type == "DIRECT" {
-					conn, err = net.Dial("tcp", r.Host)
-					if err != nil {
-						w.WriteHeader(http.StatusBadGateway)
-						return
-					}
-
-					newReq, err := http.NewRequest(r.Method, r.URL.String(), r.Body)
-					if err != nil {
-						w.WriteHeader(http.StatusInternalServerError)
-						return
-					}
-					copyRequestHeaders(newReq, r)
-					newReq.Write(conn)
-
-					hijack(w, conn)
-
-				} else {
-					conn, err = net.Dial("tcp", proxy.Address)
-					if err != nil {
-						w.WriteHeader(http.StatusBadGateway)
-						return
-					}
-					newReq, err := http.NewRequest("CONNECT", r.Host, nil)
-					if err != nil {
-						w.WriteHeader(http.StatusInternalServerError)
-						return
-					}
-					newReq.Host = r.Host
-					newReq.SetBasicAuth(route.user, route.password)
-					transp := ntlmssp.Negotiator{
-						RoundTripper: MyRoundTripper{
-							conn: conn,
-						},
-					}
-					resp, err := transp.RoundTrip(newReq)
-					if err != nil {
-						log.Printf("Error: %+v", err)
-						w.WriteHeader(http.StatusBadGateway)
-						return
-					}
-
-					if resp.StatusCode == 200 {
-
-						newReq, err := http.NewRequest(r.Method, r.URL.String(), r.Body)
-						if err != nil {
-							w.WriteHeader(http.StatusInternalServerError)
-							return
-						}
-						copyRequestHeaders(newReq, r)
-						newReq.Write(conn)
-
-						hijack(w, conn)
-
+					if method == "CONNECT" {
+						c.Write([]byte(proto + " 200 Connection Established\r\n\r\n"))
 					} else {
-						resp.Write(w)
+						upstream.Write([]byte(method + " " + pUrl.Path + " " + proto + "\r\n"))
+						for {
+							line, _ = reader.ReadLine()
+							upstream.Write([]byte(line + "\r\n"))
+							if strings.TrimSpace(line) == "" {
+								break
+							}
+						}
 					}
+					transfer(c, upstream)
+
+				} else {
+					handleError(c, http.StatusBadGateway)
 				}
-			} else {
-				newReq, err := http.NewRequest(r.Method, r.URL.String(), r.Body)
-				if err != nil {
-					w.WriteHeader(http.StatusInternalServerError)
-					return
-				}
-				copyRequestHeaders(newReq, r)
-				resp, err := route.Do(newReq)
-				if err != nil {
-					log.Printf("Error: %s", err)
-					w.WriteHeader(http.StatusBadGateway)
-					return
-				}
-				copyResponseHeaders(w, resp)
-				w.WriteHeader(resp.StatusCode)
-				io.Copy(w, resp.Body)
-				resp.Body.Close()
+
 			}
 		}
 	}
 }
 
-func copyRequestHeaders(dest *http.Request, src *http.Request) {
-	for k, vv := range src.Header {
-		for _, v := range vv {
-			if k == "Content-Encoding" || k == "Content-Length" || k == "Accept-Encoding" {
-
-			} else {
-				dest.Header.Add(k, v)
-			}
-		}
-	}
-}
-
-func copyResponseHeaders(dest http.ResponseWriter, src *http.Response) {
-	for k, vv := range src.Header {
-		for _, v := range vv {
-			if k == "Content-Encoding" || k == "Content-Length" {
-
-			} else {
-				dest.Header().Add(k, v)
-			}
-		}
-	}
+func handleError(c net.Conn, status int) {
+	c.Write([]byte("HTTP/1.0 " + strconv.FormatInt(int64(status), 10) + " " + http.StatusText(status) + "\r\n"))
+	c.Write([]byte("\r\n"))
+	c.Close()
 }
 
 func (mrt MyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -220,25 +196,6 @@ func (mrt MyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 	return resp, err
-}
-
-func hijack(w http.ResponseWriter, upstream net.Conn) {
-
-	h, ok := w.(http.Hijacker)
-	if ok {
-		clientConn, _, err := h.Hijack()
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-		} else {
-
-			clientConn.Write([]byte("HTTP/1.1 200 Connection Established\n\n"))
-
-			clientConn.SetDeadline(time.Time{})
-
-			transfer(clientConn, upstream)
-		}
-	}
-
 }
 
 func transfer(clientConn net.Conn, upstream net.Conn) {
@@ -262,4 +219,58 @@ func transfer(clientConn net.Conn, upstream net.Conn) {
 		clientConn.Close()
 	}()
 
+}
+
+func systrayReady() {
+
+	systray.SetTitle("Proxy")
+	systray.SetTooltip("Go Smart Proxy")
+
+	options := make([]*systray.MenuItem, 0)
+
+	for i, r := range routes {
+		mRoute := systray.AddMenuItemCheckbox(r.name, r.name, false)
+		options = append(options, mRoute)
+		go func(m *systray.MenuItem, cr int) {
+			for {
+				<-m.ClickedCh
+				log.Printf("Forcing route %s", routes[cr].name)
+				forceRoute = routes[cr]
+				for _, m := range options {
+					m.Uncheck()
+				}
+				mRoute.Check()
+			}
+		}(mRoute, i)
+	}
+
+	mAuto := systray.AddMenuItemCheckbox("Auto", "Auto", true)
+	options = append(options, mAuto)
+	go func() {
+		for {
+			<-mAuto.ClickedCh
+			log.Printf("Forcing route Auto")
+			forceRoute = nil
+			for _, m := range options {
+				m.Uncheck()
+			}
+			mAuto.Check()
+		}
+	}()
+
+	systray.AddSeparator()
+	mQuit := systray.AddMenuItem("Quit", "Quit proxy")
+
+	go systrayReact(mQuit)
+}
+
+func systrayExit() {
+
+}
+
+func systrayReact(quit *systray.MenuItem) {
+	select {
+	case <-quit.ClickedCh:
+		os.Exit(0)
+	}
 }

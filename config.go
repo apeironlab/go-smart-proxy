@@ -16,6 +16,8 @@ type ConfigCredential struct {
 type ConfigRoute struct {
 	Name       string `yaml:"Name"`
 	Gateway    string `yaml:"Gateway"`
+	IFace      string `yaml:"IFace"`
+	Net        string `yaml:"Net"`
 	PacUrl     string `yaml:"PacUrl"`
 	ProxyUrl   string `yaml:"ProxyUrl"`
 	Credential string `yaml:"Credential"`
