@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/aeden/traceroute"
+	//"github.com/aeden/traceroute"
 	"github.com/darren/gpac"
 )
 
@@ -125,11 +125,11 @@ func FindGatewayAndNetwork() (net.IP, net.Interface, *net.IPNet, error) {
 	var ip net.IP
 	var iface net.Interface
 
-	traceOpts := &traceroute.TracerouteOptions{}
-	traceOpts.SetMaxHops(1)
-
 	ipFound := false
 	ipIsLocal := false
+
+	/*traceOpts := &traceroute.TracerouteOptions{}
+	traceOpts.SetMaxHops(1)
 
 	result, err := traceroute.Traceroute("8.8.8.8", traceOpts)
 	if err != nil {
@@ -137,7 +137,7 @@ func FindGatewayAndNetwork() (net.IP, net.Interface, *net.IPNet, error) {
 	} else {
 		ip = net.ParseIP(result.Hops[0].AddressString())
 		ipFound = true
-	}
+	}*/
 
 	if !ipFound {
 		oip, err := GetOutboundIP()
