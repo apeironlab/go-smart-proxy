@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -21,6 +22,16 @@ type MyRoundTripper struct {
 }
 
 func main() {
+
+	fmt.Println("Available interfaces:")
+	ifaces, err := net.Interfaces()
+	if err == nil {
+		for _, iface := range ifaces {
+			fmt.Printf(" - %s\n", iface.Name)
+		}
+	} else {
+		fmt.Printf("Error: %+v\n", err)
+	}
 
 	loadConfiguration()
 
