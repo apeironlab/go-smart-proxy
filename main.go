@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -61,13 +62,16 @@ func handleConn(c net.Conn) {
 	reader := textproto.NewReader(br)
 	line, err := reader.ReadLine()
 	if err != nil {
+		log.Printf("Unexpected error: %+v", err)
 		handleError(c, http.StatusBadRequest)
 	} else {
 		method, rest, ok := strings.Cut(line, " ")
 		uri, proto, ok2 := strings.Cut(rest, " ")
 		if !ok || !ok2 {
+			log.Printf("Error parsing first line: %s %s %v %s %s %v", method, rest, ok, uri, proto, ok2)
 			handleError(c, http.StatusBadRequest)
 		} else {
+			//log.Println(line)
 			var pUrl *url.URL
 			if method == "CONNECT" {
 				pUrl, err = url.Parse("http://" + uri)
@@ -107,6 +111,18 @@ func handleConn(c net.Conn) {
 				host = "[" + host + "]"
 			}
 
+			oldHost := host
+
+			ips, err := net.DefaultResolver.LookupIP(context.Background(), "ip4", host)
+			if err != nil {
+				log.Printf("Error in DNS lookup for %s: %+v", host, err)
+			} else if len(ips) > 0 {
+				log.Printf("%s translated to %s", host, ips[0])
+				host = ips[0].String()
+			}
+
+			log.Printf("Proxying %s (%s) through %s: %s", oldHost, host, proxy.Type, proxy.Address)
+
 			if proxy.Type == "DIRECT" {
 
 				upstream, err := net.Dial("tcp", host+":"+port)
@@ -134,11 +150,13 @@ func handleConn(c net.Conn) {
 
 				upstream, err := net.Dial("tcp", proxy.Address)
 				if err != nil {
+					log.Printf("Erorr connecting to proxy %s: %+v", proxy.Address, err)
 					handleError(c, http.StatusBadGateway)
 					return
 				}
-				newReq, err := http.NewRequest("CONNECT", host+":"+port, nil)
+				newReq, err := http.NewRequest("CONNECT", "http://"+host+":"+port, nil)
 				if err != nil {
+					log.Printf("Error creating connect request to %s:%s: %+v", host, port, err)
 					handleError(c, http.StatusInternalServerError)
 					return
 				}
@@ -160,6 +178,8 @@ func handleConn(c net.Conn) {
 
 				if resp.StatusCode == 200 {
 
+					log.Printf("Got 200 for connecting to %s:%s through %s (%s)", host, port, proxy.Address, method)
+
 					if method == "CONNECT" {
 						c.Write([]byte(proto + " 200 Connection Established\r\n\r\n"))
 					} else {
@@ -175,6 +195,7 @@ func handleConn(c net.Conn) {
 					transfer(c, upstream)
 
 				} else {
+					log.Printf("Error connecting to %s:%s through %s: %d", host, port, proxy.Address, resp.StatusCode)
 					handleError(c, http.StatusBadGateway)
 				}
 
