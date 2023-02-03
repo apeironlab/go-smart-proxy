@@ -78,6 +78,10 @@ func loadRoutes() {
 
 func discoverNetwork() {
 
+	if dnsCache != nil {
+		dnsCache.Purge()
+	}
+
 	var err error
 
 	ip, diface, ipnet, err := FindGatewayAndNetwork()

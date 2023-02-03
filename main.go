@@ -13,16 +13,22 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Azure/go-ntlmssp"
 	"github.com/getlantern/systray"
+	"github.com/projectdiscovery/expirablelru"
 )
 
 type MyRoundTripper struct {
 	conn net.Conn
 }
 
+var dnsCache *expirablelru.Cache
+
 func main() {
+
+	dnsCache = expirablelru.NewExpirableLRU(500, nil, 1*time.Hour, 2*time.Hour)
 
 	fmt.Println("Available interfaces:")
 	ifaces, err := net.Interfaces()
@@ -41,12 +47,16 @@ func main() {
 		server2, err := net.Listen("tcp", configuration.Address)
 		if err != nil {
 			log.Fatal(err)
+		} else {
+			log.Printf("Listening on %s", configuration.Address)
 		}
 		for {
 			c, err := server2.Accept()
 			if err != nil {
 				log.Printf("Error accepting connection: %+v", err)
 				continue
+			} else {
+				log.Printf("New connection from %s", c.RemoteAddr().String())
 			}
 			go handleConn(c)
 		}
@@ -113,12 +123,18 @@ func handleConn(c net.Conn) {
 
 			oldHost := host
 
-			ips, err := net.DefaultResolver.LookupIP(context.Background(), "ip4", host)
-			if err != nil {
-				log.Printf("Error in DNS lookup for %s: %+v", host, err)
-			} else if len(ips) > 0 {
-				log.Printf("%s translated to %s", host, ips[0])
-				host = ips[0].String()
+			ipHost, ok := dnsCache.Get(host)
+			if ok {
+				host = ipHost.(string)
+			} else {
+				ips, err := net.DefaultResolver.LookupIP(context.Background(), "ip4", host)
+				if err != nil {
+					log.Printf("Error in DNS lookup for %s: %+v", host, err)
+				} else if len(ips) > 0 {
+					log.Printf("%s translated to %s", host, ips[0])
+					dnsCache.AddWithTTL(host, ips[0].String(), 30*time.Minute)
+					host = ips[0].String()
+				}
 			}
 
 			log.Printf("Proxying %s (%s) through %s: %s", oldHost, host, proxy.Type, proxy.Address)
