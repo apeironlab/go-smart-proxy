@@ -1,12 +1,14 @@
 package main
 
 import (
+	"crypto/md5"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 
 	//"github.com/aeden/traceroute"
@@ -31,6 +33,21 @@ var network *net.IPNet
 var routes []*ProxyRoute
 var timer *time.Timer
 var forceRoute *ProxyRoute
+
+var defaultTransport http.RoundTripper = &http.Transport{
+	Proxy: nil,
+	DialContext: (&net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+		DualStack: true,
+	}).DialContext,
+	MaxIdleConns:          30,
+	IdleConnTimeout:       90 * time.Second,
+	TLSHandshakeTimeout:   15 * time.Second,
+	ExpectContinueTimeout: 1 * time.Second,
+}
+
+var defaultClient = &http.Client{Transport: defaultTransport}
 
 func init() {
 	discoverNetwork()
@@ -197,20 +214,49 @@ func GetOutboundIP() (net.IP, error) {
 
 func (p *ProxyRoute) Check() error {
 	if p.pacUrl != "" && p.pac == nil {
-		resp, err := http.DefaultClient.Get(p.pacUrl)
-		if err != nil {
-			return err
+		digest := md5.New()
+		digestBytes := digest.Sum([]byte(p.pacUrl))
+		cachedFile := GetCacheDir() + fmt.Sprintf("/pac-%x", digestBytes)
+		f, err := os.Open(cachedFile)
+		loadedFromCache := false
+		if err == nil {
+			defer f.Close()
+			bytes, err := io.ReadAll(f)
+			if err == nil {
+				p.pac, err = gpac.New(string(bytes))
+				if err != nil {
+					return err
+				}
+				loadedFromCache = true
+			}
 		}
+		if !loadedFromCache {
+			resp, err := defaultClient.Get(p.pacUrl)
+			if err != nil {
+				return err
+			}
 
-		bytes, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return err
-		}
+			bytes, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				return err
+			}
 
-		p.pac, err = gpac.New(string(bytes))
-		if err != nil {
-			return err
+			p.pac, err = gpac.New(string(bytes))
+			if err != nil {
+				return err
+			} else {
+				f, err := os.Create(cachedFile)
+				if err == nil {
+					defer f.Close()
+					_, err := f.Write(bytes)
+					if err != nil {
+						log.Printf("Error caching PAC file: %+v", err)
+					}
+				} else {
+					log.Printf("Error creating PAC cache file: %+v", err)
+				}
+			}
 		}
 	}
 
@@ -266,7 +312,7 @@ func (p *ProxyRoute) Do(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	return http.DefaultClient.Do(newReq)
+	return defaultClient.Do(newReq)
 }
 
 func GetApplicableRoute() *ProxyRoute {

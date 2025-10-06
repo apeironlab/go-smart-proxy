@@ -49,3 +49,11 @@ func GetCredential(name string) *ConfigCredential {
 	}
 	return nil
 }
+
+func GetCacheDir() string {
+	err := os.MkdirAll("./cache", 0755)
+	if err != nil {
+		return os.TempDir()
+	}
+	return "./cache"
+}
