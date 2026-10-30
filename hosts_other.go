@@ -4,6 +4,8 @@ package main
 
 import "fmt"
 
+const hostsFile = "hosts"
+
 func ensureHostsEntry(host string) error {
 	return fmt.Errorf("not supported on this platform")
 }
