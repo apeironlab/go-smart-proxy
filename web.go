@@ -43,6 +43,8 @@ type systemProxyStateJSON struct {
 
 func newAPIMux() *http.ServeMux {
 	m := http.NewServeMux()
+	registerRelayRoutes(m)
+	registerRuleRoutes(m)
 	m.HandleFunc("GET /api/state", apiState)
 	m.HandleFunc("GET /api/routes", apiListRoutes)
 	m.HandleFunc("POST /api/routes", apiSaveRoute)
@@ -98,17 +100,19 @@ func isLoopbackRequest(r *http.Request) bool {
 }
 
 type routeInfoJSON struct {
-	Name       string `json:"name"`
-	Gateway    string `json:"gateway"`
-	IFace      string `json:"iface"`
-	Net        string `json:"net"`
-	PacUrl     string `json:"pacUrl"`
-	ProxyUrl   string `json:"proxyUrl"`
-	Credential string `json:"credential"`
-	Applicable bool   `json:"applicable"`
-	WhyNot     string `json:"whyNot,omitempty"`
-	PacStatus  string `json:"pacStatus"`
-	PacError   string `json:"pacError,omitempty"`
+	Name       string      `json:"name"`
+	Gateway    string      `json:"gateway"`
+	IFace      string      `json:"iface"`
+	Net        string      `json:"net"`
+	PacUrl     string      `json:"pacUrl"`
+	ProxyUrl   string      `json:"proxyUrl"`
+	Credential string      `json:"credential"`
+	Chain      []string    `json:"chain"`
+	Hops       []ConfigHop `json:"hops"`
+	Applicable bool        `json:"applicable"`
+	WhyNot     string      `json:"whyNot,omitempty"`
+	PacStatus  string      `json:"pacStatus"`
+	PacError   string      `json:"pacError,omitempty"`
 }
 
 type dnsEntryJSON struct {
@@ -198,13 +202,22 @@ func apiListRoutes(w http.ResponseWriter, r *http.Request) {
 }
 
 type routeFormJSON struct {
-	Name       string `json:"name"`
-	Gateway    string `json:"gateway"`
-	IFace      string `json:"iface"`
-	Net        string `json:"net"`
-	PacUrl     string `json:"pacUrl"`
-	ProxyUrl   string `json:"proxyUrl"`
-	Credential string `json:"credential"`
+	Name       string      `json:"name"`
+	Gateway    string      `json:"gateway"`
+	IFace      string      `json:"iface"`
+	Net        string      `json:"net"`
+	PacUrl     string      `json:"pacUrl"`
+	ProxyUrl   string      `json:"proxyUrl"`
+	Credential string      `json:"credential"`
+	Hops       []ConfigHop `json:"hops"`
+}
+
+// validateHops checks a chain before it is saved; credentials are looked up under the lock.
+func validateHops(hops []ConfigHop) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+	_, err := buildChain(hops)
+	return err
 }
 
 func apiSaveRoute(w http.ResponseWriter, r *http.Request) {
@@ -218,11 +231,17 @@ func apiSaveRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := validateHops(form.Hops); err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	configMu.Lock()
 	found := false
 	for i := range configuration.Routes {
 		if configuration.Routes[i].Name == form.Name {
 			configuration.Routes[i] = ConfigRoute{
+				Chain:      form.Hops,
 				Name:       form.Name,
 				Gateway:    form.Gateway,
 				IFace:      form.IFace,
@@ -237,6 +256,7 @@ func apiSaveRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	if !found {
 		configuration.Routes = append(configuration.Routes, ConfigRoute{
+			Chain:      form.Hops,
 			Name:       form.Name,
 			Gateway:    form.Gateway,
 			IFace:      form.IFace,

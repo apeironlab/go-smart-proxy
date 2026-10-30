@@ -34,6 +34,8 @@ type ProxyRoute struct {
 	user     string
 	password string
 	cred     string
+	chain    []*chainHop
+	hops     []ConfigHop // chain as configured, for editing
 
 	mu             sync.Mutex
 	pac            *gpac.Parser
@@ -112,7 +114,14 @@ func loadRoutes() {
 				password = cfgCred.Password
 			}
 		}
+		chain, err := buildChain(r.Chain)
+		if err != nil {
+			log.Printf("Route %q: invalid Chain: %v (route skipped)", r.Name, err)
+			continue
+		}
 		newRoutes = append(newRoutes, &ProxyRoute{
+			chain:    chain,
+			hops:     r.Chain,
 			name:     r.Name,
 			gateway:  r.Gateway,
 			iface:    r.IFace,
@@ -133,6 +142,20 @@ func loadRoutes() {
 	stateMu.Lock()
 	routes = newRoutes
 	stateMu.Unlock()
+
+	compiled := make([]*routingRule, 0, len(configuration.Rules))
+	for _, c := range configuration.Rules {
+		rule, err := compileRule(c)
+		if err != nil {
+			log.Printf("Skipping invalid rule: %v", err)
+			continue
+		}
+		compiled = append(compiled, rule)
+		log.Printf("Loaded rule %q -> route %q", c.Name, c.Route)
+	}
+	rulesMu.Lock()
+	routeRules = compiled
+	rulesMu.Unlock()
 }
 
 func getRoutes() []*ProxyRoute {
@@ -508,6 +531,8 @@ func (p *ProxyRoute) info(st netState) routeInfoJSON {
 		PacUrl:     p.pacUrl,
 		ProxyUrl:   p.proxyUrl,
 		Credential: p.cred,
+		Chain:      chainStrings(p.chain),
+		Hops:       append([]ConfigHop{}, p.hops...),
 		Applicable: applicable,
 		WhyNot:     why,
 		PacStatus:  pacStatus,
@@ -516,6 +541,9 @@ func (p *ProxyRoute) info(st netState) routeInfoJSON {
 }
 
 func (p *ProxyRoute) FindProxy(urlStr string) *gpac.Proxy {
+	if len(p.chain) > 0 {
+		return &gpac.Proxy{Type: "PROXY", Address: p.chain[0].addr}
+	}
 	p.mu.Lock()
 	pac := p.pac
 	proxyUrl := p.proxyUrl
@@ -568,6 +596,13 @@ func (p *ProxyRoute) getRoundTripper(direct bool, proxyAddr string, auth bool) h
 	}
 	if rt, ok := p.rtCache[key]; ok {
 		return rt
+	}
+
+	if len(p.chain) > 0 && !direct {
+		transport := p.newChainTransport()
+		p.rtCache[key] = transport
+		p.transports = append(p.transports, transport)
+		return transport
 	}
 
 	var proxyURL *url.URL

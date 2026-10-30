@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  ActionIcon, Alert, Badge, Card, Code, Drawer, Group, SimpleGrid, Stack, Switch, Table, Text, Title,
+  ActionIcon, Alert, Badge, Card, Code, Drawer, Group, SimpleGrid, Stack, Switch, Table, Text, TextInput, Title,
 } from '@mantine/core'
-import { IconX } from '@tabler/icons-react'
+import { IconSearch, IconX } from '@tabler/icons-react'
 import { api } from '../api'
 import type { ConnInfo } from '../api'
 
@@ -96,6 +96,7 @@ function ConnDetails({ conn }: { conn: ConnInfo }) {
 export default function ConnectionsPage() {
   const [conns, setConns] = useState<ConnInfo[]>([])
   const [showClosed, setShowClosed] = useState(false)
+  const [filter, setFilter] = useState('')
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -109,6 +110,14 @@ export default function ConnectionsPage() {
     const t = setInterval(load, 2000)
     return () => clearInterval(t)
   }, [showClosed])
+
+  const filtered = useMemo(() => {
+    const q = filter.trim().toLowerCase()
+    if (!q) return conns
+    return conns.filter((c) =>
+      [c.host, c.url, c.target, c.client, c.proxy, c.route].some((v) => (v ?? '').toLowerCase().includes(q)),
+    )
+  }, [conns, filter])
 
   const selected = conns.find((c) => c.id === selectedId) ?? null
   const active = useMemo(() => conns.filter((c) => !c.ended).length, [conns])
@@ -130,11 +139,25 @@ export default function ConnectionsPage() {
     <>
       <Group justify="space-between" mb="md">
         <Title order={3}>Connessioni</Title>
-        <Switch
-          label="Mostra chiuse"
-          checked={showClosed}
-          onChange={(e) => setShowClosed(e.currentTarget.checked)}
-        />
+        <Group>
+          <TextInput
+            placeholder="Filtra per host, URL, proxy, route..."
+            leftSection={<IconSearch size={14} />}
+            value={filter}
+            onChange={(e) => setFilter(e.currentTarget.value)}
+            rightSection={filter ? (
+              <ActionIcon size="sm" variant="subtle" color="gray" onClick={() => setFilter('')}>
+                <IconX size={12} />
+              </ActionIcon>
+            ) : null}
+            w={300}
+          />
+          <Switch
+            label="Mostra chiuse"
+            checked={showClosed}
+            onChange={(e) => setShowClosed(e.currentTarget.checked)}
+          />
+        </Group>
       </Group>
 
       {error && <Alert color="red" mb="md">Errore nel caricamento: {error}</Alert>}
@@ -155,6 +178,7 @@ export default function ConnectionsPage() {
             <Table.Th>#</Table.Th>
             <Table.Th>Tipo</Table.Th>
             <Table.Th>Da</Table.Th>
+            <Table.Th>Host richiesto</Table.Th>
             <Table.Th>A</Table.Th>
             <Table.Th>Proxy</Table.Th>
             <Table.Th>Route</Table.Th>
@@ -169,11 +193,12 @@ export default function ConnectionsPage() {
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
-          {conns.map((c) => (
+          {filtered.map((c) => (
             <Table.Tr key={c.id} onClick={() => setSelectedId(c.id)} style={{ cursor: 'pointer' }}>
               <Table.Td>{c.id}</Table.Td>
               <Table.Td><Badge variant="light" color="gray" size="sm">{c.type}</Badge></Table.Td>
               <Table.Td><Text size="sm" truncate="end" maw={130}>{c.client || '-'}</Text></Table.Td>
+              <Table.Td><Text size="sm" truncate="end" maw={220} title={c.host}>{c.host || '-'}</Text></Table.Td>
               <Table.Td><Text size="sm" truncate="end" maw={170}>{c.target || '-'}</Text></Table.Td>
               <Table.Td><Text size="sm" truncate="end" maw={130}>{c.proxy || '-'}</Text></Table.Td>
               <Table.Td><Text size="sm" truncate="end" maw={110}>{c.route || '-'}</Text></Table.Td>

@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { AppShell, Badge, Burger, Code, Group, NavLink, ScrollArea, Title, Tooltip } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
-import { IconKey, IconNetwork, IconPlugConnected, IconSettings } from '@tabler/icons-react'
+import { IconKey, IconNetwork, IconRoute, IconRouteAltRight, IconPlugConnected, IconSettings } from '@tabler/icons-react'
 import ConnectionsPage from './pages/ConnectionsPage'
 import CredentialsPage from './pages/CredentialsPage'
 import ConfigPage from './pages/ConfigPage'
+import RelayPage from './pages/RelayPage'
+import RulesPage from './pages/RulesPage'
 import { api } from './api'
 import type { StateInfo } from './api'
 
@@ -13,6 +15,7 @@ export default function App() {
   const [opened, { toggle }] = useDisclosure()
   const [state, setState] = useState<StateInfo | null>(null)
   const [error, setError] = useState(false)
+  const [pending, setPending] = useState(0)
 
   useEffect(() => {
     const load = () =>
@@ -25,11 +28,20 @@ export default function App() {
         .catch(() => setError(true))
     load()
     const t = setInterval(load, 5000)
-    return () => clearInterval(t)
+    const loadRelay = () =>
+      api.relay().then((r) => setPending(r.approvals.length + r.incoming.length)).catch(() => {})
+    loadRelay()
+    const t2 = setInterval(loadRelay, 3000)
+    return () => {
+      clearInterval(t)
+      clearInterval(t2)
+    }
   }, [])
 
   const pages = [
     { id: 'connections', label: 'Connessioni', icon: IconPlugConnected, comp: <ConnectionsPage /> },
+    { id: 'rules', label: 'Regole', icon: IconRoute, comp: <RulesPage /> },
+    { id: 'relay', label: 'Relay', icon: IconRouteAltRight, comp: <RelayPage />, badge: pending },
     { id: 'credentials', label: 'Credenziali', icon: IconKey, comp: <CredentialsPage /> },
     { id: 'config', label: 'Configurazione', icon: IconSettings, comp: <ConfigPage /> },
   ]
@@ -64,6 +76,7 @@ export default function App() {
               key={p.id}
               active={page === p.id}
               label={p.label}
+              rightSection={p.badge ? <Badge color="red" size="sm" circle>{p.badge}</Badge> : null}
               leftSection={<p.icon size={16} />}
               onClick={() => setPage(p.id)}
             />

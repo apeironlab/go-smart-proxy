@@ -162,6 +162,7 @@ func main() {
 	}
 
 	loadConfiguration()
+	relayMgr.Start()
 
 	if configuration.PacHijack {
 		if err := ensureHostsEntry(pacHijackHost()); err != nil {
@@ -389,7 +390,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	route := GetApplicableRoute()
+	route, ruleName := routeFor(r.URL.Hostname())
 	if route == nil {
 		http.Error(w, "no route available", http.StatusServiceUnavailable)
 		return
@@ -406,6 +407,11 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	if proxy.Username != "" {
 		user, password = proxy.Username, proxy.Password
 	}
+	if len(route.chain) > 0 {
+		// Hop credentials are used while building the tunnel, not per request.
+		user, password = "", ""
+		proxyAddr = chainLabel(route.chain)
+	}
 
 	rec := connReg.newConn("request", r.RemoteAddr, "", r.URL.Host, proxyAddr, route.name, route.cred, r.Method, r.URL.String())
 	rec.setAuth("none")
@@ -413,6 +419,9 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		rec.setAuth("ntlm")
 	}
 	rec.event(fmt.Sprintf("%s %s", r.Method, r.URL.String()))
+	if ruleName != "" {
+		rec.event(fmt.Sprintf("rule %q -> route %q", ruleName, route.name))
+	}
 
 	// For DIRECT requests resolve the hostname locally (falling back to the
 	// transport's own resolution). For proxied requests the URL is forwarded
@@ -524,7 +533,7 @@ func handleConnect(client net.Conn, clientBr *bufio.Reader, hostport string) {
 		port = "443"
 	}
 
-	route := GetApplicableRoute()
+	route, ruleName := routeFor(host)
 	if route == nil {
 		connectError(client, http.StatusServiceUnavailable)
 		return
@@ -539,6 +548,9 @@ func handleConnect(client net.Conn, clientBr *bufio.Reader, hostport string) {
 	proxyAddr := ""
 	if proxy.Type != "DIRECT" {
 		proxyAddr = proxy.Address
+		if len(route.chain) > 0 {
+			proxyAddr = chainLabel(route.chain)
+		}
 	}
 
 	rec := connReg.newConn("tunnel", client.RemoteAddr().String(), host, target, proxyAddr, route.name, route.cred, "CONNECT", "")
@@ -548,6 +560,9 @@ func handleConnect(client net.Conn, clientBr *bufio.Reader, hostport string) {
 		}
 	}()
 	rec.event(fmt.Sprintf("CONNECT %s", target))
+	if ruleName != "" {
+		rec.event(fmt.Sprintf("rule %q -> route %q", ruleName, route.name))
+	}
 	if proxyAddr != "" {
 		rec.event(fmt.Sprintf("upstream proxy %s", proxyAddr))
 	} else {
@@ -609,6 +624,9 @@ func handleConnect(client net.Conn, clientBr *bufio.Reader, hostport string) {
 }
 
 func dialProxyAndConnect(route *ProxyRoute, proxy *gpac.Proxy, target string, rec *ConnInfo) (net.Conn, *bufio.Reader, error) {
+	if len(route.chain) > 0 {
+		return dialChain(route, target, rec)
+	}
 	upstream, err := net.DialTimeout("tcp", proxy.Address, dialTimeout)
 	if err != nil {
 		return nil, nil, err
@@ -621,17 +639,26 @@ func dialProxyAndConnect(route *ProxyRoute, proxy *gpac.Proxy, target string, re
 	// bytes read ahead while parsing a response must not be lost.
 	upstreamBr := bufio.NewReader(upstream)
 
-	req, err := http.NewRequest("CONNECT", "http://"+target, nil)
-	if err != nil {
-		upstream.Close()
-		return nil, nil, err
-	}
-	req.Host = target
-
 	user, password := route.user, route.password
 	if proxy.Username != "" {
 		user, password = proxy.Username, proxy.Password
 	}
+	if err := httpConnect(upstream, upstreamBr, user, password, target, rec); err != nil {
+		upstream.Close()
+		return nil, nil, err
+	}
+	return upstream, upstreamBr, nil
+}
+
+// httpConnect performs an HTTP CONNECT to target over an already open
+// connection to a proxy, with NTLM/Basic authentication when user is set.
+func httpConnect(upstream net.Conn, upstreamBr *bufio.Reader, user, password, target string, rec *ConnInfo) error {
+	req, err := http.NewRequest("CONNECT", "http://"+target, nil)
+	if err != nil {
+		return err
+	}
+	req.Host = target
+
 	if user != "" {
 		req.SetBasicAuth(user, password)
 	}
@@ -655,12 +682,10 @@ func dialProxyAndConnect(route *ProxyRoute, proxy *gpac.Proxy, target string, re
 	resp, err := transp.RoundTrip(req)
 	upstream.SetDeadline(time.Time{})
 	if err != nil {
-		upstream.Close()
-		return nil, nil, err
+		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		upstream.Close()
-		return nil, nil, fmt.Errorf("proxy returned status %d", resp.StatusCode)
+		return fmt.Errorf("proxy returned status %d", resp.StatusCode)
 	}
 	if rec != nil {
 		if user != "" {
@@ -669,7 +694,7 @@ func dialProxyAndConnect(route *ProxyRoute, proxy *gpac.Proxy, target string, re
 			rec.event("NTLM handshake completed")
 		}
 	}
-	return upstream, upstreamBr, nil
+	return nil
 }
 
 func (mrt MyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -817,7 +842,9 @@ func tunnel(client net.Conn, clientReader *bufio.Reader, upstream net.Conn, upst
 }
 
 func systrayReady() {
-
+	if icon := trayIcon(); icon != nil {
+		systray.SetIcon(icon)
+	}
 	systray.SetTitle("Proxy")
 	systray.SetTooltip("Go Smart Proxy")
 

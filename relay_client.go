@@ -1,0 +1,567 @@
+package main
+
+import (
+	"bufio"
+	"crypto/tls"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"net"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/hashicorp/yamux"
+
+	"proxy/relay"
+)
+
+const (
+	relayStateFile     = "relay_state.json"
+	relayApprovalWait  = 60 * time.Second
+	relayDialReplyWait = 100 * time.Second
+	relayNoticeTTL     = 15 * time.Second
+)
+
+// relayRule remembers a route (contact + destination) that was approved.
+type relayRule struct {
+	ID   int64  `json:"id"`
+	From string `json:"from"`
+	Host string `json:"host"`
+	Port int    `json:"port"` // 0 = any port
+}
+
+type relayDecision struct {
+	Allow   bool `json:"allow"`
+	Always  bool `json:"always"`
+	AnyPort bool `json:"anyPort"`
+}
+
+// relayApproval is a route requested by a contact that waits for our answer.
+type relayApproval struct {
+	ID   int64     `json:"id"`
+	From string    `json:"from"`
+	Host string    `json:"host"`
+	Port int       `json:"port"`
+	Time time.Time `json:"time"`
+	ch   chan relayDecision
+}
+
+type relayPersisted struct {
+	Rules  []relayRule `json:"rules"`
+	NextID int64       `json:"nextId"`
+	State  relay.State `json:"state"` // last known address book, shown while offline
+}
+
+// relayClient keeps the connection to the relay, the address book and the
+// approvals for routes requested by contacts.
+type relayClient struct {
+	mu        sync.Mutex
+	cfg       *RelayConfig
+	sess      *yamux.Session
+	ctrl      net.Conn
+	connected bool
+	lastErr   string
+	route     string
+	state     relay.State
+	notice    string
+	noticeAt  time.Time
+	approvals map[int64]*relayApproval
+	rules     []relayRule
+	nextID    int64
+	sendMu    sync.Mutex
+	file      string // persisted state, relayStateFile by default
+}
+
+var relayMgr = &relayClient{approvals: map[int64]*relayApproval{}}
+
+// Start connects to the relay in the background, if one is configured.
+func (r *relayClient) Start() {
+	r.start(configuration.Relay)
+}
+
+func (r *relayClient) start(cfg *RelayConfig) {
+	if cfg == nil || cfg.Address == "" {
+		return
+	}
+	r.cfg = cfg
+	r.loadFile()
+	go r.loop()
+}
+
+func (r *relayClient) stateFile() string {
+	if r.file != "" {
+		return r.file
+	}
+	return relayStateFile
+}
+
+func (r *relayClient) loadFile() {
+	b, err := os.ReadFile(r.stateFile())
+	if err != nil {
+		return
+	}
+	var p relayPersisted
+	if json.Unmarshal(b, &p) != nil {
+		return
+	}
+	r.mu.Lock()
+	r.rules, r.nextID, r.state = p.Rules, p.NextID, p.State
+	for i := range r.state.Contacts {
+		r.state.Contacts[i].Online = false
+	}
+	r.mu.Unlock()
+}
+
+func (r *relayClient) saveLocked() {
+	b, _ := json.MarshalIndent(relayPersisted{Rules: r.rules, NextID: r.nextID, State: r.state}, "", "  ")
+	tmp := r.stateFile() + ".tmp"
+	if os.WriteFile(tmp, b, 0o600) == nil {
+		os.Rename(tmp, r.stateFile())
+	}
+}
+
+func (r *relayClient) loop() {
+	backoff := 2 * time.Second
+	for {
+		started := time.Now()
+		err := r.connectOnce()
+		r.mu.Lock()
+		r.connected, r.sess, r.ctrl = false, nil, nil
+		if err != nil {
+			r.lastErr = err.Error()
+		}
+		for id, a := range r.approvals {
+			a.ch <- relayDecision{}
+			delete(r.approvals, id)
+		}
+		r.mu.Unlock()
+		if err != nil {
+			log.Printf("relay: %v", err)
+		}
+		if time.Since(started) > 30*time.Second {
+			backoff = 2 * time.Second
+		}
+		time.Sleep(backoff)
+		if backoff < time.Minute {
+			backoff *= 2
+		}
+	}
+}
+
+// relayRoute picks the route used to reach the relay: the one named in the
+// configuration, or the one currently applicable (direct, proxy, chain...).
+func (r *relayClient) relayRoute() (*ProxyRoute, error) {
+	var route *ProxyRoute
+	if r.cfg.Route != "" {
+		for _, rt := range getRoutes() {
+			if rt.name == r.cfg.Route {
+				route = rt
+			}
+		}
+		if route == nil {
+			return nil, fmt.Errorf("Relay.Route %q does not exist", r.cfg.Route)
+		}
+	} else {
+		route = GetApplicableRoute()
+	}
+	if route == nil {
+		return nil, errors.New("no route available")
+	}
+	if route.usesRelay() {
+		return nil, fmt.Errorf("route %q goes through a relay: it cannot be used to reach the relay itself", route.name)
+	}
+	return route, nil
+}
+
+func (r *relayClient) connectOnce() error {
+	cfg := r.cfg
+	cert, err := tls.LoadX509KeyPair(cfg.Cert, cfg.Key)
+	if err != nil {
+		return fmt.Errorf("client certificate: %w", err)
+	}
+	tlsCfg := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+	if cfg.CA != "" {
+		pool, err := relay.LoadPool(cfg.CA)
+		if err != nil {
+			return fmt.Errorf("relay CA: %w", err)
+		}
+		tlsCfg.RootCAs = pool
+	}
+
+	addr := cfg.Address
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+		addr = net.JoinHostPort(addr, "8443")
+	}
+	tlsCfg.ServerName = host
+
+	route, err := r.relayRoute()
+	if err != nil {
+		return err
+	}
+	rec := connReg.newConn("relay", "", host, addr, "", route.name, route.cred, "", "")
+	rec.event("connecting to relay " + addr)
+	raw, err := dialViaRoute(route, addr, rec)
+	if err != nil {
+		rec.setError(err.Error())
+		rec.finish(StateFailed)
+		return fmt.Errorf("connect to %s via route %q: %w", addr, route.name, err)
+	}
+	tc := tls.Client(raw, tlsCfg)
+	raw.SetDeadline(time.Now().Add(30 * time.Second))
+	if err := tc.Handshake(); err != nil {
+		raw.Close()
+		rec.setError(err.Error())
+		rec.finish(StateFailed)
+		return fmt.Errorf("TLS handshake with relay: %w", err)
+	}
+	raw.SetDeadline(time.Time{})
+
+	ycfg := yamux.DefaultConfig()
+	ycfg.LogOutput = discardWriter{}
+	sess, err := yamux.Client(tc, ycfg)
+	if err != nil {
+		raw.Close()
+		rec.finish(StateFailed)
+		return err
+	}
+	defer func() {
+		sess.Close()
+		rec.finish(StateClosed)
+	}()
+	ctrl, err := sess.OpenStream()
+	if err != nil {
+		return err
+	}
+	if err := relay.WriteLine(ctrl, relay.DialReq{T: relay.TControl}); err != nil {
+		return err
+	}
+
+	rec.setState(StateEstablished)
+	rec.event("relay session established")
+	rec.setCloseFn(func() { sess.Close() })
+
+	r.mu.Lock()
+	r.sess, r.ctrl, r.connected, r.lastErr, r.route = sess, ctrl, true, "", route.name
+	r.mu.Unlock()
+	log.Printf("relay: connected to %s via route %q", addr, route.name)
+
+	go r.readState(ctrl, sess)
+	go func() { // reconnect when the network (and so the selected route) changes
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-sess.CloseChan():
+				return
+			case <-t.C:
+				if cur, err := r.relayRoute(); err != nil || cur.name != route.name {
+					log.Printf("relay: route changed, reconnecting")
+					sess.Close()
+					return
+				}
+			}
+		}
+	}()
+
+	for {
+		st, err := sess.AcceptStream()
+		if err != nil {
+			return err
+		}
+		go r.handleIncoming(st)
+	}
+}
+
+type discardWriter struct{}
+
+func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
+
+func (r *relayClient) readState(ctrl net.Conn, sess *yamux.Session) {
+	br := relay.NewReader(ctrl)
+	for {
+		var st relay.State
+		if err := relay.ReadLine(br, &st); err != nil {
+			sess.Close()
+			return
+		}
+		r.mu.Lock()
+		if st.Notice != "" {
+			r.notice, r.noticeAt = st.Notice, time.Now()
+		}
+		r.state = st
+		r.dropRulesOfRemovedContactsLocked()
+		r.saveLocked()
+		r.mu.Unlock()
+	}
+}
+
+func (r *relayClient) dropRulesOfRemovedContactsLocked() {
+	known := map[string]bool{}
+	for _, c := range r.state.Contacts {
+		known[c.Email] = true
+	}
+	kept := r.rules[:0]
+	for _, rule := range r.rules {
+		if known[rule.From] {
+			kept = append(kept, rule)
+		}
+	}
+	r.rules = kept
+}
+
+func (r *relayClient) send(m relay.ClientMsg) error {
+	r.mu.Lock()
+	ctrl := r.ctrl
+	r.mu.Unlock()
+	if ctrl == nil {
+		return errors.New("not connected to the relay")
+	}
+	r.sendMu.Lock()
+	defer r.sendMu.Unlock()
+	ctrl.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	return relay.WriteLine(ctrl, m)
+}
+
+// Dial opens a connection to target through the network of contact email.
+func (r *relayClient) Dial(email, target string) (net.Conn, error) {
+	r.mu.Lock()
+	sess := r.sess
+	r.mu.Unlock()
+	if sess == nil {
+		return nil, errors.New("not connected to the relay")
+	}
+	st, err := sess.OpenStream()
+	if err != nil {
+		return nil, err
+	}
+	if err := relay.WriteLine(st, relay.DialReq{T: relay.TDial, Via: email, Target: target}); err != nil {
+		st.Close()
+		return nil, err
+	}
+	br := relay.NewReader(st)
+	st.SetReadDeadline(time.Now().Add(relayDialReplyWait))
+	var resp relay.DialResp
+	if err := relay.ReadLine(br, &resp); err != nil {
+		st.Close()
+		return nil, err
+	}
+	st.SetReadDeadline(time.Time{})
+	if !resp.OK {
+		st.Close()
+		if resp.Error == "" {
+			resp.Error = "refused"
+		}
+		return nil, errors.New(resp.Error)
+	}
+	return &bufConn{Conn: st, br: br}, nil
+}
+
+// handleIncoming serves a contact that asked us to open a connection for it.
+func (r *relayClient) handleIncoming(st net.Conn) {
+	defer st.Close()
+	br := relay.NewReader(st)
+	var req relay.DialReq
+	if err := relay.ReadLine(br, &req); err != nil || req.T != relay.TDial {
+		return
+	}
+	deny := func(msg string) { relay.WriteLine(st, relay.DialResp{Error: msg}) }
+
+	from, ok := relay.NormalizeEmail(req.From)
+	if !ok || !r.isContact(from) {
+		deny("not a contact")
+		return
+	}
+	host, portStr, err := net.SplitHostPort(req.Target)
+	port, perr := strconv.Atoi(portStr)
+	if err != nil || perr != nil || port <= 0 || port > 65535 || host == "" {
+		deny("invalid target")
+		return
+	}
+	if !r.authorize(from, strings.ToLower(host), port) {
+		log.Printf("relay: %s -> %s refused", from, req.Target)
+		deny("route not approved")
+		return
+	}
+
+	target := req.Target
+	if ip := resolveHost(host); ip != "" {
+		target = net.JoinHostPort(ip, portStr)
+	}
+	d := net.Dialer{Timeout: dialTimeout, Control: r.guard}
+	conn, err := d.Dial("tcp", target)
+	if err != nil {
+		deny(err.Error())
+		return
+	}
+	rec := connReg.newConn("relay-exit", from, host, target, "", "relay", "", "", "")
+	rec.setState(StateEstablished)
+	rec.event("opened for " + from)
+	rec.setCloseFn(func() { conn.Close(); st.Close() })
+	defer rec.finish(StateClosed)
+	if err := relay.WriteLine(st, relay.DialResp{OK: true}); err != nil {
+		conn.Close()
+		return
+	}
+	cc := &countingConn{Conn: conn, in: &rec.bytesUpIn, out: &rec.bytesUpOut}
+	log.Printf("relay: %s -> %s", from, target)
+	relay.Pipe(st, br, cc, bufio.NewReader(cc))
+}
+
+// guard stops contacts from reaching services bound to this machine
+// (including the proxy itself and its web UI) unless explicitly allowed.
+func (r *relayClient) guard(network, address string, _ syscall.RawConn) error {
+	if r.cfg != nil && r.cfg.AllowLocal {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
+		return errors.New("destination not allowed")
+	}
+	return nil
+}
+
+func (r *relayClient) isContact(email string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range r.state.Contacts {
+		if c.Email == email {
+			return true
+		}
+	}
+	return false
+}
+
+// authorize returns true when the route is already approved, otherwise it
+// asks the user (through the web UI) and waits for the answer.
+func (r *relayClient) authorize(from, host string, port int) bool {
+	r.mu.Lock()
+	for _, rule := range r.rules {
+		if rule.From == from && rule.Host == host && (rule.Port == 0 || rule.Port == port) {
+			r.mu.Unlock()
+			return true
+		}
+	}
+	r.nextID++
+	a := &relayApproval{ID: r.nextID, From: from, Host: host, Port: port, Time: time.Now(), ch: make(chan relayDecision, 1)}
+	r.approvals[a.ID] = a
+	r.mu.Unlock()
+	log.Printf("relay: waiting for approval of %s -> %s:%d", from, host, port)
+
+	var dec relayDecision
+	select {
+	case dec = <-a.ch:
+	case <-time.After(relayApprovalWait):
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.approvals, a.ID)
+	if dec.Allow && dec.Always {
+		rule := relayRule{ID: a.ID, From: from, Host: host, Port: port}
+		if dec.AnyPort {
+			rule.Port = 0
+		}
+		r.rules = append(r.rules, rule)
+		r.saveLocked()
+	}
+	return dec.Allow
+}
+
+// Decide answers a pending approval.
+func (r *relayClient) Decide(id int64, dec relayDecision) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	a, ok := r.approvals[id]
+	if !ok {
+		return false
+	}
+	select {
+	case a.ch <- dec:
+	default:
+	}
+	return true
+}
+
+func (r *relayClient) RemoveRule(id int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	kept := r.rules[:0]
+	for _, rule := range r.rules {
+		if rule.ID != id {
+			kept = append(kept, rule)
+		}
+	}
+	r.rules = kept
+	r.saveLocked()
+}
+
+type relayStatusJSON struct {
+	Enabled   bool             `json:"enabled"`
+	Connected bool             `json:"connected"`
+	Address   string           `json:"address"`
+	Route     string           `json:"route"`
+	Email     string           `json:"email"`
+	Error     string           `json:"error,omitempty"`
+	Notice    string           `json:"notice,omitempty"`
+	Contacts  []relay.Contact  `json:"contacts"`
+	Incoming  []string         `json:"incoming"`
+	Outgoing  []string         `json:"outgoing"`
+	Approvals []*relayApproval `json:"approvals"`
+	Rules     []relayRule      `json:"rules"`
+}
+
+func (r *relayClient) Status() relayStatusJSON {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st := relayStatusJSON{
+		Enabled:   r.cfg != nil,
+		Connected: r.connected,
+		Route:     r.route,
+		Email:     r.state.Email,
+		Error:     r.lastErr,
+		Contacts:  append([]relay.Contact{}, r.state.Contacts...),
+		Incoming:  append([]string{}, r.state.Incoming...),
+		Outgoing:  append([]string{}, r.state.Outgoing...),
+		Approvals: []*relayApproval{},
+		Rules:     append([]relayRule{}, r.rules...),
+	}
+	if r.cfg != nil {
+		st.Address = r.cfg.Address
+	}
+	if time.Since(r.noticeAt) < relayNoticeTTL {
+		st.Notice = r.notice
+	}
+	for _, a := range r.approvals {
+		st.Approvals = append(st.Approvals, a)
+	}
+	return st
+}
+
+// dialViaRoute opens a TCP connection to addr using the given route: directly,
+// through its proxy, or through its whole chain.
+func dialViaRoute(route *ProxyRoute, addr string, rec *ConnInfo) (net.Conn, error) {
+	proxy := route.FindProxy("https://" + addr + "/")
+	if proxy.Type == "DIRECT" {
+		c, err := net.DialTimeout("tcp", addr, dialTimeout)
+		if err != nil {
+			return nil, err
+		}
+		return &countingConn{Conn: c, in: &rec.bytesUpIn, out: &rec.bytesUpOut}, nil
+	}
+	conn, br, err := dialProxyAndConnect(route, proxy, addr, rec)
+	if err != nil {
+		return nil, err
+	}
+	return &bufConn{Conn: conn, br: br}, nil
+}

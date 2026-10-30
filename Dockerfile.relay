@@ -1,0 +1,15 @@
+FROM golang:1.24 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY relay ./relay
+COPY cmd ./cmd
+RUN CGO_ENABLED=0 go build -o /proxyrelay ./cmd/proxyrelay
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /proxyrelay /proxyrelay
+# Mount a volume on /data with server.pem, server-key.pem and ca.pem; the address book is stored there too.
+VOLUME /data
+EXPOSE 8443
+ENTRYPOINT ["/proxyrelay"]
+CMD ["serve", "-listen", ":8443", "-cert", "/data/server.pem", "-key", "/data/server-key.pem", "-ca", "/data/ca.pem", "-state", "/data/relay-state.json"]

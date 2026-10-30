@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
-  ActionIcon, Alert, Badge, Button, Card, Code, Group, Modal, Select, SimpleGrid, Stack, Switch, Table,
+  ActionIcon, Alert, Badge, Button, Card, Code, Divider, Group, Modal, Select, SimpleGrid, Stack, Switch, Table,
   TagsInput, Text, TextInput, Title, Tooltip, Accordion,
 } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
-import { IconPencil, IconPlus, IconRefresh, IconTrash } from '@tabler/icons-react'
+import { IconArrowDown, IconArrowUp, IconPencil, IconPlus, IconRefresh, IconTrash } from '@tabler/icons-react'
 import { api } from '../api'
-import type { Credential, RouteInfo, StateInfo, SystemProxyState } from '../api'
+import type { Credential, Hop, RouteInfo, StateInfo, SystemProxyState } from '../api'
 
 const pacColors: Record<string, string> = {
   none: 'gray',
@@ -41,6 +41,7 @@ export default function ConfigPage() {
   const [editing, setEditing] = useState<RouteInfo | null>(null)
   const [form, setForm] = useState({
     name: '', gateway: '', iface: '', net: '', pacUrl: '', proxyUrl: '', credential: '',
+    hops: [] as Hop[],
   })
   const [busy, setBusy] = useState(false)
 
@@ -89,7 +90,7 @@ export default function ConfigPage() {
 
   const openNew = () => {
     setEditing(null)
-    setForm({ name: '', gateway: '', iface: '', net: '', pacUrl: '', proxyUrl: '', credential: '' })
+    setForm({ name: '', gateway: '', iface: '', net: '', pacUrl: '', proxyUrl: '', credential: '', hops: [] })
     open()
   }
 
@@ -98,8 +99,17 @@ export default function ConfigPage() {
     setForm({
       name: r.name, gateway: r.gateway, iface: r.iface, net: r.net,
       pacUrl: r.pacUrl, proxyUrl: r.proxyUrl, credential: r.credential,
+      hops: (r.hops ?? []).map((h) => ({ ...h })),
     })
     open()
+  }
+
+  const setHop = (i: number, patch: Partial<Hop>) =>
+    setForm({ ...form, hops: form.hops.map((h, j) => (j === i ? { ...h, ...patch } : h)) })
+  const moveHop = (i: number, d: number) => {
+    const hops = [...form.hops]
+    ;[hops[i], hops[i + d]] = [hops[i + d], hops[i]]
+    setForm({ ...form, hops })
   }
 
   const save = async () => {
@@ -287,7 +297,7 @@ export default function ConfigPage() {
               <Table.Td>{r.gateway || '-'}</Table.Td>
               <Table.Td>{r.net || '-'}</Table.Td>
               <Table.Td>
-                <Text size="sm" truncate="end" maw={220}>{r.pacUrl || r.proxyUrl || '-'}</Text>
+                <Text size="sm" truncate="end" maw={220}>{r.chain?.length ? r.chain.join(' → ') : r.pacUrl || r.proxyUrl || '-'}</Text>
               </Table.Td>
               <Table.Td>{r.credential || '-'}</Table.Td>
               <Table.Td>
@@ -367,13 +377,45 @@ export default function ConfigPage() {
             <TextInput label="Network (opzionale)" placeholder="es. 192.168.1.0/24"
               value={form.net} onChange={(e) => setForm({ ...form, net: e.currentTarget.value })} />
             <TextInput label="Proxy upstream (opzionale)" placeholder="host:porta"
+              disabled={form.hops.length > 0}
               value={form.proxyUrl} onChange={(e) => setForm({ ...form, proxyUrl: e.currentTarget.value })} />
           </SimpleGrid>
           <TextInput label="PAC URL (opzionale)" placeholder="http://host/pac.pac"
+            disabled={form.hops.length > 0}
             value={form.pacUrl} onChange={(e) => setForm({ ...form, pacUrl: e.currentTarget.value })} />
+          <Divider label="Catena di proxy (opzionale)" labelPosition="left" mt="xs" />
+          <Text size="xs" c="dimmed">
+            Il traffico passa dal primo proxy, poi dal secondo attraverso il primo, e così via fino all'uscita.
+            Con una catena, PAC e proxy upstream sono ignorati. Schemi: http://host:porta, socks5://host:porta, oppure relay://email del contatto (solo come primo salto).
+          </Text>
+          {form.hops.map((h, i) => (
+            <Group key={i} gap="xs" wrap="nowrap" align="flex-end">
+              <Badge variant="light" size="lg" w={36} px={0}>{i + 1}</Badge>
+              <TextInput style={{ flex: 1 }} label={i === 0 ? 'Proxy' : undefined} placeholder="http://host:8080 o socks5://host:1080"
+                value={h.proxyUrl} onChange={(e) => setHop(i, { proxyUrl: e.currentTarget.value })} />
+              <Select w={170} label={i === 0 ? 'Credential' : undefined} placeholder="nessuna" clearable
+                data={credOptions} value={h.credential || null}
+                onChange={(v) => setHop(i, { credential: v ?? '' })} />
+              <ActionIcon variant="subtle" color="gray" disabled={i === 0} title="Sposta su" onClick={() => moveHop(i, -1)}>
+                <IconArrowUp size={16} />
+              </ActionIcon>
+              <ActionIcon variant="subtle" color="gray" disabled={i === form.hops.length - 1} title="Sposta giù" onClick={() => moveHop(i, 1)}>
+                <IconArrowDown size={16} />
+              </ActionIcon>
+              <ActionIcon variant="subtle" color="red" title="Rimuovi" onClick={() => setForm({ ...form, hops: form.hops.filter((_, j) => j !== i) })}>
+                <IconTrash size={16} />
+              </ActionIcon>
+            </Group>
+          ))}
+          <Group>
+            <Button variant="light" size="xs" leftSection={<IconPlus size={14} />}
+              onClick={() => setForm({ ...form, hops: [...form.hops, { proxyUrl: '', credential: '' }] })}>
+              Aggiungi proxy
+            </Button>
+          </Group>
           <Group justify="flex-end">
             <Button variant="default" onClick={close}>Annulla</Button>
-            <Button onClick={save} loading={busy} disabled={!form.name}>Salva</Button>
+            <Button onClick={save} loading={busy} disabled={!form.name || form.hops.some((h) => !h.proxyUrl.trim())}>Salva</Button>
           </Group>
         </Stack>
       </Modal>

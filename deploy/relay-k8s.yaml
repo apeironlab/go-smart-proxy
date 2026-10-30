@@ -1,0 +1,93 @@
+# Relay deployment for the "networking" namespace.
+#
+# Secrets are NOT in this file. Create them first (the CA *private* key stays on your machine):
+#   kubectl -n networking create secret generic proxy-relay-tls \
+#     --from-file=server.pem=relay-pki/server/server.pem \
+#     --from-file=server-key.pem=relay-pki/server/server-key.pem \
+#     --from-file=ca.pem=relay-pki/ca/ca.pem
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: proxy-relay-data
+  namespace: networking
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 100Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proxy-relay
+  namespace: networking
+  labels:
+    app: proxy-relay
+spec:
+  replicas: 1 # the address book lives in a single file: do not scale out
+  strategy:
+    type: Recreate # RWO volume
+  selector:
+    matchLabels:
+      app: proxy-relay
+  template:
+    metadata:
+      labels:
+        app: proxy-relay
+      annotations:
+        sidecar.istio.io/inject: "false" # mTLS must reach the pod untouched
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+      containers:
+        - name: relay
+          image: repo.intra.waveinformatica.com/networking/proxyrelay:v1
+          args:
+            - serve
+            - -listen=:2443
+            - -cert=/tls/server.pem
+            - -key=/tls/server-key.pem
+            - -ca=/tls/ca.pem
+            - -state=/data/relay-state.json
+          ports:
+            - name: relay
+              containerPort: 2443
+          readinessProbe:
+            tcpSocket: { port: relay }
+          livenessProbe:
+            tcpSocket: { port: relay }
+            initialDelaySeconds: 5
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: tls, mountPath: /tls, readOnly: true }
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: tls
+          secret:
+            secretName: proxy-relay-tls
+        - name: data
+          persistentVolumeClaim:
+            claimName: proxy-relay-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: proxy-relay
+  namespace: networking
+spec:
+  type: LoadBalancer
+  selector:
+    app: proxy-relay
+  ports:
+    - name: relay
+      port: 2443
+      targetPort: relay

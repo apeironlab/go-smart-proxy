@@ -10,9 +10,9 @@ import (
 )
 
 type ConfigCredential struct {
-	Name     string `yaml:"Name"`
-	User     string `yaml:"User"`
-	Password string `yaml:"Password"`
+	Name     string `yaml:"Name" json:"name"`
+	User     string `yaml:"User" json:"user"`
+	Password string `yaml:"Password" json:"password"`
 }
 
 type ConfigRoute struct {
@@ -23,12 +23,37 @@ type ConfigRoute struct {
 	PacUrl     string `yaml:"PacUrl"`
 	ProxyUrl   string `yaml:"ProxyUrl"`
 	Credential string `yaml:"Credential"`
+	// Chain is an ordered list of upstream proxies (first = the one dialed directly).
+	// When present it takes precedence over PacUrl and ProxyUrl.
+	Chain []ConfigHop `yaml:"Chain,omitempty"`
+}
+
+// ConfigHop is one proxy of a chain. ProxyUrl accepts http://host:port and socks5://host:port.
+type ConfigHop struct {
+	ProxyUrl   string `yaml:"ProxyUrl" json:"proxyUrl"`
+	Credential string `yaml:"Credential" json:"credential"`
+}
+
+// RelayConfig connects this proxy to a relay (see cmd/proxyrelay) so that it can
+// reach, and be reached by, the contacts in the address book.
+type RelayConfig struct {
+	Address string `yaml:"Address"` // host[:port] of the relay (default port 8443)
+	Cert    string `yaml:"Cert"`    // client certificate (its e-mail identifies you)
+	Key     string `yaml:"Key"`
+	CA      string `yaml:"CA"` // CA that signed the relay certificate (empty: system roots)
+	// Route is the name of the route used to reach the relay; empty means the
+	// currently applicable one (direct, proxy, chain...).
+	Route string `yaml:"Route"`
+	// AllowLocal lets contacts reach services bound to this machine (off by default).
+	AllowLocal bool `yaml:"AllowLocal"`
 }
 
 type Configuration struct {
+	Relay              *RelayConfig       `yaml:"Relay,omitempty"`
 	Address            string             `yaml:"Address"`
 	Credentials        []ConfigCredential `yaml:"Credentials"`
 	Routes             []ConfigRoute      `yaml:"Routes"`
+	Rules              []ConfigRule       `yaml:"Rules,omitempty"`
 	SystemProxy        bool               `yaml:"SystemProxy"`
 	SystemProxyExclude []string           `yaml:"SystemProxyExclude"`
 	PacHijack          bool               `yaml:"PacHijack"`

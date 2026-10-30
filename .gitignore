@@ -3,3 +3,7 @@ __*
 proxy
 config.yml
 webui/node_modules
+proxyrelay
+relay_state.json
+relay-pki
+relay-certs

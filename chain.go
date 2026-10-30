@@ -1,0 +1,301 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"proxy/relay"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// chainHop is one proxy of a route chain. The protocol spoken to it depends on
+// the scheme of its ProxyUrl: http:// (CONNECT, NTLM/Basic) or socks5://.
+type chainHop struct {
+	scheme   string // "http" or "socks5"
+	addr     string // host:port
+	user     string
+	password string
+	cred     string
+}
+
+func buildChain(cfg []ConfigHop) ([]*chainHop, error) {
+	hops := make([]*chainHop, 0, len(cfg))
+	for i, h := range cfg {
+		raw := h.ProxyUrl
+		if !strings.Contains(raw, "://") {
+			raw = "http://" + raw
+		}
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			return nil, fmt.Errorf("hop %d: invalid ProxyUrl %q", i+1, h.ProxyUrl)
+		}
+		hop := &chainHop{scheme: strings.ToLower(u.Scheme), addr: u.Host, cred: h.Credential}
+		switch hop.scheme {
+		case "http":
+		case "relay": // relay://alice@example.com: exit through the network of a contact
+			if i != 0 {
+				return nil, fmt.Errorf("hop %d: a relay hop must be the first of the chain", i+1)
+			}
+			email, ok := relay.NormalizeEmail(u.User.Username() + "@" + u.Hostname())
+			if u.User == nil || !ok {
+				return nil, fmt.Errorf("hop %d: use relay://name@domain with the contact's e-mail", i+1)
+			}
+			hops = append(hops, &chainHop{scheme: "relay", addr: email})
+			continue
+		case "socks5", "socks5h":
+			hop.scheme = "socks5"
+		default:
+			return nil, fmt.Errorf("hop %d: unsupported scheme %q (use http or socks5)", i+1, u.Scheme)
+		}
+		if u.Port() == "" {
+			port := "8080"
+			if hop.scheme == "socks5" {
+				port = "1080"
+			}
+			hop.addr = net.JoinHostPort(u.Hostname(), port)
+		}
+		if h.Credential != "" {
+			c := GetCredential(h.Credential)
+			if c == nil {
+				return nil, fmt.Errorf("hop %d: unknown credential %q", i+1, h.Credential)
+			}
+			hop.user, hop.password = c.User, c.Password
+		} else if u.User != nil {
+			hop.user = u.User.Username()
+			hop.password, _ = u.User.Password()
+		}
+		hops = append(hops, hop)
+	}
+	return hops, nil
+}
+
+func chainStrings(hops []*chainHop) []string {
+	out := make([]string, len(hops))
+	for i, h := range hops {
+		out[i] = h.scheme + "://" + h.addr
+	}
+	return out
+}
+
+func chainLabel(hops []*chainHop) string {
+	addrs := make([]string, len(hops))
+	for i, h := range hops {
+		addrs[i] = h.addr
+	}
+	return strings.Join(addrs, " → ")
+}
+
+// dialChain opens a tunnel to target through every hop of the route, in order.
+// The returned reader must be used for all further reads from the connection.
+func dialChain(route *ProxyRoute, target string, rec *ConnInfo) (net.Conn, *bufio.Reader, error) {
+	hops := route.chain
+	var conn net.Conn
+	first := 0
+	if hops[0].scheme == "relay" {
+		next := target
+		if len(hops) > 1 {
+			next = hops[1].addr
+		}
+		rec.event(fmt.Sprintf("hop 1/%d relay via %s -> %s", len(hops), hops[0].addr, next))
+		raw, err := relayMgr.Dial(hops[0].addr, next)
+		if err != nil {
+			return nil, nil, fmt.Errorf("hop 1 (relay %s): %w", hops[0].addr, err)
+		}
+		conn = &countingConn{Conn: raw, in: &rec.bytesUpIn, out: &rec.bytesUpOut}
+		first = 1
+	} else {
+		raw, err := net.DialTimeout("tcp", hops[0].addr, dialTimeout)
+		if err != nil {
+			return nil, nil, fmt.Errorf("hop 1 (%s): %w", hops[0].addr, err)
+		}
+		conn = &countingConn{Conn: raw, in: &rec.bytesUpIn, out: &rec.bytesUpOut}
+	}
+	br := bufio.NewReader(conn)
+
+	var err error
+	for i := first; i < len(hops); i++ {
+		hop := hops[i]
+		next := target
+		if i+1 < len(hops) {
+			next = hops[i+1].addr
+		}
+		rec.event(fmt.Sprintf("hop %d/%d %s://%s -> %s", i+1, len(hops), hop.scheme, hop.addr, next))
+		switch hop.scheme {
+		case "socks5":
+			err = socks5Connect(conn, br, hop.user, hop.password, next)
+		default:
+			err = httpConnect(conn, br, hop.user, hop.password, next, rec)
+		}
+		if err != nil {
+			conn.Close()
+			return nil, nil, fmt.Errorf("hop %d (%s): %w", i+1, hop.addr, err)
+		}
+	}
+	return conn, br, nil
+}
+
+// bufConn makes reads go through the buffered reader that may hold bytes
+// read ahead during the handshakes.
+type bufConn struct {
+	net.Conn
+	br *bufio.Reader
+}
+
+func (c *bufConn) Read(p []byte) (int, error) { return c.br.Read(p) }
+
+func (c *bufConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return c.Conn.Close()
+}
+
+// usesRelay reports whether the route exits through a relay contact.
+func (p *ProxyRoute) usesRelay() bool {
+	return len(p.chain) > 0 && p.chain[0].scheme == "relay"
+}
+
+// newChainTransport returns a transport for plain HTTP requests: each new
+// connection is a tunnel through the whole chain to the origin server, and
+// requests are sent in origin form (no proxy involved from the transport's view).
+// Callers must hold p.mu.
+func (p *ProxyRoute) newChainTransport() *http.Transport {
+	return &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			target := addr
+			if ip := resolveHost(host); ip != "" {
+				target = net.JoinHostPort(ip, port)
+			}
+			rec := connReg.newConn("transport", "", host, target, chainLabel(p.chain), p.name, p.cred, "", "")
+			conn, br, err := dialChain(p, target, rec)
+			if err != nil {
+				rec.setError(err.Error())
+				rec.finish(StateFailed)
+				return nil, err
+			}
+			activeConns.add(conn)
+			rec.setState(StateEstablished)
+			tc := &trackedConn{
+				Conn: &bufConn{Conn: conn, br: br},
+				remove: func() {
+					activeConns.remove(conn)
+					rec.finish(StateClosed)
+				},
+			}
+			rec.setCloseFn(func() { tc.Close() })
+			return tc, nil
+		},
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
+	}
+}
+
+// socks5Connect asks a SOCKS5 server (RFC 1928, user/pass auth per RFC 1929)
+// to connect to target over an already open connection.
+func socks5Connect(conn net.Conn, br *bufio.Reader, user, password, target string) error {
+	host, portStr, err := net.SplitHostPort(target)
+	if err != nil {
+		return err
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 0 || port > 65535 {
+		return fmt.Errorf("invalid port %q", portStr)
+	}
+
+	conn.SetDeadline(time.Now().Add(handshakeTimeout))
+	defer conn.SetDeadline(time.Time{})
+
+	methods := []byte{0x00}
+	if user != "" {
+		methods = []byte{0x00, 0x02}
+	}
+	if _, err := conn.Write(append([]byte{0x05, byte(len(methods))}, methods...)); err != nil {
+		return err
+	}
+	var sel [2]byte
+	if _, err := io.ReadFull(br, sel[:]); err != nil {
+		return err
+	}
+	if sel[0] != 0x05 {
+		return errors.New("not a SOCKS5 server")
+	}
+	switch sel[1] {
+	case 0x00:
+	case 0x02:
+		if len(user) > 255 || len(password) > 255 {
+			return errors.New("SOCKS5 credentials too long")
+		}
+		msg := append([]byte{0x01, byte(len(user))}, user...)
+		msg = append(msg, byte(len(password)))
+		msg = append(msg, password...)
+		if _, err := conn.Write(msg); err != nil {
+			return err
+		}
+		var st [2]byte
+		if _, err := io.ReadFull(br, st[:]); err != nil {
+			return err
+		}
+		if st[1] != 0x00 {
+			return errors.New("SOCKS5 authentication failed")
+		}
+	default:
+		return errors.New("SOCKS5 server accepts no supported authentication method")
+	}
+
+	req := []byte{0x05, 0x01, 0x00}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip4 := ip.To4(); ip4 != nil {
+			req = append(append(req, 0x01), ip4...)
+		} else {
+			req = append(append(req, 0x04), ip.To16()...)
+		}
+	} else {
+		if len(host) > 255 {
+			return errors.New("hostname too long")
+		}
+		req = append(append(req, 0x03, byte(len(host))), host...)
+	}
+	req = append(req, byte(port>>8), byte(port))
+	if _, err := conn.Write(req); err != nil {
+		return err
+	}
+
+	var head [4]byte
+	if _, err := io.ReadFull(br, head[:]); err != nil {
+		return err
+	}
+	if head[1] != 0x00 {
+		return fmt.Errorf("SOCKS5 connect failed (code %d)", head[1])
+	}
+	var skip int
+	switch head[3] {
+	case 0x01:
+		skip = 4 + 2
+	case 0x04:
+		skip = 16 + 2
+	case 0x03:
+		l, err := br.ReadByte()
+		if err != nil {
+			return err
+		}
+		skip = int(l) + 2
+	default:
+		return errors.New("SOCKS5: bad address type in reply")
+	}
+	_, err = io.CopyN(io.Discard, br, int64(skip))
+	return err
+}

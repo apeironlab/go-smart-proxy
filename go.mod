@@ -6,6 +6,7 @@ require (
 	github.com/Azure/go-ntlmssp v0.1.1
 	github.com/darren/gpac v0.0.0-20210609082804-b56d6523a3af
 	github.com/getlantern/systray v1.2.1
+	github.com/hashicorp/yamux v0.1.2
 	github.com/projectdiscovery/expirablelru v1.0.0
 	gopkg.in/yaml.v3 v3.0.1
 )
