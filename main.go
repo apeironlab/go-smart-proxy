@@ -3,28 +3,149 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
-	"net/textproto"
-	"net/url"
+	"net/http/httputil"
 	"os"
-	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Azure/go-ntlmssp"
+	"github.com/darren/gpac"
 	"github.com/getlantern/systray"
 	"github.com/projectdiscovery/expirablelru"
 )
 
 type MyRoundTripper struct {
 	conn net.Conn
+	br   *bufio.Reader
+}
+
+// connTracker keeps a registry of all active connections so that a network
+// change can close them all at once and force clients to reconnect through
+// the new route.
+type connTracker struct {
+	mu    sync.Mutex
+	conns map[net.Conn]int
+}
+
+var activeConns = &connTracker{conns: make(map[net.Conn]int)}
+
+func (t *connTracker) add(c net.Conn) {
+	if c == nil {
+		return
+	}
+	t.mu.Lock()
+	t.conns[c]++
+	t.mu.Unlock()
+}
+
+func (t *connTracker) remove(c net.Conn) {
+	if c == nil {
+		return
+	}
+	t.mu.Lock()
+	if n := t.conns[c]; n > 1 {
+		t.conns[c] = n - 1
+	} else {
+		delete(t.conns, c)
+	}
+	t.mu.Unlock()
+}
+
+func (t *connTracker) closeAll() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	n := len(t.conns)
+	for c := range t.conns {
+		c.Close()
+	}
+	return n
+}
+
+// trackedConn wraps a connection used by http.Transport so that it is removed
+// from the registry when closed and its traffic is counted.
+type trackedConn struct {
+	net.Conn
+	once   sync.Once
+	remove func()
+	in     *atomic.Int64
+	out    *atomic.Int64
+}
+
+func (t *trackedConn) Read(p []byte) (int, error) {
+	n, err := t.Conn.Read(p)
+	if n > 0 && t.in != nil {
+		t.in.Add(int64(n))
+	}
+	if err != nil {
+		t.once.Do(t.remove)
+	}
+	return n, err
+}
+
+func (t *trackedConn) Write(p []byte) (int, error) {
+	n, err := t.Conn.Write(p)
+	if n > 0 && t.out != nil {
+		t.out.Add(int64(n))
+	}
+	if err != nil {
+		t.once.Do(t.remove)
+	}
+	return n, err
+}
+
+func (t *trackedConn) Close() error {
+	err := t.Conn.Close()
+	t.once.Do(t.remove)
+	return err
+}
+
+func (t *trackedConn) CloseWrite() error {
+	if cw, ok := t.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return t.Conn.Close()
+}
+
+var (
+	connResetMu   sync.Mutex
+	lastConnReset time.Time
+)
+
+// resetConnections closes every active connection (client-side, tunnels and
+// transport connections) so that in-flight requests fail immediately instead
+// of hanging until a timeout, and clients reconnect through the new route.
+// It is debounced to survive network flaps.
+func resetConnections() {
+	connResetMu.Lock()
+	if time.Since(lastConnReset) < 2*time.Second {
+		connResetMu.Unlock()
+		return
+	}
+	lastConnReset = time.Now()
+	connResetMu.Unlock()
+
+	if n := activeConns.closeAll(); n > 0 {
+		log.Printf("Network change: closed %d active connection(s)", n)
+	}
 }
 
 var dnsCache *expirablelru.Cache
+
+const (
+	dialTimeout        = 10 * time.Second
+	readHeaderTimeout  = 30 * time.Second
+	dnsTimeout         = 2 * time.Second
+	handshakeTimeout   = 30 * time.Second
+	bodySpoolThreshold = 4 << 20
+)
 
 func main() {
 
@@ -42,231 +163,657 @@ func main() {
 
 	loadConfiguration()
 
-	go func() {
-
-		server2, err := net.Listen("tcp", configuration.Address)
-		if err != nil {
-			log.Fatal(err)
-		} else {
-			log.Printf("Listening on %s", configuration.Address)
+	if configuration.PacHijack {
+		if err := ensureHostsEntry(pacHijackHost()); err != nil {
+			log.Printf("PAC hijack: cannot update %s: %+v (sudo needed?)", hostsFile, err)
 		}
-		for {
-			c, err := server2.Accept()
-			if err != nil {
-				log.Printf("Error accepting connection: %+v", err)
-				continue
-			} else {
-				log.Printf("New connection from %s", c.RemoteAddr().String())
-			}
-			go handleConn(c)
-		}
+	}
+	applyChromePolicy()
+	go watchSystemProxy()
+	go servePac()
+	go applySystemProxy()
 
-	}()
+	go serve()
 
 	systray.Run(systrayReady, systrayExit)
 
 }
 
-func handleConn(c net.Conn) {
-	br := bufio.NewReader(c)
-	reader := textproto.NewReader(br)
-	line, err := reader.ReadLine()
-	if err != nil {
-		log.Printf("Unexpected error: %+v", err)
-		handleError(c, http.StatusBadRequest)
-	} else {
-		method, rest, ok := strings.Cut(line, " ")
-		uri, proto, ok2 := strings.Cut(rest, " ")
-		if !ok || !ok2 {
-			log.Printf("Error parsing first line: %s %s %v %s %s %v", method, rest, ok, uri, proto, ok2)
-			handleError(c, http.StatusBadRequest)
-		} else {
-			//log.Println(line)
-			var pUrl *url.URL
-			if method == "CONNECT" {
-				pUrl, err = url.Parse("http://" + uri)
-				if err != nil {
-					handleError(c, http.StatusBadRequest)
-					return
-				}
-			} else {
-				pUrl, err = url.Parse(uri)
-				if err != nil {
-					handleError(c, http.StatusBadRequest)
-					return
-				}
-			}
+var (
+	listenMu       sync.Mutex
+	activeListener net.Listener
+)
 
-			route := GetApplicableRoute()
+func serve() {
+	server := &http.Server{
+		Handler:           http.HandlerFunc(proxyHandler),
+		ReadHeaderTimeout: readHeaderTimeout,
+		IdleTimeout:       2 * time.Minute,
+	}
 
-			proxy := route.FindProxy(pUrl.String())
+	for {
+		ln, err := net.Listen("tcp", configuration.Address)
+		if err != nil {
+			log.Printf("Error listening on %s: %+v", configuration.Address, err)
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		listenMu.Lock()
+		activeListener = ln
+		listenMu.Unlock()
+		log.Printf("Listening on %s", configuration.Address)
 
-			//log.Printf("Using %s for %s", proxy.Type, pUrl.String())
-
-			pos := strings.Index(pUrl.Host, ":")
-			if pos >= 0 {
-				pos := strings.Index(pUrl.Host[pos+1:], ":")
-				if pos >= 0 {
-					if pUrl.Host[0] != '[' {
-						pos := strings.LastIndex(pUrl.Host, ":")
-						pUrl.Host = "[" + pUrl.Host[:pos] + "]" + pUrl.Host[pos:]
-					}
-				}
-			}
-			host, port, err := net.SplitHostPort(pUrl.Host)
+		for {
+			c, err := ln.Accept()
 			if err != nil {
-				host = pUrl.Host
-				port = "80"
-			} else if strings.Contains(host, ":") {
-				host = "[" + host + "]"
+				if errors.Is(err, net.ErrClosed) {
+					break // listener replaced
+				}
+				log.Printf("Error accepting connection: %+v", err)
+				continue
 			}
-
-			oldHost := host
-
-			ipHost, ok := dnsCache.Get(host)
-			if ok {
-				host = ipHost.(string)
-			} else {
-				ips, err := net.DefaultResolver.LookupIP(context.Background(), "ip4", host)
-				if err != nil {
-					log.Printf("Error in DNS lookup for %s: %+v", host, err)
-				} else if len(ips) > 0 {
-					log.Printf("%s translated to %s", host, ips[0])
-					dnsCache.AddWithTTL(host, ips[0].String(), 30*time.Minute)
-					host = ips[0].String()
-				}
-			}
-
-			log.Printf("Proxying %s (%s) through %s: %s", oldHost, host, proxy.Type, proxy.Address)
-
-			if proxy.Type == "DIRECT" {
-
-				upstream, err := net.Dial("tcp", host+":"+port)
-				if err != nil {
-					handleError(c, http.StatusBadGateway)
-					log.Printf("Error connecting to %s:%s: %+v", host, port, err)
-					return
-				}
-				if method == "CONNECT" {
-					c.Write([]byte(proto + " 200 Connection Established\r\n\r\n"))
-				} else {
-					upstream.Write([]byte(method + " " + pUrl.Path + " " + proto + "\r\n"))
-					for {
-						line, _ = reader.ReadLine()
-						upstream.Write([]byte(line + "\r\n"))
-						if strings.TrimSpace(line) == "" {
-							break
-						}
-					}
-				}
-
-				transfer(c, upstream)
-
-			} else {
-
-				upstream, err := net.Dial("tcp", proxy.Address)
-				if err != nil {
-					log.Printf("Erorr connecting to proxy %s: %+v", proxy.Address, err)
-					handleError(c, http.StatusBadGateway)
-					return
-				}
-				newReq, err := http.NewRequest("CONNECT", "http://"+host+":"+port, nil)
-				if err != nil {
-					log.Printf("Error creating connect request to %s:%s: %+v", host, port, err)
-					handleError(c, http.StatusInternalServerError)
-					return
-				}
-				newReq.Host = host + ":" + port
-				if route.user != "" && route.password != "" {
-					newReq.SetBasicAuth(route.user, route.password)
-				}
-				transp := ntlmssp.Negotiator{
-					RoundTripper: MyRoundTripper{
-						conn: upstream,
-					},
-				}
-				resp, err := transp.RoundTrip(newReq)
-				if err != nil {
-					log.Printf("Error: %+v", err)
-					handleError(c, http.StatusBadGateway)
-					return
-				}
-
-				if resp.StatusCode == 200 {
-
-					log.Printf("Got 200 for connecting to %s:%s through %s (%s)", host, port, proxy.Address, method)
-
-					if method == "CONNECT" {
-						c.Write([]byte(proto + " 200 Connection Established\r\n\r\n"))
-					} else {
-						upstream.Write([]byte(method + " " + pUrl.Path + " " + proto + "\r\n"))
-						for {
-							line, _ = reader.ReadLine()
-							upstream.Write([]byte(line + "\r\n"))
-							if strings.TrimSpace(line) == "" {
-								break
-							}
-						}
-					}
-					transfer(c, upstream)
-
-				} else {
-					log.Printf("Error connecting to %s:%s through %s: %d", host, port, proxy.Address, resp.StatusCode)
-					handleError(c, http.StatusBadGateway)
-				}
-
-			}
+			log.Printf("New connection from %s", c.RemoteAddr().String())
+			activeConns.add(c)
+			go func(conn net.Conn) {
+				defer activeConns.remove(conn)
+				server.Serve(&singleConnListener{conn: conn})
+			}(c)
 		}
 	}
 }
 
-func handleError(c net.Conn, status int) {
-	c.Write([]byte("HTTP/1.0 " + strconv.FormatInt(int64(status), 10) + " " + http.StatusText(status) + "\r\n"))
-	c.Write([]byte("\r\n"))
-	c.Close()
+// restartListener closes the current listener: the serve loop re-opens it
+// with the new address from the configuration.
+func restartListener() {
+	listenMu.Lock()
+	ln := activeListener
+	listenMu.Unlock()
+	if ln != nil {
+		ln.Close()
+	}
+}
+
+var (
+	pacMu             sync.Mutex
+	activePacListener net.Listener
+)
+
+// pacHijackHost returns the hostname to map to 127.0.0.1 in /etc/hosts.
+func pacHijackHost() string {
+	configMu.Lock()
+	host := configuration.PacHijackHost
+	configMu.Unlock()
+	if host == "" {
+		return "wpad"
+	}
+	return host
+}
+
+// pacProxyAddr is the address the generated PAC points browsers at.
+func pacProxyAddr() string {
+	configMu.Lock()
+	address := configuration.Address
+	configMu.Unlock()
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || host == "" || host == "0.0.0.0" || host == "::" {
+		return "127.0.0.1:3128"
+	}
+	return net.JoinHostPort(host, port)
+}
+
+// pacHandler serves the PAC that routes every non-local host to this proxy.
+func pacHandler(w http.ResponseWriter, r *http.Request) {
+	pac := fmt.Sprintf(`function FindProxyForURL(url, host) {
+  if (host == "127.0.0.1" || host == "localhost" || dnsDomainIs(host, ".local")) return "DIRECT";
+  return "PROXY %s";
+}`, pacProxyAddr())
+	w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
+	io.WriteString(w, pac)
+}
+
+// servePac serves the PAC on port 80 (the port the corporate PAC URL uses),
+// so that "http://wpad/wpad.dat" resolves to 127.0.0.1 and returns a PAC that
+// points at this proxy. The VPN's proxy settings are never touched.
+func servePac() {
+	server := &http.Server{
+		Handler:           http.HandlerFunc(pacHandler),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	for {
+		configMu.Lock()
+		enabled := configuration.PacHijack
+		configMu.Unlock()
+		if !enabled {
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		ln, err := net.Listen("tcp", "127.0.0.1:80")
+		if err != nil {
+			log.Printf("PAC hijack: cannot listen on 127.0.0.1:80: %+v (sudo needed?)", err)
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		pacMu.Lock()
+		activePacListener = ln
+		pacMu.Unlock()
+		log.Printf("PAC hijack: serving http://%s/wpad.dat -> %s", pacHijackHost(), pacProxyAddr())
+		server.Serve(ln)
+		pacMu.Lock()
+		if activePacListener == ln {
+			activePacListener = nil
+		}
+		pacMu.Unlock()
+	}
+}
+
+// watchSystemProxy periodically re-applies the system proxy settings: VPN
+// clients re-apply their own proxy when the tunnel reconnects, so the
+// runtime override must be refreshed. applySystemProxy is idempotent and
+// cheap when nothing changed.
+func watchSystemProxy() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		applySystemProxy()
+	}
+}
+
+// restartPacListener restarts the PAC listener (e.g. when the PAC hijack
+// setting or the proxy address changes).
+func restartPacListener() {
+	pacMu.Lock()
+	ln := activePacListener
+	pacMu.Unlock()
+	if ln != nil {
+		ln.Close()
+	}
+}
+
+type singleConnListener struct {
+	conn net.Conn
+	mu   sync.Mutex
+	used bool
+}
+
+func (l *singleConnListener) Accept() (net.Conn, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.used {
+		return nil, io.EOF
+	}
+	l.used = true
+	return l.conn, nil
+}
+
+func (l *singleConnListener) Addr() net.Addr {
+	return l.conn.LocalAddr()
+}
+
+func (l *singleConnListener) Close() error {
+	return nil
+}
+
+func proxyHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodConnect {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "CONNECT not supported", http.StatusInternalServerError)
+			return
+		}
+		conn, brw, err := hj.Hijack()
+		if err != nil {
+			log.Printf("Error hijacking connection: %+v", err)
+			return
+		}
+		handleConnect(conn, brw.Reader, r.Host)
+		return
+	}
+
+	// Requests without an absolute-form target are addressed to this proxy
+	// itself: the web UI and the API are served on the same port.
+	if r.URL.Host == "" {
+		if !isLoopbackRequest(r) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			apiMux.ServeHTTP(w, r)
+			return
+		}
+		webUIHandler().ServeHTTP(w, r)
+		return
+	}
+
+	if r.URL.Scheme != "http" {
+		http.Error(w, "unsupported proxy request", http.StatusBadRequest)
+		return
+	}
+
+	route := GetApplicableRoute()
+	if route == nil {
+		http.Error(w, "no route available", http.StatusServiceUnavailable)
+		return
+	}
+	proxy := route.FindProxy(r.URL.String())
+
+	direct := proxy.Type == "DIRECT"
+	proxyAddr := ""
+	if !direct {
+		proxyAddr = proxy.Address
+	}
+
+	user, password := route.user, route.password
+	if proxy.Username != "" {
+		user, password = proxy.Username, proxy.Password
+	}
+
+	rec := connReg.newConn("request", r.RemoteAddr, "", r.URL.Host, proxyAddr, route.name, route.cred, r.Method, r.URL.String())
+	rec.setAuth("none")
+	if !direct && user != "" {
+		rec.setAuth("ntlm")
+	}
+	rec.event(fmt.Sprintf("%s %s", r.Method, r.URL.String()))
+
+	// For DIRECT requests resolve the hostname locally (falling back to the
+	// transport's own resolution). For proxied requests the URL is forwarded
+	// in absolute form, which is the standard HTTP proxy behavior.
+	targetHost := ""
+	port := ""
+	if direct {
+		host := r.URL.Hostname()
+		targetHost = host
+		if ip := resolveHost(host); ip != "" {
+			targetHost = ip
+		}
+		port = r.URL.Port()
+		if port == "" {
+			port = "80"
+		}
+	}
+
+	log.Printf("Proxying %s through %s (%s) via route %q", r.URL.Host, proxy.Type, proxyAddr, route.name)
+
+	rt := route.getRoundTripper(direct, proxyAddr, !direct && user != "")
+
+	if spooled := spoolRequestBody(r, !direct && user != ""); spooled != nil {
+		defer func() {
+			spooled.Close()
+			os.Remove(spooled.Name())
+		}()
+	}
+
+	rp := &httputil.ReverseProxy{
+		Director: func(outreq *http.Request) {
+			outreq.URL.Scheme = "http"
+			if direct {
+				outreq.URL.Host = net.JoinHostPort(targetHost, port)
+			}
+			if !direct && user != "" {
+				outreq.SetBasicAuth(user, password)
+			}
+		},
+		Transport:     rt,
+		FlushInterval: -1,
+	}
+
+	ctx := context.WithValue(r.Context(), connRecKey{}, rec)
+	r = r.WithContext(ctx)
+	if r.Body != nil && r.Body != http.NoBody {
+		r.Body = &countingReadCloser{ReadCloser: r.Body, counter: &rec.bytesClientIn}
+	}
+	cw := &countingResponseWriter{ResponseWriter: w, counter: &rec.bytesClientOut}
+	rp.ServeHTTP(cw, r)
+
+	rec.setStatus(cw.status)
+	switch {
+	case rec.auth() == "failed":
+		rec.finish(StateFailed)
+	case cw.status >= 400:
+		rec.finish(StateFailed)
+	default:
+		rec.finish(StateDone)
+	}
+	rec.event(fmt.Sprintf("response status %d", cw.status))
+}
+
+// spoolRequestBody copies large or unknown-size request bodies to a temporary
+// file and returns it as a seekable reader, so that the NTLM negotiator can
+// resend the body during the authentication handshake without buffering it
+// entirely in memory.
+func spoolRequestBody(r *http.Request, needSpool bool) *os.File {
+	if !needSpool || r.Body == nil || r.ContentLength == 0 {
+		return nil
+	}
+	if r.ContentLength > 0 && r.ContentLength <= bodySpoolThreshold {
+		return nil
+	}
+	f, err := os.CreateTemp("", "goproxy-body-*")
+	if err != nil {
+		return nil
+	}
+	n, err := io.Copy(f, r.Body)
+	r.Body.Close()
+	if err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return nil
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return nil
+	}
+	r.Body = f
+	r.ContentLength = n
+	log.Printf("Spooled request body to %s (%d bytes)", f.Name(), n)
+	return f
+}
+
+func handleConnect(client net.Conn, clientBr *bufio.Reader, hostport string) {
+	rawClient := client
+	activeConns.add(rawClient)
+	defer activeConns.remove(rawClient)
+	defer rawClient.Close()
+
+	client.SetReadDeadline(time.Time{})
+	client.SetWriteDeadline(time.Time{})
+
+	host, port, err := net.SplitHostPort(hostport)
+	if err != nil {
+		host = hostport
+		port = "443"
+	}
+
+	route := GetApplicableRoute()
+	if route == nil {
+		connectError(client, http.StatusServiceUnavailable)
+		return
+	}
+	proxy := route.FindProxy("https://" + net.JoinHostPort(host, port) + "/")
+
+	target := net.JoinHostPort(host, port)
+	if ip := resolveHost(host); ip != "" {
+		target = net.JoinHostPort(ip, port)
+	}
+
+	proxyAddr := ""
+	if proxy.Type != "DIRECT" {
+		proxyAddr = proxy.Address
+	}
+
+	rec := connReg.newConn("tunnel", client.RemoteAddr().String(), host, target, proxyAddr, route.name, route.cred, "CONNECT", "")
+	defer func() {
+		if rec.state() != StateFailed {
+			rec.finish(StateClosed)
+		}
+	}()
+	rec.event(fmt.Sprintf("CONNECT %s", target))
+	if proxyAddr != "" {
+		rec.event(fmt.Sprintf("upstream proxy %s", proxyAddr))
+	} else {
+		rec.event("direct connection")
+	}
+
+	cc := &countingConn{Conn: client, in: &rec.bytesClientIn, out: &rec.bytesClientOut}
+	client = cc
+
+	var upstream net.Conn
+	var upstreamBr *bufio.Reader
+	rec.setCloseFn(func() {
+		client.Close()
+		if upstream != nil {
+			upstream.Close()
+		}
+	})
+	defer func() {
+		if upstream != nil {
+			activeConns.remove(upstream)
+			upstream.Close()
+		}
+	}()
+
+	if proxy.Type == "DIRECT" {
+		upstream, err = net.DialTimeout("tcp", target, dialTimeout)
+		if err != nil {
+			rec.setError(err.Error())
+			rec.finish(StateFailed)
+			log.Printf("Error connecting to %s: %+v", target, err)
+			connectError(client, http.StatusBadGateway)
+			return
+		}
+		upstream = &countingConn{Conn: upstream, in: &rec.bytesUpIn, out: &rec.bytesUpOut}
+		upstreamBr = bufio.NewReader(upstream)
+	} else {
+		upstream, upstreamBr, err = dialProxyAndConnect(route, proxy, target, rec)
+		if err != nil {
+			rec.setError(err.Error())
+			rec.finish(StateFailed)
+			log.Printf("Error connecting to %s through %s: %+v", target, proxy.Address, err)
+			connectError(client, http.StatusBadGateway)
+			return
+		}
+	}
+	activeConns.add(upstream)
+
+	rec.setState(StateEstablished)
+	rec.event("tunnel established")
+
+	log.Printf("Tunnel established to %s through %s via route %q", target, proxy.Address, route.name)
+
+	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+		upstream.Close()
+		return
+	}
+
+	tunnel(client, clientBr, upstream, upstreamBr)
+}
+
+func dialProxyAndConnect(route *ProxyRoute, proxy *gpac.Proxy, target string, rec *ConnInfo) (net.Conn, *bufio.Reader, error) {
+	upstream, err := net.DialTimeout("tcp", proxy.Address, dialTimeout)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Count handshake traffic as well as tunnel traffic.
+	upstream = &countingConn{Conn: upstream, in: &rec.bytesUpIn, out: &rec.bytesUpOut}
+
+	// Single buffered reader for the whole NTLM handshake and the tunnel:
+	// bytes read ahead while parsing a response must not be lost.
+	upstreamBr := bufio.NewReader(upstream)
+
+	req, err := http.NewRequest("CONNECT", "http://"+target, nil)
+	if err != nil {
+		upstream.Close()
+		return nil, nil, err
+	}
+	req.Host = target
+
+	user, password := route.user, route.password
+	if proxy.Username != "" {
+		user, password = proxy.Username, proxy.Password
+	}
+	if user != "" {
+		req.SetBasicAuth(user, password)
+	}
+
+	upstream.SetDeadline(time.Now().Add(handshakeTimeout))
+	if rec != nil {
+		if user != "" {
+			rec.setAuth("ntlm")
+			rec.setState(StateAuthenticating)
+			rec.event("NTLM handshake started")
+		} else {
+			rec.event("no credentials, anonymous CONNECT")
+		}
+	}
+	transp := ntlmssp.Negotiator{
+		RoundTripper: MyRoundTripper{
+			conn: upstream,
+			br:   upstreamBr,
+		},
+	}
+	resp, err := transp.RoundTrip(req)
+	upstream.SetDeadline(time.Time{})
+	if err != nil {
+		upstream.Close()
+		return nil, nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		upstream.Close()
+		return nil, nil, fmt.Errorf("proxy returned status %d", resp.StatusCode)
+	}
+	if rec != nil {
+		if user != "" {
+			rec.setAuth("authenticated")
+			rec.setState(StateAuthenticated)
+			rec.event("NTLM handshake completed")
+		}
+	}
+	return upstream, upstreamBr, nil
 }
 
 func (mrt MyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.Header.Get("Authorization") != "" {
-		req.Header.Set("Proxy-Authorization", req.Header.Get("Authorization"))
+	if auth := req.Header.Get("Authorization"); auth != "" {
+		req.Header.Set("Proxy-Authorization", auth)
+		req.Header.Del("Authorization")
 	}
-	req.Write(mrt.conn)
-	resp, err := http.ReadResponse(bufio.NewReader(mrt.conn), req)
+	if err := req.Write(mrt.conn); err != nil {
+		return nil, err
+	}
+	resp, err := http.ReadResponse(mrt.br, req)
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode == 407 {
+		// The NTLM negotiator defers draining the first 407 body until the
+		// handshake completes, but this raw connection uses a single shared
+		// reader: the body (real proxies send an HTML error page) must be
+		// consumed right away, otherwise the next response read gets out of
+		// sync. The final 200 (the tunnel itself) is never drained.
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
 		resp.StatusCode = 401
 	}
-	if resp.Header.Values("Proxy-Authenticate") != nil {
-		for _, v := range resp.Header.Values("Proxy-Authenticate") {
-			resp.Header.Add("WWW-Authenticate", v)
-		}
+	for _, v := range resp.Header.Values("Proxy-Authenticate") {
+		resp.Header.Add("WWW-Authenticate", v)
 	}
-	return resp, err
+	return resp, nil
 }
 
-func transfer(clientConn net.Conn, upstream net.Conn) {
+// proxyAuthRT wraps a standard http.RoundTripper used to talk to an upstream
+// proxy: it moves the Authorization header (set by the NTLM negotiator) into
+// Proxy-Authorization, and translates the 407 handshake responses so that the
+// negotiator sees the 401/WWW-Authenticate flow it expects.
+type proxyAuthRT struct {
+	base http.RoundTripper
+}
+
+func (p *proxyAuthRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	rec, _ := req.Context().Value(connRecKey{}).(*ConnInfo)
+	hadAuth := req.Header.Get("Authorization") != ""
+	if rec != nil && hadAuth {
+		rec.setState(StateAuthenticating)
+	}
+	if auth := req.Header.Get("Authorization"); auth != "" {
+		req.Header.Set("Proxy-Authorization", auth)
+		req.Header.Del("Authorization")
+	}
+	resp, err := p.base.RoundTrip(req)
+	if err != nil {
+		if rec != nil {
+			rec.setError(err.Error())
+			rec.setAuth("failed")
+		}
+		return nil, err
+	}
+	if resp.StatusCode == 407 {
+		// Drain the challenge body immediately so that the underlying
+		// connection is reusable for the next handshake step (keeps the
+		// whole NTLM handshake on a single connection).
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		resp.StatusCode = 401
+		if rec != nil {
+			rec.event("407 received, handshake in progress")
+			if hadAuth {
+				rec.setAuth("failed")
+				rec.event("credentials rejected")
+			}
+		}
+	} else if rec != nil {
+		if hadAuth {
+			rec.setAuth("authenticated")
+			rec.event("authenticated")
+		}
+	}
+	for _, v := range resp.Header.Values("Proxy-Authenticate") {
+		resp.Header.Add("WWW-Authenticate", v)
+	}
+	return resp, nil
+}
+
+// resolveHost resolves the hostname locally (so that the upstream proxy only
+// sees the IP address); when the resolution fails, it returns an empty string
+// and the caller lets the upstream proxy resolve the name itself.
+// A name listed in the configuration's Hosts is never resolved: its address is the configured one.
+func resolveHost(host string) string {
+	if net.ParseIP(host) != nil {
+		return host
+	}
+	if address, ok := configuration.Hosts[strings.ToLower(host)]; ok {
+		return address
+	}
+	if v, ok := dnsCache.Get(host); ok {
+		return v.(string)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), dnsTimeout)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil || len(ips) == 0 {
+		dnsCache.AddWithTTL(host, "", 5*time.Minute)
+		return ""
+	}
+	for _, ip := range ips {
+		if ip.IP.To4() != nil {
+			dnsCache.AddWithTTL(host, ip.IP.String(), 30*time.Minute)
+			return ip.IP.String()
+		}
+	}
+	dnsCache.AddWithTTL(host, ips[0].IP.String(), 30*time.Minute)
+	return ips[0].IP.String()
+}
+
+func connectError(c net.Conn, status int) {
+	fmt.Fprintf(c, "HTTP/1.1 %d %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", status, http.StatusText(status))
+	c.Close()
+}
+
+type closeWriter interface {
+	CloseWrite() error
+}
+
+func tunnel(client net.Conn, clientReader *bufio.Reader, upstream net.Conn, upstreamReader *bufio.Reader) {
+	var wg sync.WaitGroup
+	wg.Add(2)
 
 	go func() {
-		n, err := io.Copy(upstream, clientConn)
-		if err != nil {
-			//log.Printf("Error copying 1: %+v", err)
-		} else if n >= 0 {
-			//log.Printf("Transferred %d bytes from clientConn to conn", n)
+		defer wg.Done()
+		io.Copy(upstream, clientReader)
+		if cw, ok := upstream.(closeWriter); ok {
+			cw.CloseWrite()
 		}
-		upstream.Close()
 	}()
 	go func() {
-		n, err := io.Copy(clientConn, upstream)
-		if err != nil {
-			//log.Printf("Error copying 2: %+v", err)
-		} else if n >= 0 {
-			//log.Printf("Transferred %d bytes from conn to clientConn", n)
+		defer wg.Done()
+		io.Copy(client, upstreamReader)
+		if cw, ok := client.(closeWriter); ok {
+			cw.CloseWrite()
 		}
-		clientConn.Close()
 	}()
 
+	wg.Wait()
+	client.Close()
+	upstream.Close()
 }
 
 func systrayReady() {
@@ -274,33 +821,38 @@ func systrayReady() {
 	systray.SetTitle("Proxy")
 	systray.SetTooltip("Go Smart Proxy")
 
-	options := make([]*systray.MenuItem, 0)
+	allRoutes := getRoutes()
+	options := make([]*systray.MenuItem, 0, len(allRoutes)+1)
+	items := make([]*systray.MenuItem, len(allRoutes))
 
-	for i, r := range routes {
+	for i, r := range allRoutes {
 		mRoute := systray.AddMenuItemCheckbox(r.name, r.name, false)
+		items[i] = mRoute
 		options = append(options, mRoute)
-		go func(m *systray.MenuItem, cr int) {
-			for {
-				<-m.ClickedCh
-				log.Printf("Forcing route %s", routes[cr].name)
-				forceRoute = routes[cr]
-				for _, m := range options {
-					m.Uncheck()
-				}
-				mRoute.Check()
-			}
-		}(mRoute, i)
 	}
 
 	mAuto := systray.AddMenuItemCheckbox("Auto", "Auto", true)
 	options = append(options, mAuto)
+
+	for i := range items {
+		go func(m *systray.MenuItem, r *ProxyRoute) {
+			for range m.ClickedCh {
+				log.Printf("Forcing route %s", r.name)
+				setForceRoute(r)
+				for _, opt := range options {
+					opt.Uncheck()
+				}
+				m.Check()
+			}
+		}(items[i], allRoutes[i])
+	}
+
 	go func() {
-		for {
-			<-mAuto.ClickedCh
+		for range mAuto.ClickedCh {
 			log.Printf("Forcing route Auto")
-			forceRoute = nil
-			for _, m := range options {
-				m.Uncheck()
+			setForceRoute(nil)
+			for _, opt := range options {
+				opt.Uncheck()
 			}
 			mAuto.Check()
 		}

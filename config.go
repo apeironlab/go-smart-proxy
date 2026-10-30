@@ -2,7 +2,9 @@ package main
 
 import (
 	"log"
+	"net"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -24,9 +26,17 @@ type ConfigRoute struct {
 }
 
 type Configuration struct {
-	Address     string             `yaml:"Address"`
-	Credentials []ConfigCredential `yaml:"Credentials"`
-	Routes      []ConfigRoute      `yaml:"Routes"`
+	Address            string             `yaml:"Address"`
+	Credentials        []ConfigCredential `yaml:"Credentials"`
+	Routes             []ConfigRoute      `yaml:"Routes"`
+	SystemProxy        bool               `yaml:"SystemProxy"`
+	SystemProxyExclude []string           `yaml:"SystemProxyExclude"`
+	PacHijack          bool               `yaml:"PacHijack"`
+	PacHijackHost      string             `yaml:"PacHijackHost"`
+	ForceChrome        bool               `yaml:"ForceChrome"`
+	// Hosts maps a hostname to the IP address it must be dialed at, whatever the system DNS says
+	// (for instance when a VPN hands out a resolver that does not know an internal name).
+	Hosts map[string]string `yaml:"Hosts"`
 }
 
 var configuration Configuration
@@ -36,7 +46,19 @@ func loadConfiguration() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	yaml.NewDecoder(cfg).Decode(&configuration)
+	defer cfg.Close()
+	if err := yaml.NewDecoder(cfg).Decode(&configuration); err != nil {
+		log.Fatal(err)
+	}
+
+	hosts := map[string]string{}
+	for host, address := range configuration.Hosts {
+		if net.ParseIP(address) == nil {
+			log.Fatalf("config.yml: Hosts[%s]: %q is not an IP address", host, address)
+		}
+		hosts[strings.ToLower(host)] = address
+	}
+	configuration.Hosts = hosts
 
 	loadRoutes()
 }

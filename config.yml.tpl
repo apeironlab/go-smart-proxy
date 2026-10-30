@@ -13,3 +13,6 @@ Routes:
   ProxyUrl: upstream proxy URL
   # Optional: the credential name if authentication is required
   Credential: CredentialName
+# Optional: hostnames dialed at a fixed IP address, whatever the system DNS says
+Hosts:
+  internal.example.com: 10.0.0.10

@@ -1,0 +1,76 @@
+import { useEffect, useState } from 'react'
+import { AppShell, Badge, Burger, Code, Group, NavLink, ScrollArea, Title, Tooltip } from '@mantine/core'
+import { useDisclosure } from '@mantine/hooks'
+import { IconKey, IconNetwork, IconPlugConnected, IconSettings } from '@tabler/icons-react'
+import ConnectionsPage from './pages/ConnectionsPage'
+import CredentialsPage from './pages/CredentialsPage'
+import ConfigPage from './pages/ConfigPage'
+import { api } from './api'
+import type { StateInfo } from './api'
+
+export default function App() {
+  const [page, setPage] = useState('connections')
+  const [opened, { toggle }] = useDisclosure()
+  const [state, setState] = useState<StateInfo | null>(null)
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    const load = () =>
+      api
+        .state()
+        .then((s) => {
+          setState(s)
+          setError(false)
+        })
+        .catch(() => setError(true))
+    load()
+    const t = setInterval(load, 5000)
+    return () => clearInterval(t)
+  }, [])
+
+  const pages = [
+    { id: 'connections', label: 'Connessioni', icon: IconPlugConnected, comp: <ConnectionsPage /> },
+    { id: 'credentials', label: 'Credenziali', icon: IconKey, comp: <CredentialsPage /> },
+    { id: 'config', label: 'Configurazione', icon: IconSettings, comp: <ConfigPage /> },
+  ]
+
+  return (
+    <AppShell
+      header={{ height: 56 }}
+      navbar={{ width: 230, breakpoint: 'sm', collapsed: { mobile: !opened } }}
+      padding="md"
+    >
+      <AppShell.Header>
+        <Group h="100%" px="md" gap="sm">
+          <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
+          <IconNetwork size={22} />
+          <Title order={4}>Go Smart Proxy</Title>
+          <Code>{state?.address ?? '...'}</Code>
+          <Tooltip label="Interfaccia di rete corrente">
+            <Badge color="blue" variant="light">{state?.iface || '...'}</Badge>
+          </Tooltip>
+          <Badge color={error ? 'red' : 'green'} variant="light">
+            {state ? `${state.activeConns} connessioni` : '...'}
+          </Badge>
+          <Tooltip label="Route forzata">
+            <Badge variant="outline" color="gray">{state?.forceRoute || 'Auto'}</Badge>
+          </Tooltip>
+        </Group>
+      </AppShell.Header>
+      <AppShell.Navbar p="sm">
+        <AppShell.Section grow component={ScrollArea}>
+          {pages.map((p) => (
+            <NavLink
+              key={p.id}
+              active={page === p.id}
+              label={p.label}
+              leftSection={<p.icon size={16} />}
+              onClick={() => setPage(p.id)}
+            />
+          ))}
+        </AppShell.Section>
+      </AppShell.Navbar>
+      <AppShell.Main>{pages.find((p) => p.id === page)?.comp}</AppShell.Main>
+    </AppShell>
+  )
+}
