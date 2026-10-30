@@ -4,4 +4,6 @@ package main
 
 func applySystemProxy() {}
 
-func systemProxyState() systemProxyStateJSON { return systemProxyStateJSON{} }
+func systemProxyState() systemProxyStateJSON {
+	return systemProxyStateJSON{Exceptions: []string{}}
+}

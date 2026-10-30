@@ -248,7 +248,7 @@ export default function ConfigPage() {
               )}
             </Text>
             <Text size="xs" c="dimmed" mt={4}>
-              Eccezioni (bypass): {sysProxyState.exceptions.join(', ') || 'nessuna'}
+              Eccezioni (bypass): {(sysProxyState.exceptions ?? []).join(', ') || 'nessuna'}
             </Text>
             {sysProxyState.pacEnabled && (
               <Alert color="red" mt="sm" title="PAC attivo">

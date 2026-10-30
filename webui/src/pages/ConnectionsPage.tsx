@@ -86,7 +86,7 @@ function ConnDetails({ conn }: { conn: ConnInfo }) {
       <div>
         <Text fw={700} mb="xs">Eventi</Text>
         <Code block style={{ maxHeight: 300, overflow: 'auto' }}>
-          {conn.events.map((e) => `${fmtTime(e.time)}  ${e.msg}`).join('\n') || '(nessun evento)'}
+          {(conn.events ?? []).map((e) => `${fmtTime(e.time)}  ${e.msg}`).join('\n') || '(nessun evento)'}
         </Code>
       </div>
     </Stack>
