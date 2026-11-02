@@ -161,7 +161,7 @@ func main() {
 		fmt.Printf("Error: %+v\n", err)
 	}
 
-	loadConfiguration()
+	loadConfigurationOrSetup()
 	relayMgr.Start()
 
 	if configuration.PacHijack {

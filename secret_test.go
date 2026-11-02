@@ -115,6 +115,9 @@ func TestLoadEncryptedConfiguration(t *testing.T) {
 	if configuration.Address != "127.0.0.1:9999" {
 		t.Fatalf("address = %q, want 127.0.0.1:9999", configuration.Address)
 	}
+	if configuration.OnboardingDone == nil || !*configuration.OnboardingDone {
+		t.Fatal("an existing configuration must skip onboarding")
+	}
 	if configuration.Relay == nil || configuration.Relay.Device == "" {
 		t.Fatal("the relay device code was not generated")
 	}
@@ -123,7 +126,7 @@ func TestLoadEncryptedConfiguration(t *testing.T) {
 	}
 }
 
-func TestFirstRunDefaults(t *testing.T) {
+func TestInitialConfig(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	oldConfig := configuration
@@ -131,21 +134,42 @@ func TestFirstRunDefaults(t *testing.T) {
 		configuration = oldConfig
 		clearConfigCrypto()
 	})
-	t.Setenv(secretEnv, "test-master-password")
 	t.Setenv(noKeychainEnv, "1")
 
-	loadConfiguration()
-	if configuration.Address != "127.0.0.1:3128" {
-		t.Fatalf("default address = %q", configuration.Address)
+	if err := createInitialConfig("test-master-password", "127.0.0.1:3128", "127.0.0.1:1080"); err != nil {
+		t.Fatal(err)
+	}
+	if configuration.Address != "127.0.0.1:3128" || configuration.SocksAddress != "127.0.0.1:1080" {
+		t.Fatalf("unexpected defaults: %+v", configuration)
 	}
 	if configuration.Relay != nil {
 		t.Fatalf("unexpected relay config: %+v", configuration.Relay)
+	}
+	if configuration.OnboardingDone == nil || *configuration.OnboardingDone {
+		t.Fatal("a fresh configuration must require onboarding")
 	}
 	if _, err := os.Stat(encryptedConfig); err != nil {
 		t.Fatalf("the encrypted configuration was not created: %v", err)
 	}
 	if _, _, ok := configCrypto(); !ok {
 		t.Fatal("the configuration key was not cached")
+	}
+
+	// The password must decrypt the file and the defaults must be readable.
+	data, err := os.ReadFile(encryptedConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := decryptSecret("test-master-password", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Configuration
+	if err := yaml.Unmarshal(plain, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Address != "127.0.0.1:3128" || got.SocksAddress != "127.0.0.1:1080" {
+		t.Fatalf("unexpected persisted defaults: %+v", got)
 	}
 }
 

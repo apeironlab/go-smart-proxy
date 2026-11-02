@@ -70,6 +70,8 @@ are in English.
 - **Encrypted configuration** with a master password (PBKDF2 + AES-256-GCM).
   On macOS the derived key can be stored in the Keychain and unlocked with
   Touch ID.
+- **Web first-run setup**: choose the master password in the browser and get
+  working HTTP/SOCKS defaults without editing a file.
 - **System tray** with dynamic route selection and a web UI for configuration,
   rules, credentials, connections, and relay management.
 - **macOS integration**: system proxy configuration (including VPN-overridden
@@ -145,29 +147,39 @@ cd go-smart-proxy
 # Build the web UI and the proxy binary
 make build
 
-# Start it (the first run asks for a new master password)
+# Start it: on first run it opens a browser setup page to choose the
+# master password
 ./proxy
 ```
 
 Then:
 
-1. Open <http://127.0.0.1:3128/> (the configured `Address`).
-2. Configure routes, rules, credentials, and relay from the web UI.
-3. Point apps at the proxy:
+1. On first run, use the setup page that opens automatically at
+   `http://127.0.0.1:3128/?token=...` (the URL is also printed in the terminal).
+   Choose the master password. The proxy is created with:
+   - HTTP proxy + web UI: `127.0.0.1:3128`
+   - SOCKS5 proxy: `127.0.0.1:1080`
+2. Click **Inizia a usare il proxy** in the welcome page.
+3. Configure routes, rules, credentials, and relay from the web UI.
+4. Point apps at the proxy:
 
 ```bash
 # HTTP proxy
 curl -x http://127.0.0.1:3128 https://example.com
 
-# SOCKS5 (if SocksAddress: 127.0.0.1:1080)
+# SOCKS5 (enabled by default on first run)
 curl --socks5-hostname 127.0.0.1:1080 https://example.com
 ```
 
 On macOS/Windows the same actions are available from the tray icon.
 
-There is no configuration template to copy: on first start the proxy creates an
-encrypted configuration with usable defaults (`127.0.0.1:3128`), and the rest is
-managed from the web UI.
+There is no configuration template to copy. On first start the proxy runs a
+token-protected setup page on loopback: choose the master password there and the
+proxy creates `config.yml.enc` with defaults (`127.0.0.1:3128` and SOCKS5
+`127.0.0.1:1080`). If those ports are busy, the next free port is used and shown
+on the page. From then on everything is managed from the web UI. For
+headless/automatic first starts, set `PROXY_MASTER_PASSWORD` to skip the setup
+page.
 
 ---
 
@@ -191,9 +203,14 @@ At startup:
    - embeds the relay certificate, private key and CA into the configuration,
    - writes and verifies `config.yml.enc`,
    - removes the plaintext configuration and the plaintext relay private key.
-3. If neither file exists, the proxy starts with defaults
-   (`Address: 127.0.0.1:3128`), asks for a new master password and writes
-   `config.yml.enc`.
+3. If neither file exists, the proxy starts a **token-protected setup page** on
+   loopback (it opens the browser and prints the URL): choose the master
+   password there. It writes `config.yml.enc` with defaults
+   (`Address: 127.0.0.1:3128`, SOCKS5 `127.0.0.1:1080`). Set
+   `PROXY_MASTER_PASSWORD` to skip the setup page on headless machines.
+4. After setup, a one-click welcome page confirms the working defaults; the
+   proxy is immediately usable.
+5. Existing configurations are treated as already onboarded.
 
 **Unlock sources**, in order:
 
@@ -202,6 +219,9 @@ At startup:
 3. The system Keychain (macOS), with Touch ID when available.
 4. An interactive master password prompt (hidden input in a terminal, or a
    native dialog when started from Finder/launchd).
+
+The browser setup page is used only for a brand-new installation; after that,
+the sources above unlock the existing configuration.
 
 On macOS the **derived key** (not the password) is stored in the Keychain, under
 the service `go-smart-proxy`, keyed by the configuration salt. The Keychain read
@@ -739,6 +759,9 @@ rather than keeping the CA key in the cluster.
 ### Configuration and credentials
 
 - `config.yml.enc` is encrypted with AES-256-GCM and a PBKDF2-derived key.
+- The first-run setup page is served only on loopback and is protected by a
+  random one-time token in the URL. No proxy service is exposed while setup is
+  pending; the master password is sent only over loopback.
 - The master password is the only universal recovery key. **Losing it means
   losing the configuration, credentials, relay certificate and private key.**
 - On Unix the encrypted file is created with `0600`; the legacy plaintext file
@@ -868,6 +891,7 @@ rebuild the Go binary so the new assets are embedded.
 | `relay_client.go` | Relay client, address book, approvals, device identity |
 | `relay_provision.go` | Proxy-side enrollment (CSR, code, certificate storage, TOFU) |
 | `secret.go` | Config encryption, master password, Keychain integration |
+| `setup.go` | First-run web setup (master password, defaults, onboarding flag) |
 | `web.go`, `webui.go` | Web API, static UI embedding |
 | `socks.go` | SOCKS5 listener and handler |
 | `device.go` | Per-installation device code generation |

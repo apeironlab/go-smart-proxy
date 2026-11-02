@@ -86,6 +86,7 @@ export interface SystemProxyState {
 export interface StateInfo {
   address: string
   socksAddress: string
+  onboarding: boolean
   iface: string
   gateway: string
   network: string
@@ -180,6 +181,7 @@ export const api = {
     pacHijackHost: string
     forceChrome: boolean
   }) => post('/api/config', form),
+  finishOnboarding: () => post('/api/onboarding', {}),
   relay: () => req<RelayStatus>('/api/relay'),
   relayEnroll: (address: string, email: string, caPem: string, acceptFingerprint = '') =>
     post('/api/relay/enroll', { address, email, caPem, acceptFingerprint }),

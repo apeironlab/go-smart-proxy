@@ -83,12 +83,18 @@ type Configuration struct {
 	PacHijack          bool               `yaml:"PacHijack"`
 	PacHijackHost      string             `yaml:"PacHijackHost"`
 	ForceChrome        bool               `yaml:"ForceChrome"`
+	// OnboardingDone is nil for legacy configurations (treated as done) and
+	// false for a freshly bootstrapped configuration until the web onboarding
+	// is completed.
+	OnboardingDone *bool `yaml:"OnboardingDone,omitempty"`
 	// Hosts maps a hostname to the IP address it must be dialed at, whatever the system DNS says
 	// (for instance when a VPN hands out a resolver that does not know an internal name).
 	Hosts map[string]string `yaml:"Hosts"`
 }
 
 var configuration Configuration
+
+func boolPtr(v bool) *bool { return &v }
 
 // secureConfigFile restricts a file containing secrets to the current user.
 // It is best effort: the process may not be allowed to change the permissions
@@ -123,36 +129,40 @@ func loadConfiguration() {
 		if err := yaml.Unmarshal(plain, &configuration); err != nil {
 			log.Fatalf("%s: %v", encryptedConfig, err)
 		}
+		if configuration.OnboardingDone == nil {
+			// Existing configurations predate onboarding: do not show it.
+			configuration.OnboardingDone = boolPtr(true)
+		}
 		// The encrypted file is valid: any plaintext leftover is a leak.
 		removePlaintextLeftovers()
 	} else if os.IsNotExist(err) {
 		// Legacy plaintext configuration: load it and migrate automatically to
 		// the encrypted format, embedding the relay certificate and key.
 		data, err := os.ReadFile(plainConfig)
-		switch {
-		case err == nil:
-			secureConfigFile(plainConfig)
-			if err := yaml.Unmarshal(data, &configuration); err != nil {
-				log.Fatalf("%s: %v", plainConfig, err)
-			}
-			if err := migrateToEncrypted(); err != nil {
-				log.Fatalf("cannot migrate %s to %s: %v", plainConfig, encryptedConfig, err)
-			}
-		case os.IsNotExist(err):
-			// No configuration at all: start with usable defaults and let the
-			// web UI handle the rest. The master password is chosen now.
-			log.Printf("No configuration found: creating a new encrypted configuration with defaults")
-			configuration = Configuration{Address: "127.0.0.1:3128"}
-			if err := migrateToEncrypted(); err != nil {
-				log.Fatalf("cannot create %s: %v", encryptedConfig, err)
-			}
-		default:
-			log.Fatalf("cannot read %s: %v", plainConfig, err)
+		if err != nil {
+			log.Fatalf("no configuration found (%s or %s)", encryptedConfig, plainConfig)
+		}
+		secureConfigFile(plainConfig)
+		if err := yaml.Unmarshal(data, &configuration); err != nil {
+			log.Fatalf("%s: %v", plainConfig, err)
+		}
+		if configuration.OnboardingDone == nil {
+			// Existing configurations predate onboarding: do not show it.
+			configuration.OnboardingDone = boolPtr(true)
+		}
+		if err := migrateToEncrypted(); err != nil {
+			log.Fatalf("cannot migrate %s to %s: %v", plainConfig, encryptedConfig, err)
 		}
 	} else {
 		log.Fatal(err)
 	}
 
+	finalizeConfiguration()
+}
+
+// finalizeConfiguration validates and applies a configuration that has already
+// been loaded (or created by the first-run web setup).
+func finalizeConfiguration() {
 	hosts := map[string]string{}
 	for host, address := range configuration.Hosts {
 		if net.ParseIP(address) == nil {

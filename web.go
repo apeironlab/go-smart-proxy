@@ -59,6 +59,7 @@ func newAPIMux() *http.ServeMux {
 	m.HandleFunc("POST /api/pac/refresh", apiRefreshPAC)
 	m.HandleFunc("GET /api/config", apiGetConfig)
 	m.HandleFunc("POST /api/config", apiSaveConfig)
+	m.HandleFunc("POST /api/onboarding", apiFinishOnboarding)
 	m.HandleFunc("GET /api/system-proxy", apiSystemProxy)
 	return m
 }
@@ -125,6 +126,7 @@ type dnsEntryJSON struct {
 type stateJSON struct {
 	Address            string          `json:"address"`
 	SocksAddress       string          `json:"socksAddress"`
+	Onboarding         bool            `json:"onboarding"`
 	Iface              string          `json:"iface"`
 	Gateway            string          `json:"gateway"`
 	Network            string          `json:"network"`
@@ -151,11 +153,13 @@ func apiState(w http.ResponseWriter, r *http.Request) {
 	pacHijack := configuration.PacHijack
 	pacHijackHost := configuration.PacHijackHost
 	forceChrome := configuration.ForceChrome
+	onboarding := configuration.OnboardingDone != nil && !*configuration.OnboardingDone
 	configMu.Unlock()
 
 	state := stateJSON{
 		Address:            address,
 		SocksAddress:       socksAddress,
+		Onboarding:         onboarding,
 		Iface:              st.iface.Name,
 		Gateway:            fmt.Sprintf("%v", st.defaultGw),
 		Network:            netString(st.network),
@@ -567,6 +571,18 @@ func apiSaveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if configuration.SystemProxy {
 		go applySystemProxy()
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func apiFinishOnboarding(w http.ResponseWriter, r *http.Request) {
+	configMu.Lock()
+	configuration.OnboardingDone = boolPtr(true)
+	err := persistConfigurationLocked()
+	configMu.Unlock()
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
 }

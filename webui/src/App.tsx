@@ -5,6 +5,7 @@ import { IconKey, IconNetwork, IconRoute, IconRouteAltRight, IconPlugConnected, 
 import ConnectionsPage from './pages/ConnectionsPage'
 import CredentialsPage from './pages/CredentialsPage'
 import ConfigPage from './pages/ConfigPage'
+import OnboardingPage from './pages/OnboardingPage'
 import RelayPage from './pages/RelayPage'
 import RulesPage from './pages/RulesPage'
 import { api } from './api'
@@ -45,6 +46,10 @@ export default function App() {
     { id: 'credentials', label: 'Credenziali', icon: IconKey, comp: <CredentialsPage /> },
     { id: 'config', label: 'Configurazione', icon: IconSettings, comp: <ConfigPage /> },
   ]
+
+  if (state?.onboarding) {
+    return <OnboardingPage state={state} />
+  }
 
   return (
     <AppShell
