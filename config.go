@@ -27,7 +27,8 @@ type ConfigRoute struct {
 	// When present it takes precedence over PacUrl and ProxyUrl.
 	Chain []ConfigHop `yaml:"Chain,omitempty"`
 	// RulesOnly restricts the route to the destination rules: it is never
-	// picked as the automatic (default) route, nor to reach the relay.
+	// picked as the automatic (default) route. For the connection to the relay
+	// only the hops before a relay hop are used.
 	RulesOnly bool `yaml:"RulesOnly,omitempty"`
 }
 

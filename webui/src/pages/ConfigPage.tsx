@@ -391,14 +391,14 @@ export default function ConfigPage() {
             value={form.pacUrl} onChange={(e) => setForm({ ...form, pacUrl: e.currentTarget.value })} />
           <Switch
             label="Solo per regole"
-            description="La route è usata solo quando una regola di destinazione la indica: non viene scelta automaticamente e non viene usata per collegarsi al relay."
+            description="La route è usata solo quando una regola di destinazione la indica: non viene scelta automaticamente per il traffico. Per collegarsi al relay viene usata solo la parte della catena che precede l'hop relay."
             checked={form.rulesOnly}
             onChange={(e) => setForm({ ...form, rulesOnly: e.currentTarget.checked })}
           />
           <Divider label="Catena di proxy (opzionale)" labelPosition="left" mt="xs" />
           <Text size="xs" c="dimmed">
             Il traffico passa dal primo proxy, poi dal secondo attraverso il primo, e così via fino all'uscita.
-            Con una catena, PAC e proxy upstream sono ignorati. Schemi: http://host:porta, socks5://host:porta, oppure relay://email del contatto (solo come primo salto).
+            Con una catena, PAC e proxy upstream sono ignorati. Schemi: http://host:porta, socks5://host:porta, oppure relay://email del contatto: la catena si ferma all'hop relay (i salti precedenti servono a raggiungere il relay, quelli successivi passano dal contatto).
           </Text>
           {form.hops.map((h, i) => (
             <Group key={i} gap="xs" wrap="nowrap" align="flex-end">

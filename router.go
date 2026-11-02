@@ -689,13 +689,13 @@ func proxyURLString(u *url.URL) string {
 // (only destination rules can select them). Direct is always last and always
 // applicable.
 func GetApplicableRoute() *ProxyRoute {
-	return getApplicableRoute(nil)
+	return getApplicableRoute(func(r *ProxyRoute) bool { return r.rulesOnly })
 }
 
 // getApplicableRoute is GetApplicableRoute with a filter: the routes for which
 // skip returns true are ignored. For instance the relay connection skips the
-// routes that exit through a relay, since they can only work once the relay
-// connection itself is up.
+// rules-only routes (unless it can stop before their relay hop), and the
+// normal selection skips every rules-only route.
 func getApplicableRoute(skip func(*ProxyRoute) bool) *ProxyRoute {
 	st := getNetState()
 	if fr := getForceRoute(); fr != nil && (skip == nil || !skip(fr)) {
@@ -707,9 +707,6 @@ func getApplicableRoute(skip func(*ProxyRoute) bool) *ProxyRoute {
 	}
 	for _, r := range getRoutes() {
 		if skip != nil && skip(r) {
-			continue
-		}
-		if r.rulesOnly {
 			continue
 		}
 		if r.isApplicable(st) {

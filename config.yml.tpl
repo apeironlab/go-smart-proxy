@@ -21,11 +21,14 @@ Routes:
   #   Credential: CredentialName
   # - ProxyUrl: socks5://other-proxy:1080
   # Optional: use this route only when a destination rule names it. It is never
-  # picked as the automatic (default) route, nor to reach the relay.
+  # picked as the automatic (default) route; for the relay connection only the
+  # hops before a relay:// hop are used.
   # RulesOnly: true
 # Optional: connection to a relay (see cmd/proxyrelay) to exit through the network of your contacts.
 # The relay is reached through the currently applicable route (direct, proxy, chain...).
-# Use "relay://their@email" as the first hop of a route's Chain.
+# Use "relay://their@email" in a route's Chain: the relay hop is where the proxy
+# chain stops. For the connection to the relay server only the hops before it are
+# used; the hops after it are reached through the contact's network.
 # Relay:
 #   Address: relay.example.com:8443
 #   Cert: relay/client.pem

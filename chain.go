@@ -27,6 +27,7 @@ type chainHop struct {
 
 func buildChain(cfg []ConfigHop) ([]*chainHop, error) {
 	hops := make([]*chainHop, 0, len(cfg))
+	relayHop := -1
 	for i, h := range cfg {
 		raw := h.ProxyUrl
 		if !strings.Contains(raw, "://") {
@@ -40,13 +41,14 @@ func buildChain(cfg []ConfigHop) ([]*chainHop, error) {
 		switch hop.scheme {
 		case "http":
 		case "relay": // relay://alice@example.com: exit through the network of a contact
-			if i != 0 {
-				return nil, fmt.Errorf("hop %d: a relay hop must be the first of the chain", i+1)
+			if relayHop >= 0 {
+				return nil, fmt.Errorf("hop %d: only one relay hop is allowed per chain", i+1)
 			}
 			email, ok := relay.NormalizeEmail(u.User.Username() + "@" + u.Hostname())
 			if u.User == nil || !ok {
 				return nil, fmt.Errorf("hop %d: use relay://name@domain with the contact's e-mail", i+1)
 			}
+			relayHop = i
 			hops = append(hops, &chainHop{scheme: "relay", addr: email})
 			continue
 		case "socks5", "socks5h":
@@ -93,23 +95,34 @@ func chainLabel(hops []*chainHop) string {
 }
 
 // dialChain opens a tunnel to target through every hop of the route, in order.
+// A relay hop is the exit through a contact: the hops before it are the path
+// used by the relay client to reach the relay server, so they are not dialed
+// again here; the hops after it are reached through the relay tunnel.
 // The returned reader must be used for all further reads from the connection.
 func dialChain(route *ProxyRoute, target string, rec *ConnInfo) (net.Conn, *bufio.Reader, error) {
 	hops := route.chain
+	relayIdx := -1
+	for i, h := range hops {
+		if h.scheme == "relay" {
+			relayIdx = i
+			break
+		}
+	}
+
 	var conn net.Conn
 	first := 0
-	if hops[0].scheme == "relay" {
+	if relayIdx >= 0 {
 		next := target
-		if len(hops) > 1 {
-			next = hops[1].addr
+		if relayIdx+1 < len(hops) {
+			next = hops[relayIdx+1].addr
 		}
-		rec.event(fmt.Sprintf("hop 1/%d relay via %s -> %s", len(hops), hops[0].addr, next))
-		raw, err := relayMgr.Dial(hops[0].addr, next)
+		rec.event(fmt.Sprintf("hop %d/%d relay via %s -> %s", relayIdx+1, len(hops), hops[relayIdx].addr, next))
+		raw, err := relayMgr.Dial(hops[relayIdx].addr, next)
 		if err != nil {
-			return nil, nil, fmt.Errorf("hop 1 (relay %s): %w", hops[0].addr, err)
+			return nil, nil, fmt.Errorf("hop %d (relay %s): %w", relayIdx+1, hops[relayIdx].addr, err)
 		}
 		conn = &countingConn{Conn: raw, in: &rec.bytesUpIn, out: &rec.bytesUpOut}
-		first = 1
+		first = relayIdx + 1
 	} else {
 		raw, err := net.DialTimeout("tcp", hops[0].addr, dialTimeout)
 		if err != nil {
@@ -130,6 +143,8 @@ func dialChain(route *ProxyRoute, target string, rec *ConnInfo) (net.Conn, *bufi
 		switch hop.scheme {
 		case "socks5":
 			err = socks5Connect(conn, br, hop.user, hop.password, next)
+		case "relay":
+			err = errors.New("a relay hop cannot be traversed through a proxy")
 		default:
 			err = httpConnect(conn, br, hop.user, hop.password, next, rec)
 		}
@@ -157,9 +172,41 @@ func (c *bufConn) CloseWrite() error {
 	return c.Conn.Close()
 }
 
-// usesRelay reports whether the route exits through a relay contact.
-func (p *ProxyRoute) usesRelay() bool {
-	return len(p.chain) > 0 && p.chain[0].scheme == "relay"
+// hasRelayHop reports whether the route goes through a relay contact.
+func (p *ProxyRoute) hasRelayHop() bool {
+	for _, h := range p.chain {
+		if h.scheme == "relay" {
+			return true
+		}
+	}
+	return false
+}
+
+// routeToRelay returns the route to use for the connection to the relay server
+// itself: the chain is cut at the first relay hop, since the relay cannot be
+// used to reach itself (it is not connected yet). The hops before the relay
+// are used to reach the relay server; if the relay is the first hop, the
+// connection becomes direct. Routes without a relay hop are returned as-is.
+func (p *ProxyRoute) routeToRelay() *ProxyRoute {
+	idx := -1
+	for i, h := range p.chain {
+		if h.scheme == "relay" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return p
+	}
+	if idx == 0 {
+		return &ProxyRoute{name: "Direct"}
+	}
+	out := &ProxyRoute{name: p.name, cred: p.cred}
+	out.chain = append([]*chainHop{}, p.chain[:idx]...)
+	if idx <= len(p.hops) {
+		out.hops = append([]ConfigHop{}, p.hops[:idx]...)
+	}
+	return out
 }
 
 // newChainTransport returns a transport for plain HTTP requests: each new

@@ -22,7 +22,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Fatalf("timeout waiting for %s", what)
 }
 
-func TestRelayRouteSkipsRelayRoutes(t *testing.T) {
+func TestRelayRouteStopsAtRelayHop(t *testing.T) {
 	resetEnv(t, nil, []ConfigRoute{
 		{Name: "via bob", Chain: []ConfigHop{{ProxyUrl: "relay://bob@example.com"}}},
 		{Name: "corp only", ProxyUrl: "http://127.0.0.1:1", RulesOnly: true},
@@ -31,14 +31,14 @@ func TestRelayRouteSkipsRelayRoutes(t *testing.T) {
 
 	r := &relayClient{cfg: &RelayConfig{}}
 
-	// Auto (no forced route): the relay route is applicable but must be
-	// ignored, because it can only work once the relay connection is up.
+	// Auto (no forced route): the relay route is selected, but its chain stops
+	// at the relay hop. Nothing comes before it, so the connection is direct.
 	route, err := r.relayRoute()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if route.name != "Direct" {
-		t.Fatalf("auto selected %q, want Direct", route.name)
+	if route.name != "Direct" || len(route.chain) != 0 {
+		t.Fatalf("auto route = %q (%v), want direct", route.name, chainStrings(route.chain))
 	}
 
 	// Same when the relay route is explicitly forced (e.g. from the tray menu).
@@ -47,14 +47,46 @@ func TestRelayRouteSkipsRelayRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if route.name != "Direct" {
-		t.Fatalf("forced relay route selected %q, want Direct", route.name)
+	if route.name != "Direct" || len(route.chain) != 0 {
+		t.Fatalf("forced route = %q (%v), want direct", route.name, chainStrings(route.chain))
 	}
 
-	// Naming a relay route in Relay.Route is a configuration error.
+	// Naming a relay route in Relay.Route must not prevent the connection: the
+	// relay hop is where the chain stops.
 	r.cfg.Route = "via bob"
-	if _, err := r.relayRoute(); err == nil {
-		t.Fatal("an explicitly configured relay route must be rejected")
+	route, err = r.relayRoute()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.name != "Direct" || len(route.chain) != 0 {
+		t.Fatalf("Relay.Route = %q (%v), want direct", route.name, chainStrings(route.chain))
+	}
+}
+
+func TestRelayRouteUsesHopsBeforeRelay(t *testing.T) {
+	resetEnv(t, nil, []ConfigRoute{
+		{Name: "proxy then relay", Chain: []ConfigHop{
+			{ProxyUrl: "http://127.0.0.1:1"},
+			{ProxyUrl: "relay://bob@example.com"},
+		}},
+	})
+	t.Cleanup(func() { setForceRoute(nil) })
+
+	r := &relayClient{cfg: &RelayConfig{Route: "proxy then relay"}}
+	route, err := r.relayRoute()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := chainStrings(route.chain); len(got) != 1 || got[0] != "http://127.0.0.1:1" {
+		t.Fatalf("route chain = %v, want only the proxy before the relay", got)
+	}
+
+	// More than one relay hop in a chain is meaningless.
+	if _, err := buildChain([]ConfigHop{
+		{ProxyUrl: "relay://bob@example.com"},
+		{ProxyUrl: "relay://alice@example.com"},
+	}); err == nil {
+		t.Fatal("a chain with two relay hops must be rejected")
 	}
 }
 
@@ -97,7 +129,7 @@ func TestRelayRouteEndToEnd(t *testing.T) {
 		}
 	}()
 
-	loadRoutes() // only the "Direct" route
+	resetEnv(t, nil, nil) // only the "Direct" route
 	mk := func(email string, allowLocal bool) *relayClient {
 		c := &relayClient{approvals: map[int64]*relayApproval{}, file: filepath.Join(dir, email+".json")}
 		c.start(&RelayConfig{
