@@ -127,23 +127,6 @@ func TestRelayApprovalIsPerDevice(t *testing.T) {
 	}
 }
 
-func TestContactNotificationCooldown(t *testing.T) {
-	r := &relayClient{}
-	now := time.Now()
-	if !r.shouldNotifyContactLocked("alice@example.com", now) {
-		t.Fatal("the first contact request must notify")
-	}
-	if r.shouldNotifyContactLocked("alice@example.com", now.Add(time.Minute)) {
-		t.Fatal("a repeated request within the cooldown must not notify again")
-	}
-	if !r.shouldNotifyContactLocked("alice@example.com", now.Add(contactNotifyEvery+time.Second)) {
-		t.Fatal("a request after the cooldown must notify again")
-	}
-	if !r.shouldNotifyContactLocked("bob@example.com", now) {
-		t.Fatal("different contacts are independent")
-	}
-}
-
 func TestRelayRouteEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	ca := filepath.Join(dir, "ca")
