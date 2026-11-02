@@ -147,8 +147,29 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
+          name: darwin-universal
           path: dist
-          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-amd64
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-amd64
+          path: dist
+      - name: Remove non-package assets from an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' |
+              while read -r name; do
+                case "$name" in
+                  *.tar.gz|*.zip|*.dmg|*.deb|*.rpm|*_setup.exe|SHA256SUMS) ;;
+                  *) gh release delete-asset "$GITHUB_REF_NAME" "$name" -y ;;
+                esac
+              done
+          fi
       - name: Generate checksums
         run: |
           cd dist
