@@ -2,8 +2,10 @@ package relay
 
 import (
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -151,6 +153,78 @@ func IssueServer(caDir, outDir string, hosts []string) error {
 		}
 	}
 	return issue(caDir, outDir, "server", tpl)
+}
+
+// SignCSR signs a client certificate request for email. The identity in the
+// certificate always comes from the verified e-mail; the CSR must ask for the
+// same identity, and its signature and public key are validated.
+func SignCSR(caDir string, csrPEM []byte, email string, ttl time.Duration) ([]byte, error) {
+	email, ok := NormalizeEmail(email)
+	if !ok {
+		return nil, fmt.Errorf("invalid e-mail address")
+	}
+	block, _ := pem.Decode(csrPEM)
+	if block == nil || block.Type != "CERTIFICATE REQUEST" {
+		return nil, errors.New("invalid certificate request")
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse certificate request: %w", err)
+	}
+	if err := csr.CheckSignature(); err != nil {
+		return nil, fmt.Errorf("invalid certificate request signature: %w", err)
+	}
+	identity := false
+	for _, e := range csr.EmailAddresses {
+		if v, ok := NormalizeEmail(e); ok && v == email {
+			identity = true
+			break
+		}
+	}
+	if !identity {
+		if v, ok := NormalizeEmail(csr.Subject.CommonName); ok && v == email {
+			identity = true
+		}
+	}
+	if !identity {
+		return nil, errors.New("the certificate request is for a different e-mail address")
+	}
+	switch pub := csr.PublicKey.(type) {
+	case *rsa.PublicKey:
+		if pub.N.BitLen() < 2048 {
+			return nil, errors.New("RSA key too small")
+		}
+	case *ecdsa.PublicKey:
+		if pub.Curve != elliptic.P256() && pub.Curve != elliptic.P384() {
+			return nil, errors.New("unsupported elliptic curve")
+		}
+	case ed25519.PublicKey:
+	default:
+		return nil, errors.New("unsupported public key type")
+	}
+
+	ca, caPriv, err := loadCA(caDir)
+	if err != nil {
+		return nil, err
+	}
+	if ttl <= 0 {
+		ttl = 90 * 24 * time.Hour
+	}
+	tpl := &x509.Certificate{
+		SerialNumber:          serial(),
+		Subject:               pkix.Name{CommonName: email},
+		EmailAddresses:        []string{email},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(ttl),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, ca, csr.PublicKey, caPriv)
+	if err != nil {
+		return nil, err
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), nil
 }
 
 // LoadPool loads a PEM bundle of CA certificates.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -307,9 +308,19 @@ func apiDeleteRoute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
+type credentialInfoJSON struct {
+	Name        string `json:"name"`
+	User        string `json:"user"`
+	HasPassword bool   `json:"hasPassword"`
+}
+
 func apiListCredentials(w http.ResponseWriter, r *http.Request) {
 	configMu.Lock()
-	creds := append([]ConfigCredential(nil), configuration.Credentials...)
+	creds := make([]credentialInfoJSON, 0, len(configuration.Credentials))
+	for _, c := range configuration.Credentials {
+		// Never send the password: the UI only needs to know whether it is set.
+		creds = append(creds, credentialInfoJSON{Name: c.Name, User: c.User, HasPassword: c.Password != ""})
+	}
 	configMu.Unlock()
 	writeJSON(w, creds)
 }
@@ -335,10 +346,16 @@ func apiSaveCredential(w http.ResponseWriter, r *http.Request) {
 	found := false
 	for i := range configuration.Credentials {
 		if configuration.Credentials[i].Name == form.Name {
+			// An empty password means "keep the current one": the API never
+			// sends it back to the UI.
+			password := form.Password
+			if password == "" {
+				password = configuration.Credentials[i].Password
+			}
 			configuration.Credentials[i] = ConfigCredential{
 				Name:     form.Name,
 				User:     form.User,
-				Password: form.Password,
+				Password: password,
 			}
 			found = true
 			break
@@ -561,11 +578,22 @@ func persistConfigurationLocked() error {
 	if err != nil {
 		return err
 	}
-	tmp := "config.yml.tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	key, salt, ok := configCrypto()
+	if !ok {
+		return errors.New("configuration key is locked: restart the proxy and unlock it")
+	}
+	enc, err := encryptWithKey(key, salt, data)
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, "config.yml")
+	if err := writeSecretFileAtomic(encryptedConfig, enc); err != nil {
+		return err
+	}
+	// The legacy plaintext file must not survive next to the encrypted one.
+	if err := os.Remove(plainConfig); err != nil && !os.IsNotExist(err) {
+		log.Printf("WARNING: cannot remove %s: %v", plainConfig, err)
+	}
+	return nil
 }
 
 func reapplyRoutesLocked() {

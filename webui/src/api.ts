@@ -24,7 +24,7 @@ export interface RouteInfo {
 export interface Credential {
   name: string
   user: string
-  password: string
+  hasPassword: boolean
 }
 
 export interface ConnEvent {
@@ -119,17 +119,35 @@ export interface CredentialForm {
   password: string
 }
 
+export interface CertificatePrompt {
+  subject: string
+  issuer: string
+  fingerprint: string
+  caSubject?: string
+  caFingerprint?: string
+}
+
+export class ApiError extends Error {
+  payload?: unknown
+  constructor(message: string, payload?: unknown) {
+    super(message)
+    this.payload = payload
+  }
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init)
   if (!res.ok) {
     let msg = `${res.status} ${res.statusText}`
+    let payload: unknown = undefined
     try {
-      const j = await res.json()
-      if (j.error) msg = j.error
+      payload = await res.json()
+      const err = (payload as { error?: string })?.error
+      if (err) msg = err
     } catch {
       /* ignore */
     }
-    throw new Error(msg)
+    throw new ApiError(msg, payload)
   }
   return res.json()
 }
@@ -163,12 +181,17 @@ export const api = {
     forceChrome: boolean
   }) => post('/api/config', form),
   relay: () => req<RelayStatus>('/api/relay'),
+  relayEnroll: (address: string, email: string, caPem: string, acceptFingerprint = '') =>
+    post('/api/relay/enroll', { address, email, caPem, acceptFingerprint }),
+  relayEnrollStatus: () => req<{ pending: boolean; email?: string; address?: string; expiresAt?: string }>('/api/relay/enroll'),
+  relayConfirm: (code: string) => post('/api/relay/enroll/confirm', { code }),
   relayRequest: (email: string) => post('/api/relay/contacts', { email }),
   relayRespond: (email: string, accept: boolean) => post('/api/relay/contacts/respond', { email, accept }),
   relayRemove: (email: string) => post('/api/relay/contacts/remove', { email }),
   relayDecide: (id: number, d: { allow: boolean; always?: boolean; anyPort?: boolean }) =>
     post(`/api/relay/approvals/${id}`, d),
   relayDeleteRule: (id: number) => req(`/api/relay/rules/${id}`, { method: 'DELETE' }),
+  relaySetDevice: (device: string) => post('/api/relay/device', { device }),
   rules: () => req<RoutingRule[]>('/api/rules'),
   saveRules: (r: RoutingRule[]) => post('/api/rules', r),
   testRule: (host: string) => req<RuleTest>(`/api/rules/test?host=${encodeURIComponent(host)}`),
@@ -178,11 +201,13 @@ export const api = {
 export interface RelayContact {
   email: string
   online: boolean
+  devices?: string[]
 }
 
 export interface RelayApproval {
   id: number
   from: string
+  fromDevice?: string
   host: string
   port: number
   time: string
@@ -201,6 +226,8 @@ export interface RelayStatus {
   address: string
   route: string
   email: string
+  device: string
+  enrollUrl?: string
   error?: string
   notice?: string
   contacts: RelayContact[]

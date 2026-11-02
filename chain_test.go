@@ -98,6 +98,22 @@ func fakeSocks5(t *testing.T) string {
 	return l.Addr().String()
 }
 
+func TestRelayHopDevice(t *testing.T) {
+	chain, err := buildChain([]ConfigHop{{ProxyUrl: "relay://alice@example.com/quiet-otter"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chain[0].addr != "alice@example.com" || chain[0].device != "quiet-otter" {
+		t.Fatalf("unexpected relay hop: %+v", chain[0])
+	}
+	if got := chainStrings(chain); len(got) != 1 || got[0] != "relay://alice@example.com/quiet-otter" {
+		t.Fatalf("chain string = %v", got)
+	}
+	if _, err := buildChain([]ConfigHop{{ProxyUrl: "relay://alice@example.com/bad/device"}}); err == nil {
+		t.Fatal("a device code with a slash must be rejected")
+	}
+}
+
 func TestChainHTTPThenSocks5(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "hello via chain")

@@ -852,42 +852,21 @@ func systrayReady() {
 	systray.SetTitle("Proxy")
 	systray.SetTooltip("Go Smart Proxy")
 
-	allRoutes := getRoutes()
-	options := make([]*systray.MenuItem, 0, len(allRoutes)+1)
-	items := make([]*systray.MenuItem, len(allRoutes))
-
-	for i, r := range allRoutes {
-		mRoute := systray.AddMenuItemCheckbox(r.name, r.name, false)
-		items[i] = mRoute
-		options = append(options, mRoute)
-	}
-
-	mAuto := systray.AddMenuItemCheckbox("Auto", "Auto", true)
-	options = append(options, mAuto)
-
-	for i := range items {
-		go func(m *systray.MenuItem, r *ProxyRoute) {
-			for range m.ClickedCh {
-				log.Printf("Forcing route %s", r.name)
-				setForceRoute(r)
-				for _, opt := range options {
-					opt.Uncheck()
-				}
-				m.Check()
-			}
-		}(items[i], allRoutes[i])
-	}
+	trayMu.Lock()
+	trayParent = systray.AddMenuItem("Routes", "Route selection")
+	trayAuto = trayParent.AddSubMenuItemCheckbox("Auto", "Automatic route selection", true)
+	trayByName = map[string]*systray.MenuItem{}
+	trayItemName = map[*systray.MenuItem]string{}
+	trayMu.Unlock()
 
 	go func() {
-		for range mAuto.ClickedCh {
+		for range trayAuto.ClickedCh {
 			log.Printf("Forcing route Auto")
 			setForceRoute(nil)
-			for _, opt := range options {
-				opt.Uncheck()
-			}
-			mAuto.Check()
 		}
 	}()
+
+	refreshTrayMenu()
 
 	systray.AddSeparator()
 	mOpen := systray.AddMenuItem("Open management page", "Open the web UI in the browser")
@@ -901,6 +880,82 @@ func systrayReady() {
 	mQuit := systray.AddMenuItem("Quit", "Quit proxy")
 
 	go systrayReact(mQuit)
+}
+
+var (
+	trayMu       sync.Mutex
+	trayParent   *systray.MenuItem
+	trayAuto     *systray.MenuItem
+	trayByName   map[string]*systray.MenuItem
+	trayItemName map[*systray.MenuItem]string
+)
+
+// refreshTrayMenu brings the tray route entries in sync with the current
+// configuration. The systray library cannot remove items, so they are created
+// once and then shown, renamed or hidden as routes come and go.
+func refreshTrayMenu() {
+	trayMu.Lock()
+	defer trayMu.Unlock()
+	if trayParent == nil {
+		return // tray not started yet
+	}
+
+	routes := getRoutes()
+	visible := make(map[string]bool, len(routes))
+	for _, r := range routes {
+		visible[r.name] = true
+		item := trayByName[r.name]
+		if item == nil {
+			item = trayParent.AddSubMenuItemCheckbox(r.name, r.name, false)
+			trayByName[r.name] = item
+			go trayRouteClicked(item)
+		} else {
+			item.SetTitle(r.name)
+			item.SetTooltip(r.name)
+		}
+		trayItemName[item] = r.name
+		item.Show()
+	}
+	for name, item := range trayByName {
+		if !visible[name] {
+			item.Hide()
+		}
+	}
+
+	fr := getForceRoute()
+	for _, r := range routes {
+		item := trayByName[r.name]
+		if fr != nil && fr.name == r.name {
+			item.Check()
+		} else {
+			item.Uncheck()
+		}
+	}
+	if fr == nil {
+		trayAuto.Check()
+	} else {
+		trayAuto.Uncheck()
+	}
+}
+
+// trayRouteClicked handles a click on one of the (reusable) route items: the
+// item name is looked up at click time, since items are renamed over time.
+func trayRouteClicked(item *systray.MenuItem) {
+	for range item.ClickedCh {
+		trayMu.Lock()
+		name := trayItemName[item]
+		trayMu.Unlock()
+		if name == "" {
+			continue
+		}
+		for _, r := range getRoutes() {
+			if r.name == name {
+				log.Printf("Forcing route %s", name)
+				setForceRoute(r)
+				break
+			}
+		}
+	}
 }
 
 func systrayExit() {

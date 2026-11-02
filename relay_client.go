@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,12 +44,13 @@ type relayDecision struct {
 
 // relayApproval is a route requested by a contact that waits for our answer.
 type relayApproval struct {
-	ID   int64     `json:"id"`
-	From string    `json:"from"`
-	Host string    `json:"host"`
-	Port int       `json:"port"`
-	Time time.Time `json:"time"`
-	ch   chan relayDecision
+	ID         int64     `json:"id"`
+	From       string    `json:"from"`
+	FromDevice string    `json:"fromDevice,omitempty"`
+	Host       string    `json:"host"`
+	Port       int       `json:"port"`
+	Time       time.Time `json:"time"`
+	ch         chan relayDecision
 }
 
 type relayPersisted struct {
@@ -65,8 +67,10 @@ type relayClient struct {
 	sess      *yamux.Session
 	ctrl      net.Conn
 	connected bool
+	started   bool
 	lastErr   string
 	route     string
+	device    string
 	state     relay.State
 	notice    string
 	noticeAt  time.Time
@@ -88,9 +92,20 @@ func (r *relayClient) start(cfg *RelayConfig) {
 	if cfg == nil || cfg.Address == "" {
 		return
 	}
+	r.mu.Lock()
 	r.cfg = cfg
-	r.loadFile()
-	go r.loop()
+	r.device = cfg.Device
+	started := r.started
+	r.started = true
+	sess := r.sess
+	r.mu.Unlock()
+	if sess != nil {
+		sess.Close()
+	}
+	if !started {
+		r.loadFile()
+		go r.loop()
+	}
 }
 
 func (r *relayClient) stateFile() string {
@@ -113,6 +128,7 @@ func (r *relayClient) loadFile() {
 	r.rules, r.nextID, r.state = p.Rules, p.NextID, p.State
 	for i := range r.state.Contacts {
 		r.state.Contacts[i].Online = false
+		r.state.Contacts[i].Devices = nil
 	}
 	r.mu.Unlock()
 }
@@ -187,13 +203,24 @@ func (r *relayClient) relayRoute() (*ProxyRoute, error) {
 }
 
 func (r *relayClient) connectOnce() error {
+	r.mu.Lock()
 	cfg := r.cfg
-	cert, err := tls.LoadX509KeyPair(cfg.Cert, cfg.Key)
+	r.mu.Unlock()
+	if cfg == nil {
+		return errors.New("relay not configured")
+	}
+	cert, err := relayCertificate(cfg)
 	if err != nil {
 		return fmt.Errorf("client certificate: %w", err)
 	}
 	tlsCfg := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
-	if cfg.CA != "" {
+	if cfg.CAPEM != "" {
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM([]byte(cfg.CAPEM)) {
+			return errors.New("relay CA: no certificates found")
+		}
+		tlsCfg.RootCAs = pool
+	} else if cfg.CA != "" {
 		pool, err := relay.LoadPool(cfg.CA)
 		if err != nil {
 			return fmt.Errorf("relay CA: %w", err)
@@ -247,7 +274,10 @@ func (r *relayClient) connectOnce() error {
 	if err != nil {
 		return err
 	}
-	if err := relay.WriteLine(ctrl, relay.DialReq{T: relay.TControl}); err != nil {
+	r.mu.Lock()
+	device := r.device
+	r.mu.Unlock()
+	if err := relay.WriteLine(ctrl, relay.DialReq{T: relay.TControl, Device: device}); err != nil {
 		return err
 	}
 
@@ -299,14 +329,31 @@ func (r *relayClient) readState(ctrl net.Conn, sess *yamux.Session) {
 			sess.Close()
 			return
 		}
+		var freshIncoming []string
 		r.mu.Lock()
 		if st.Notice != "" {
 			r.notice, r.noticeAt = st.Notice, time.Now()
+		}
+		for _, e := range st.Incoming {
+			seen := false
+			for _, old := range r.state.Incoming {
+				if old == e {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				freshIncoming = append(freshIncoming, e)
+			}
 		}
 		r.state = st
 		r.dropRulesOfRemovedContactsLocked()
 		r.saveLocked()
 		r.mu.Unlock()
+
+		if len(freshIncoming) > 0 {
+			notifyDesktop("Richiesta di contatto", strings.Join(freshIncoming, ", "))
+		}
 	}
 }
 
@@ -337,8 +384,21 @@ func (r *relayClient) send(m relay.ClientMsg) error {
 	return relay.WriteLine(ctrl, m)
 }
 
-// Dial opens a connection to target through the network of contact email.
-func (r *relayClient) Dial(email, target string) (net.Conn, error) {
+// SetDevice changes the device code of this installation and reconnects so the
+// relay registers the session under the new code.
+func (r *relayClient) SetDevice(device string) {
+	r.mu.Lock()
+	r.device = device
+	sess := r.sess
+	r.mu.Unlock()
+	if sess != nil {
+		sess.Close()
+	}
+}
+
+// Dial opens a connection to target through the network of contact email. An
+// empty device means any online device of that contact.
+func (r *relayClient) Dial(email, device, target string) (net.Conn, error) {
 	r.mu.Lock()
 	sess := r.sess
 	r.mu.Unlock()
@@ -349,7 +409,7 @@ func (r *relayClient) Dial(email, target string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := relay.WriteLine(st, relay.DialReq{T: relay.TDial, Via: email, Target: target}); err != nil {
+	if err := relay.WriteLine(st, relay.DialReq{T: relay.TDial, Via: email, ViaDevice: device, Target: target}); err != nil {
 		st.Close()
 		return nil, err
 	}
@@ -392,7 +452,7 @@ func (r *relayClient) handleIncoming(st net.Conn) {
 		deny("invalid target")
 		return
 	}
-	if !r.authorize(from, strings.ToLower(host), port) {
+	if !r.authorize(from, req.FromDevice, strings.ToLower(host), port) {
 		log.Printf("relay: %s -> %s refused", from, req.Target)
 		deny("route not approved")
 		return
@@ -450,9 +510,16 @@ func (r *relayClient) isContact(email string) bool {
 	return false
 }
 
+func deviceSuffix(device string) string {
+	if device == "" {
+		return ""
+	}
+	return "/" + device
+}
+
 // authorize returns true when the route is already approved, otherwise it
 // asks the user (through the web UI) and waits for the answer.
-func (r *relayClient) authorize(from, host string, port int) bool {
+func (r *relayClient) authorize(from, fromDevice, host string, port int) bool {
 	r.mu.Lock()
 	for _, rule := range r.rules {
 		if rule.From == from && rule.Host == host && (rule.Port == 0 || rule.Port == port) {
@@ -461,10 +528,11 @@ func (r *relayClient) authorize(from, host string, port int) bool {
 		}
 	}
 	r.nextID++
-	a := &relayApproval{ID: r.nextID, From: from, Host: host, Port: port, Time: time.Now(), ch: make(chan relayDecision, 1)}
+	a := &relayApproval{ID: r.nextID, From: from, FromDevice: fromDevice, Host: host, Port: port, Time: time.Now(), ch: make(chan relayDecision, 1)}
 	r.approvals[a.ID] = a
 	r.mu.Unlock()
-	log.Printf("relay: waiting for approval of %s -> %s:%d", from, host, port)
+	log.Printf("relay: waiting for approval of %s/%s -> %s:%d", from, fromDevice, host, port)
+	notifyDesktop("Richiesta di rotta", fmt.Sprintf("%s%s vuole raggiungere %s:%d", from, deviceSuffix(fromDevice), host, port))
 
 	var dec relayDecision
 	select {
@@ -520,6 +588,8 @@ type relayStatusJSON struct {
 	Address   string           `json:"address"`
 	Route     string           `json:"route"`
 	Email     string           `json:"email"`
+	Device    string           `json:"device"`
+	EnrollURL string           `json:"enrollUrl,omitempty"`
 	Error     string           `json:"error,omitempty"`
 	Notice    string           `json:"notice,omitempty"`
 	Contacts  []relay.Contact  `json:"contacts"`
@@ -546,7 +616,9 @@ func (r *relayClient) Status() relayStatusJSON {
 	}
 	if r.cfg != nil {
 		st.Address = r.cfg.Address
+		st.EnrollURL = r.cfg.EnrollURL
 	}
+	st.Device = r.device
 	if time.Since(r.noticeAt) < relayNoticeTTL {
 		st.Notice = r.notice
 	}

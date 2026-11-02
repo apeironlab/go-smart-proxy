@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -151,13 +152,25 @@ func TestRelayRouteEndToEnd(t *testing.T) {
 	}()
 
 	resetEnv(t, nil, nil) // only the "Direct" route
+	caPEM, err := os.ReadFile(filepath.Join(ca, "ca.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	mk := func(email string, allowLocal bool) *relayClient {
+		certPEM, err := os.ReadFile(filepath.Join(dir, email, "client.pem"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		keyPEM, err := os.ReadFile(filepath.Join(dir, email, "client-key.pem"))
+		if err != nil {
+			t.Fatal(err)
+		}
 		c := &relayClient{approvals: map[int64]*relayApproval{}, file: filepath.Join(dir, email+".json")}
 		c.start(&RelayConfig{
 			Address:    ln.Addr().String(),
-			Cert:       filepath.Join(dir, email, "client.pem"),
-			Key:        filepath.Join(dir, email, "client-key.pem"),
-			CA:         filepath.Join(ca, "ca.pem"),
+			CertPEM:    string(certPEM),
+			KeyPEM:     string(keyPEM),
+			CAPEM:      string(caPEM),
 			AllowLocal: allowLocal,
 		})
 		return c

@@ -28,7 +28,8 @@ export default function CredentialsPage() {
 
   const openEdit = (c: Credential) => {
     setEditing(c)
-    setForm({ name: c.name, user: c.user, password: c.password })
+    // The API never sends the password back: an empty field keeps the current one.
+    setForm({ name: c.name, user: c.user, password: '' })
     open()
   }
 
@@ -78,7 +79,9 @@ export default function CredentialsPage() {
             <Table.Tr key={c.name}>
               <Table.Td><Text fw={600}>{c.name}</Text></Table.Td>
               <Table.Td>{c.user}</Table.Td>
-              <Table.Td><Text c="dimmed">••••••••</Text></Table.Td>
+              <Table.Td>
+                <Text c="dimmed">{c.hasPassword ? '••••••••' : 'nessuna'}</Text>
+              </Table.Td>
               <Table.Td>
                 <Group gap="xs" justify="flex-end">
                   <ActionIcon variant="subtle" color="blue" onClick={() => openEdit(c)} title="Modifica">
@@ -110,6 +113,7 @@ export default function CredentialsPage() {
           />
           <PasswordInput
             label="Password"
+            description={editing ? 'Lascia vuoto per mantenere la password attuale' : undefined}
             value={form.password}
             onChange={(e) => setForm({ ...form, password: e.currentTarget.value })}
           />

@@ -633,10 +633,10 @@ func startHoldingServer(t *testing.T) string {
 
 func TestHostsOverrideBypassesDNS(t *testing.T) {
 	dnsCache = expirablelru.NewExpirableLRU(500, nil, time.Hour, time.Hour)
-	configuration = Configuration{Hosts: map[string]string{"repo.intra.example.test": "192.168.8.40"}}
+	configuration = Configuration{Hosts: map[string]string{"repo.intra.example.test": "192.0.2.40"}}
 	defer func() { configuration = Configuration{} }()
 
-	if got := resolveHost("repo.intra.example.test"); got != "192.168.8.40" {
+	if got := resolveHost("repo.intra.example.test"); got != "192.0.2.40" {
 		t.Fatalf("a configured host must resolve to its configured address, got %q", got)
 	}
 	if got := resolveHost("10.1.2.3"); got != "10.1.2.3" {

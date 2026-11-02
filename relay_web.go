@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -40,6 +41,79 @@ func registerRelayRoutes(m *http.ServeMux) {
 			return
 		}
 		relayMgr.RemoveRule(id)
+		writeJSON(w, map[string]string{"status": "ok"})
+	})
+	m.HandleFunc("POST /api/relay/device", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Device string `json:"device"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid body")
+			return
+		}
+		device, ok := relay.NormalizeDevice(body.Device)
+		if !ok || device == "" {
+			writeAPIError(w, http.StatusBadRequest, "invalid device code")
+			return
+		}
+		configMu.Lock()
+		if configuration.Relay == nil {
+			configMu.Unlock()
+			writeAPIError(w, http.StatusBadRequest, "relay not configured")
+			return
+		}
+		configuration.Relay.Device = device
+		err := persistConfigurationLocked()
+		configMu.Unlock()
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		relayMgr.SetDevice(device)
+		writeJSON(w, map[string]string{"status": "ok", "device": device})
+	})
+	m.HandleFunc("POST /api/relay/enroll", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Address           string `json:"address"`
+			Email             string `json:"email"`
+			CAPEM             string `json:"caPem"`
+			AcceptFingerprint string `json:"acceptFingerprint"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid body")
+			return
+		}
+		if err := relayEnroll(body.Address, body.Email, body.CAPEM, body.AcceptFingerprint); err != nil {
+			var untrusted *untrustedCertificateError
+			if errors.As(err, &untrusted) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				writeJSON(w, map[string]any{
+					"error":       untrusted.Error(),
+					"certificate": untrusted.Info,
+				})
+				return
+			}
+			writeAPIError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeJSON(w, map[string]string{"status": "code_sent"})
+	})
+	m.HandleFunc("GET /api/relay/enroll", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, enrollPendingInfo())
+	})
+	m.HandleFunc("POST /api/relay/enroll/confirm", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Code string `json:"code"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid body")
+			return
+		}
+		if err := relayEnrollConfirm(body.Code); err != nil {
+			writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeJSON(w, map[string]string{"status": "ok"})
 	})
 }

@@ -3,6 +3,7 @@ package relay
 import (
 	"bufio"
 	"crypto/tls"
+	"crypto/x509"
 	"io"
 	"net"
 	"path/filepath"
@@ -19,8 +20,31 @@ type testClient struct {
 	br    *bufio.Reader
 }
 
+func connectTestClient(t *testing.T, addr string, pool *x509.CertPool, cert tls.Certificate, email, device string) *testClient {
+	t.Helper()
+	c, err := tls.Dial("tcp", addr, &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: pool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ys, err := yamux.Client(c, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctrl, _ := ys.OpenStream()
+	WriteLine(ctrl, DialReq{T: TControl, Device: device})
+	tcl := &testClient{email: email, ys: ys, ctrl: ctrl, br: NewReader(ctrl)}
+	t.Cleanup(func() { ys.Close() })
+	return tcl
+}
+
 func setup(t *testing.T, emails ...string) (addr string, clients []*testClient) {
-	dir := t.TempDir()
+	addr, _, _, clients = setupWithDir(t, emails...)
+	return addr, clients
+}
+
+func setupWithDir(t *testing.T, emails ...string) (addr, dir string, pool *x509.CertPool, clients []*testClient) {
+	t.Helper()
+	dir = t.TempDir()
 	ca := filepath.Join(dir, "ca")
 	if err := InitCA(ca); err != nil {
 		t.Fatal(err)
@@ -39,7 +63,7 @@ func setup(t *testing.T, emails ...string) (addr string, clients []*testClient) 
 	}
 	t.Cleanup(func() { ln.Close() })
 	go NewServer(store).Serve(ln)
-	pool, _ := LoadPool(filepath.Join(ca, "ca.pem"))
+	pool, _ = LoadPool(filepath.Join(ca, "ca.pem"))
 
 	for _, e := range emails {
 		out := filepath.Join(dir, e)
@@ -50,21 +74,9 @@ func setup(t *testing.T, emails ...string) (addr string, clients []*testClient) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		c, err := tls.Dial("tcp", ln.Addr().String(), &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: pool})
-		if err != nil {
-			t.Fatal(err)
-		}
-		ys, err := yamux.Client(c, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ctrl, _ := ys.OpenStream()
-		WriteLine(ctrl, DialReq{T: TControl})
-		tcl := &testClient{email: e, ys: ys, ctrl: ctrl, br: NewReader(ctrl)}
-		t.Cleanup(func() { ys.Close() })
-		clients = append(clients, tcl)
+		clients = append(clients, connectTestClient(t, ln.Addr().String(), pool, cert, e, ""))
 	}
-	return ln.Addr().String(), clients
+	return ln.Addr().String(), dir, pool, clients
 }
 
 func (c *testClient) state(t *testing.T) State {
@@ -148,6 +160,70 @@ func TestContactsAndDial(t *testing.T) {
 	if err := ReadLine(NewReader(st), &resp); err != nil || resp.OK {
 		t.Fatalf("expected refusal after removal, got %+v", resp)
 	}
+}
+
+func TestMultipleDevices(t *testing.T) {
+	addr, dir, pool, cl := setupWithDir(t, "alice@example.com", "bob@example.com")
+	alice, bobDefault := cl[0], cl[1]
+
+	bobCert, err := tls.LoadX509KeyPair(
+		filepath.Join(dir, "bob@example.com", "client.pem"),
+		filepath.Join(dir, "bob@example.com", "client-key.pem"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobDesktop := connectTestClient(t, addr, pool, bobCert, "bob@example.com", "desktop")
+
+	// Establish the contact.
+	WriteLine(alice.ctrl, ClientMsg{T: TContactRequest, Email: "bob@example.com"})
+	bobDefault.waitState(t, func(s State) bool { return len(s.Incoming) == 1 })
+	WriteLine(bobDefault.ctrl, ClientMsg{T: TContactRespond, Email: "alice@example.com", Accept: true})
+	st := alice.waitState(t, func(s State) bool {
+		return len(s.Contacts) == 1 && len(s.Contacts[0].Devices) == 2
+	})
+	if st.Contacts[0].Devices[0] != "default" || st.Contacts[0].Devices[1] != "desktop" {
+		t.Fatalf("unexpected devices: %v", st.Contacts[0].Devices)
+	}
+
+	// The desktop session serves dial requests.
+	go func() {
+		for {
+			s, err := bobDesktop.ys.AcceptStream()
+			if err != nil {
+				return
+			}
+			go func() {
+				br := NewReader(s)
+				var req DialReq
+				if ReadLine(br, &req) != nil || req.From != "alice@example.com" {
+					s.Close()
+					return
+				}
+				WriteLine(s, DialResp{OK: true})
+				io.Copy(s, br)
+				s.Close()
+			}()
+		}
+	}()
+
+	// An explicit device reaches that device only.
+	st1, _ := alice.ys.OpenStream()
+	WriteLine(st1, DialReq{T: TDial, Via: "bob@example.com", ViaDevice: "desktop", Target: "10.1.2.3:80"})
+	var resp DialResp
+	if err := ReadLine(NewReader(st1), &resp); err != nil || !resp.OK {
+		t.Fatalf("dial to desktop failed: %+v err=%v", resp, err)
+	}
+	st1.Close()
+
+	// Without a device, two online devices are ambiguous and must not be
+	// chosen by chance.
+	st2, _ := alice.ys.OpenStream()
+	WriteLine(st2, DialReq{T: TDial, Via: "bob@example.com", Target: "10.1.2.3:80"})
+	if err := ReadLine(NewReader(st2), &resp); err != nil || resp.OK {
+		t.Fatalf("ambiguous dial must fail, got %+v err=%v", resp, err)
+	}
+	st2.Close()
 }
 
 func TestClientWithoutCertificateRejected(t *testing.T) {

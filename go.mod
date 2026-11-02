@@ -8,6 +8,7 @@ require (
 	github.com/getlantern/systray v1.2.1
 	github.com/hashicorp/yamux v0.1.2
 	github.com/projectdiscovery/expirablelru v1.0.0
+	golang.org/x/term v0.32.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -23,6 +24,6 @@ require (
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/go-stack/stack v1.8.0 // indirect
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
-	golang.org/x/sys v0.0.0-20210615035016-665e8c7367d1 // indirect
+	golang.org/x/sys v0.33.0 // indirect
 	golang.org/x/text v0.3.6 // indirect
 )

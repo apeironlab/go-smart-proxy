@@ -1,0 +1,956 @@
+# Go Smart Proxy
+
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
+A local **HTTP/HTTPS and SOCKS5 proxy** with network-aware route selection, upstream
+proxy chains, destination rules, and an optional **end-to-end encrypted relay**
+that lets trusted contacts reach each other's networks without exposing services
+to the internet.
+
+The management UI is embedded in the binary and served on the proxy listener
+(loopback only). The UI is currently in Italian; code, comments and this README
+are in English.
+
+> **Security first:** the configuration contains proxy credentials and can contain
+> the relay private key. It is encrypted at rest with a master password
+> (`config.yml.enc`). **The master password cannot be recovered.** Read
+> [Security](#security) before using the relay.
+
+---
+
+## Table of contents
+
+- [Features](#features)
+- [Architecture](#architecture)
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Configuration](#configuration)
+  - [Encrypted configuration and first run](#encrypted-configuration-and-first-run)
+  - [Configuration reference](#configuration-reference)
+  - [Routes and route selection](#routes-and-route-selection)
+  - [Proxy chains](#proxy-chains)
+  - [Destination rules](#destination-rules)
+  - [Hosts overrides](#hosts-overrides)
+- [Using the proxy](#using-the-proxy)
+- [Web UI and HTTP API](#web-ui-and-http-api)
+- [System integration](#system-integration)
+- [Relay](#relay)
+  - [Relay client](#relay-client)
+  - [Devices](#devices)
+  - [Contacts and route approvals](#contacts-and-route-approvals)
+  - [Relay server](#relay-server)
+  - [Manual certificate provisioning](#manual-certificate-provisioning)
+  - [Enrollment over email](#enrollment-over-email)
+  - [Kubernetes deployment](#kubernetes-deployment)
+- [Security](#security)
+- [Environment variables](#environment-variables)
+- [Development](#development)
+- [Repository layout](#repository-layout)
+- [Troubleshooting](#troubleshooting)
+- [Limitations and roadmap](#limitations-and-roadmap)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
+## Features
+
+- **HTTP proxy** with absolute-form requests and HTTPS `CONNECT` tunnels.
+- **SOCKS5 proxy** (no authentication, `CONNECT` only) sharing the same routing
+  configuration as the HTTP proxy.
+- **Network-aware routes**: choose a route based on the current default gateway,
+  network interface, local network, or a PAC file.
+- **Proxy chains**: HTTP, HTTPS (via `CONNECT`) and SOCKS5 hops, with NTLM/Basic
+  authentication support for HTTP proxies.
+- **Destination rules** by domain, exact host, IP address, or CIDR block.
+- **Rules-only routes and hops**: keep corporate/VPN/relay routes out of the
+  automatic selection.
+- **Relay**: mTLS-authenticated rendezvous relay, contact address book, explicit
+  route approvals, multiple devices per user, and desktop notifications.
+- **Encrypted configuration** with a master password (PBKDF2 + AES-256-GCM).
+  On macOS the derived key can be stored in the Keychain and unlocked with
+  Touch ID.
+- **System tray** with dynamic route selection and a web UI for configuration,
+  rules, credentials, connections, and relay management.
+- **macOS integration**: system proxy configuration (including VPN-overridden
+  proxies), PAC hijack (`wpad`), and Chrome policy enforcement.
+- **PAC caching**: PAC files are fetched directly, cached, and never block
+  request handling.
+- **Connection registry**: live connection log, byte counters, and fail-fast
+  recovery on network changes.
+- **Single binary** with the web UI embedded (no external assets at runtime).
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph Clients
+        B[Browser / app]
+        C[curl / CLI]
+    end
+
+    B -->|HTTP proxy :3128| P[proxy]
+    B -->|SOCKS5 :1080| P
+    C -->|HTTP / SOCKS5| P
+
+    P --> R{Route selection}
+    R -->|Direct| I[Internet / intranet]
+    R -->|PAC| PAC[Upstream proxy]
+    R -->|Chain| H1[HTTP / SOCKS5 hop] --> H2[...] --> I
+    R -->|Relay route| REL[Relay]
+    REL -->|mTLS / yamux| RS[Relay server]
+    RS -->|contact approved route| CONTACT[Contact's proxy]
+    CONTACT --> T[Target host]
+
+    P --- UI[Embedded web UI / API]
+    P --- TRAY[System tray]
+    P --- CFG[(config.yml.enc)]
+```
+
+The proxy listens on one HTTP address (also serving the web UI and API on
+loopback) and optionally on a SOCKS5 address. Every outgoing connection is
+resolved through the route/rules engine.
+
+---
+
+## Requirements
+
+- **Go 1.24+**
+- **Node.js 20+ / npm** to build the web UI (the built UI is embedded in the
+  binary)
+- A C compiler/toolchain for the system tray:
+  - macOS: Xcode Command Line Tools
+  - Windows: Go toolchain (`build.bat` builds `proxy.exe`)
+  - Linux: the system tray library requires CGO plus GTK/AppIndicator
+    development packages; without them the tray part does not build
+- For the relay server: no CGO is required (`make relay` builds with
+  `CGO_ENABLED=0`)
+
+The project is primarily developed on macOS. Windows is supported for the core
+proxy, SOCKS5, relay, encrypted configuration and tray. Linux supports the core
+proxy, SOCKS5, relay, encrypted configuration, hosts/PAC hijack, and tray when
+the systray dependencies are installed. The macOS-only features are marked in
+the relevant sections.
+
+---
+
+## Quick start
+
+```bash
+git clone https://github.com/apeironlab/go-smart-proxy.git
+cd go-smart-proxy
+
+# Build the web UI and the proxy binary
+make build
+
+# Start it (the first run asks for a new master password)
+./proxy
+```
+
+Then:
+
+1. Open <http://127.0.0.1:3128/> (the configured `Address`).
+2. Configure routes, rules, credentials, and relay from the web UI.
+3. Point apps at the proxy:
+
+```bash
+# HTTP proxy
+curl -x http://127.0.0.1:3128 https://example.com
+
+# SOCKS5 (if SocksAddress: 127.0.0.1:1080)
+curl --socks5-hostname 127.0.0.1:1080 https://example.com
+```
+
+On macOS/Windows the same actions are available from the tray icon.
+
+A ready-to-copy **legacy plaintext** configuration template is provided in
+[`config.yml.tpl`](config.yml.tpl). At the first start it is migrated to the
+encrypted format.
+
+---
+
+## Configuration
+
+### Encrypted configuration and first run
+
+The proxy stores its configuration in **`config.yml.enc`**, encrypted with a key
+derived from a master password:
+
+- KDF: **PBKDF2-HMAC-SHA256, 600,000 iterations**, random 16-byte salt
+- Cipher: **AES-256-GCM**, random 12-byte nonce
+- File format: `GSP1 | salt | nonce | ciphertext`
+- File permissions: `0600` on Unix
+
+At startup:
+
+1. If `config.yml.enc` exists, the proxy unlocks it.
+2. If only the legacy plaintext `config.yml` exists, the proxy:
+   - asks for a new master password (twice),
+   - embeds the relay certificate, private key and CA into the configuration,
+   - writes and verifies `config.yml.enc`,
+   - removes the plaintext configuration and the plaintext relay private key.
+3. If neither file exists, the proxy exits. Start from `config.yml.tpl` to create
+   a new configuration.
+
+**Unlock sources**, in order:
+
+1. The process already has the derived key (normal while running).
+2. `PROXY_MASTER_PASSWORD` (useful for launchd/services/automation).
+3. The system Keychain (macOS), with Touch ID when available.
+4. An interactive master password prompt (hidden input in a terminal, or a
+   native dialog when started from Finder/launchd).
+
+On macOS the **derived key** (not the password) is stored in the Keychain, under
+the service `go-smart-proxy`, keyed by the configuration salt. The Keychain read
+is gated by a `LocalAuthentication` Touch ID check when biometrics are
+available. Set `PROXY_NO_KEYCHAIN=1` to always ask for the master password.
+
+> **Backups:** `config.yml.enc` is portable. On another machine the master
+> password is enough; the Keychain entry is local. Keep an encrypted backup and
+> the password in a password manager. **There is no password recovery.**
+
+Saving from the web UI keeps the same salt and derived key, so the Keychain
+entry stays valid. The configuration is re-encrypted on every change.
+
+### Configuration reference
+
+The following is the *plaintext* schema. The encrypted file contains the same
+YAML, plus embedded relay material.
+
+```yaml
+Address: 127.0.0.1:3128        # HTTP proxy + web UI/API listener
+SocksAddress: 127.0.0.1:1080   # optional SOCKS5 listener; empty = disabled
+
+Credentials:
+  - Name: corp
+    User: 'DOMAIN\alice'
+    Password: 'secret'
+
+Routes:
+  - Name: office
+    Gateway: ''                # optional: default gateway IP
+    IFace: utun4               # optional: default interface name
+    Net: 10.0.0.0/8            # optional: local network/address
+    PacUrl: ''                 # optional: PAC URL
+    ProxyUrl: ''               # optional: upstream HTTP proxy
+    Credential: corp           # optional: credential for ProxyUrl/PAC
+    RulesOnly: false           # never select automatically
+    Chain:                     # optional; takes precedence over PAC/ProxyUrl
+      - ProxyUrl: http://proxy.corp:8080
+        Credential: corp
+        RulesOnly: false
+      - ProxyUrl: socks5://other:1080
+        Credential: ''
+
+Rules:
+  - Name: intranet
+    Domains: [corp.local]      # domain and all subdomains
+    Hosts: [intranet.corp.local]
+    Networks: [10.0.0.0/8, 192.168.1.5]
+    Route: office
+
+Relay:
+  Address: 'relay.example.com:8443'
+  # Manual certificate files (legacy) ...
+  Cert: relay/client.pem
+  Key: relay/client-key.pem
+  CA: relay/ca.pem
+  # ... or embedded PEMs (filled by the web UI enrollment)
+  # CertPEM: |
+  #   -----BEGIN CERTIFICATE-----
+  # KeyPEM: |
+  #   -----BEGIN PRIVATE KEY-----
+  # CAPEM: |
+  #   -----BEGIN CERTIFICATE-----
+  Route: ''                    # optional route used to reach the relay
+  Device: quiet-otter-7f3a     # auto-generated per installation
+  EnrollURL: https://proxy.intra.example.com
+  AllowLocal: false            # let contacts reach services on this machine
+
+SystemProxy: false             # macOS only
+SystemProxyExclude: [utun4]    # macOS network services to leave untouched
+PacHijack: false               # macOS/Linux; serves wpad on port 80
+PacHijackHost: wpad
+ForceChrome: false             # macOS only
+Hosts:
+  repo.intra.example.com: 192.0.2.40
+```
+
+#### Fields
+
+| Field | Meaning |
+|---|---|
+| `Address` | HTTP proxy listener. The web UI/API are served on the same port, but only for loopback clients. |
+| `SocksAddress` | SOCKS5 listener. Empty/omitted disables it. |
+| `Credentials` | Named username/password pairs used by routes and hops. |
+| `Routes` | Ordered route list. `Direct` is always appended last. |
+| `Routes[].Gateway` | Match when the system default gateway is this IP. |
+| `Routes[].IFace` | Match when the default interface has this name. |
+| `Routes[].Net` | Match when the local network/address matches this IP or CIDR. |
+| `Routes[].PacUrl` | PAC file used to choose an upstream proxy. Fetched directly over HTTP and cached. |
+| `Routes[].ProxyUrl` | Upstream HTTP proxy (`host:port` or `http://host:port`). |
+| `Routes[].Credential` | Credential used for `ProxyUrl`/PAC proxy authentication. |
+| `Routes[].Chain` | Ordered proxy hops. Takes precedence over `PacUrl`/`ProxyUrl`. |
+| `Routes[].RulesOnly` | Route is never selected automatically; only a destination rule can use it. |
+| `Chain[].ProxyUrl` | `http://`, `https://` (CONNECT), `socks5://`, or `relay://email[/device]`. |
+| `Chain[].Credential` | Credential for this hop. |
+| `Chain[].RulesOnly` | Chain barrier: unless a rule selects the route, the chain stops before this hop. |
+| `Rules[].Domains` | Domain and subdomain matches (`example.com` matches `a.example.com`). |
+| `Rules[].Hosts` | Exact hostname matches. |
+| `Rules[].Networks` | IP/CIDR matches; hostnames are resolved for this check. |
+| `Rules[].Route` | Route name to use. |
+| `Hosts` | Fixed IP per hostname, bypassing DNS. |
+
+`Address` is required. Credentials and relay material are never written in
+plaintext once the configuration is encrypted.
+
+### Routes and route selection
+
+For each destination, the route is chosen in this order:
+
+1. **Forced route**, if selected from the tray or the Config page.
+2. **Destination rules**, in order. The first matching rule whose route is
+   applicable on the current network wins.
+3. **Automatic selection**: the first route in configuration order whose
+   `Gateway`, `IFace`, `Net` and PAC (if any) are available.
+4. **`Direct`** (always last, always applicable).
+
+Routes marked `RulesOnly: true` are skipped by automatic selection and can only
+be used by a matching destination rule. A route can still be used by more than
+one rule.
+
+**Per-hop `RulesOnly`** is a barrier rather than a skip: when a route is used
+without a matching rule (automatic or forced), the chain stops *before* the first
+hop marked `RulesOnly`; only a rule-selected route traverses the whole chain.
+This lets an expensive corporate proxy or a relay exit be reserved for specific
+rules.
+
+PAC routes are evaluated per request. The PAC file is fetched directly (never
+through the proxy), cached under `cache/pac-<md5>`, and refreshed in the
+background; request handling uses the cached copy when the network is
+unavailable.
+
+Network changes (interface/gateway/address changes) invalidate PACs, reset
+transports, and close active connections so clients reconnect through the new
+route.
+
+### Proxy chains
+
+A chain is dialed left to right. Supported schemes:
+
+- `http://host:port` — HTTP `CONNECT`, with Basic/NTLM authentication
+- `https://host:port` — HTTP `CONNECT` over TLS
+- `socks5://host:port` — SOCKS5
+- `relay://email@example.com[/device]` — exit through a relay contact
+
+Only one relay hop is allowed per chain, and it may appear anywhere:
+
+- `relay://alice@example.com` — traffic exits through Alice's network. The relay
+  client reaches the relay server directly.
+- `http://proxy:8080 → relay://alice@example.com` — the relay **control
+  connection** goes through `http://proxy:8080`; traffic still exits through
+  Alice. The hops before the relay are not re-dialed for each traffic connection.
+- `relay://alice@example.com → http://proxy:8080` — traffic exits into Alice's
+  network and then goes through the proxy.
+
+When the relay client itself needs to reach the relay server, it cuts the chain
+at the first `RulesOnly` hop and at the relay hop. If the relay hop is first, the
+control connection is direct. This is what prevents the relay from trying to use
+itself to connect.
+
+### Destination rules
+
+Rules are evaluated in order. A rule matches if any of its `Domains`, `Hosts` or
+`Networks` matches. Domain matching includes subdomains; network matching
+supports exact IPs and CIDR blocks. If a rule's route is not applicable on the
+current network, evaluation continues with the next rule.
+
+The web UI includes a “Verifica una destinazione” tool that shows which rule and
+route would be used for a host or IP.
+
+### Hosts overrides
+
+`Hosts` maps a hostname to a fixed IP. It is used before DNS and applies to
+direct connections, chain hops, PAC destinations, and relay targets. This is
+useful when a VPN resolver does not know an internal name.
+
+---
+
+## Using the proxy
+
+### HTTP proxy
+
+```bash
+export http_proxy=http://127.0.0.1:3128
+export https_proxy=http://127.0.0.1:3128
+```
+
+- Plain HTTP requests use absolute-form proxy requests.
+- HTTPS uses `CONNECT`.
+- The local proxy does **not** require authentication.
+- The web UI/API are served on the same address for loopback clients only.
+
+### SOCKS5
+
+Set `SocksAddress` to enable it:
+
+```yaml
+SocksAddress: 127.0.0.1:1080
+```
+
+Characteristics:
+
+- SOCKS5, no authentication
+- `CONNECT` only (no `BIND`/`UDP ASSOCIATE`)
+- Same routes, rules, chains, relay, and connection logging as the HTTP proxy
+
+```bash
+curl --socks5-hostname 127.0.0.1:1080 https://example.com
+```
+
+Both listeners are unauthenticated. **Bind them to loopback** unless you have
+another access-control layer.
+
+---
+
+## Web UI and HTTP API
+
+The React web UI is embedded in the binary (`webui/dist`) and served at `/` on
+the HTTP proxy address. It is available only to loopback clients.
+
+Pages:
+
+- **Configurazione** — listeners, SOCKS5, system proxy, PAC hijack, Chrome
+  policy, routes and chains, DNS cache.
+- **Regole** — destination rules and a route test tool.
+- **Credenziali** — named credentials; passwords are never returned by the API
+  (an empty field keeps the current password).
+- **Connessioni** — live/recent connections, routes, bytes, errors, events.
+- **Relay** — connection status, contacts, approved routes, device code,
+  enrollment/reconfiguration.
+
+The API is intentionally unauthenticated and **loopback-only**; do not expose
+the listener to untrusted networks. A non-exhaustive endpoint list:
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/state` | Network, listeners, routes, DNS cache |
+| GET/POST | `/api/config` | Read/update settings |
+| GET/POST | `/api/routes` | List/save routes |
+| DELETE | `/api/routes/{name}` | Delete a route |
+| GET/POST | `/api/rules` | List/save rules |
+| GET | `/api/rules/test?host=...` | Which route would be used |
+| GET/POST | `/api/credentials` | List/save credentials |
+| POST | `/api/force-route` | Force a route or Auto |
+| POST | `/api/pac/refresh` | Refresh a PAC |
+| GET | `/api/connections` | Connection log |
+| GET | `/api/relay` | Relay status, contacts, approvals |
+| POST | `/api/relay/contacts` | Send a contact request |
+| POST | `/api/relay/contacts/respond` | Accept/refuse a contact |
+| POST | `/api/relay/approvals/{id}` | Approve/refuse a route |
+| POST | `/api/relay/device` | Rename this device |
+| POST | `/api/relay/enroll` | Start email enrollment |
+| POST | `/api/relay/enroll/confirm` | Confirm the email code |
+
+Credential passwords are never sent to the UI. The enrollment API may return a
+certificate prompt when the TLS certificate of the enrollment endpoint is not
+trusted (see [Security](#security)).
+
+---
+
+## System integration
+
+### System tray
+
+- **Routes** submenu: all routes plus **Auto**.
+- **Open management page**: opens the embedded web UI.
+- **Quit**.
+- The menu updates immediately after route changes or force-route changes.
+
+### System proxy (macOS only)
+
+`SystemProxy: true` makes the proxy apply itself as the system HTTP/HTTPS proxy.
+`SystemProxyExclude` lists network services/interfaces to leave untouched
+(e.g. a VPN interface). The setting is re-applied periodically and after network
+changes because VPN clients often overwrite it.
+
+### PAC hijack (macOS/Linux)
+
+`PacHijack: true` makes the proxy serve a generated PAC on `127.0.0.1:80` and
+adds a `/etc/hosts` entry for `PacHijackHost` (default `wpad`) pointing to
+`127.0.0.1`. This is useful when a VPN hands out a PAC URL such as
+`http://wpad/wpad.dat` and Chrome would otherwise bypass the proxy.
+
+- Requires privileges to bind port 80 and edit `/etc/hosts` (usually `sudo`).
+- The generated PAC points browsers at this proxy.
+
+### Chrome policy (macOS only)
+
+`ForceChrome: true` installs/removes a Chrome policy so Chrome uses the system
+proxy configuration.
+
+### Desktop notifications
+
+On incoming **contact requests** and **route approval requests** the app shows a
+desktop notification:
+
+- macOS: Notification Center via `osascript`
+- Linux: `notify-send`
+- Windows: not implemented yet
+
+Rapid notifications are throttled to avoid flooding.
+
+---
+
+## Relay
+
+The relay is a **rendezvous server** with mutual TLS. It does not proxy traffic
+itself: it keeps the address book and splices an encrypted stream between a
+requesting proxy and the contact that agreed to open the connection.
+
+- Identity is the **e-mail address** in the client certificate's SAN.
+- The relay session is multiplexed with **yamux**; keepalive pings run every
+  30 s (10 s timeout), so dead sessions are detected and reconnected.
+- Each installation has a **device code**, so multiple computers of the same
+  user can stay online simultaneously. Sessions are keyed by
+  `(email, device)`.
+- Contacts and explicit route approvals are required. The exit side can allow a
+  destination once, always, or on any port; remembered rules are persisted.
+- `AllowLocal` (off by default) controls whether contacts can reach services
+  bound to the exit machine (loopback/link-local destinations are otherwise
+  blocked).
+
+### Relay client
+
+**Recommended: enroll from the web UI**
+
+1. Open the **Relay** page.
+2. Enter the enrollment address (for example `proxy.intra.example.com` or
+   `relay.example.com:8444`) and your e-mail.
+3. Optionally paste the CA that signs the enrollment HTTPS endpoint if it is an
+   internal CA.
+4. Click **Invia richiesta**.
+5. If the server certificate is not trusted, review the subject/issuer/SHA-256
+   fingerprint and accept it only after verifying it with the relay
+   administrator. The proxy pins that certificate for the enrollment.
+6. Enter the code received by e-mail.
+7. The proxy receives a client certificate, stores the certificate, private key
+   and relay CA in the encrypted configuration, and starts the mTLS connection.
+
+The relay's mTLS address is supplied by the enrollment response; it is never
+hardcoded in the client. The certificate is signed from a CSR generated
+locally; the private key never leaves the proxy.
+
+**Manual / legacy**
+
+You can also provision certificates with `proxyrelay` (see below) and set
+`Relay.Address`, `Relay.Cert`, `Relay.Key`, `Relay.CA`. On the next start the
+files are embedded into the encrypted configuration and the plaintext private
+key is removed.
+
+The Relay page shows connection status, route used, e-mail, device code,
+contacts, incoming requests, pending approvals, and remembered rules. Use
+**Riconfigura** to obtain a new certificate (for example after expiry).
+
+### Devices
+
+The first time a relay is configured, a device code is generated
+(`adjective-animal-4hex`, e.g. `quiet-otter-7f3a`) and saved in the encrypted
+configuration. It can be renamed from the Relay page; the client reconnects
+under the new code.
+
+Route syntax:
+
+- `relay://alice@example.com` — use Alice's only online device. If Alice has more
+  than one device online, the dial fails with a clear error instead of choosing
+  one at random.
+- `relay://alice@example.com/quiet-otter-7f3a` — use a specific device.
+
+The Relay page lists the online devices of each contact; the route editor
+autocompletes `relay://email/device` as you type and also suggests hops already
+used in other routes. Device codes are routing labels, not separate
+authentication: devices sharing one certificate all authenticate as the same
+user.
+
+### Contacts and route approvals
+
+1. Add a contact by e-mail from the Relay page.
+2. The contacted user accepts or refuses the request from their Relay page.
+3. The first time traffic is sent through a contact, the exit side receives an
+   approval request showing contact, device, host and port.
+4. Approve once, remember the route (host/port), or remember it for any port.
+5. Remembered rules can be revoked from the Relay page.
+
+### Relay server
+
+Build and run the relay:
+
+```bash
+make relay
+./proxyrelay ca init -dir ca
+./proxyrelay ca server -dir ca -out server -host relay.example.com,proxy.intra.example.com
+./proxyrelay ca client -dir ca -out alice -email alice@example.com
+
+./proxyrelay serve \
+  -listen :8443 \
+  -cert server/server.pem \
+  -key server/server-key.pem \
+  -ca ca/ca.pem \
+  -state relay-state.json
+```
+
+The CA private key (`ca/ca-key.pem`) is required only on the relay/server side
+and should be protected. The example `ca client` command is for the legacy,
+manual provisioning path; normal deployments use enrollment.
+
+Main `serve` flags:
+
+| Flag | Description |
+|---|---|
+| `-listen` | mTLS relay listen address (default `:8443`) |
+| `-cert`, `-key` | Server certificate/key |
+| `-ca` | CA that signs and verifies client certificates |
+| `-state` | Address book/pending contact state file |
+| `-enroll-listen` | HTTPS enrollment listen address (empty disables) |
+| `-enroll-plain` | Serve enrollment over HTTP behind a trusted TLS proxy |
+| `-public-relay` | mTLS address returned to clients (e.g. `relay.example.com:8443`) |
+| `-public-url` | Enrollment URL shown in emails |
+| `-download-url` | Proxy download URL shown in invitation emails |
+| `-allow-domains` | Comma-separated exact e-mail domains allowed to enroll |
+| `-ca-dir` | Directory with `ca.pem` and `ca-key.pem` (default: dir of `-ca`) |
+| `-enroll-state` | Pending enrollment state file |
+| `-cert-ttl` | Client certificate lifetime (default 90 days) |
+| `-smtp-addr`, `-smtp-from` | SMTP server and From address |
+| `-smtp-user`, `-smtp-pass` | SMTP credentials (password also via env) |
+| `-smtp-tls` | `starttls` (default), `tls`, or `none` |
+| `-smtp-auth` | `auto` (default), `plain`, `login`, or `none` |
+
+The relay exits cleanly rather than serving a broken enrollment if SMTP is not
+configured; it logs `enrollment disabled` and keeps the mTLS relay running.
+This allows the SMTP secret to be created/filled separately from the relay
+liveness.
+
+### Manual certificate provisioning
+
+The legacy workflow uses the CA CLI:
+
+```bash
+proxyrelay ca init -dir ca
+proxyrelay ca server -dir ca -out server -host relay.example.com
+proxyrelay ca client -dir ca -out alice -email alice@example.com
+```
+
+The client directory contains `client.pem`, `client-key.pem`, and `ca.pem`.
+Copy them to the proxy machine and reference them from `Relay.Cert`,
+`Relay.Key`, `Relay.CA`.
+
+### Enrollment over email
+
+The secure flow is:
+
+1. The proxy generates a key pair locally and a CSR whose CN/SAN is the user's
+   e-mail.
+2. `POST /enroll` sends the CSR, e-mail and device code to the relay enrollment
+   endpoint.
+3. The relay validates the domain allowlist, the CSR signature and the CSR
+   identity, applies rate limits, and creates a pending enrollment.
+4. The relay sends a one-time **8-character code** by e-mail (15-minute TTL,
+   maximum 5 attempts). Codes and poll tokens are stored only as hashes.
+5. The proxy submits `POST /enroll/{id}/confirm` with the code and its poll
+   token. The relay signs the CSR with the CA.
+6. The certificate is returned and stored in the proxy's encrypted
+   configuration; the proxy connects with mTLS.
+7. The relay returns the CA that signs the mTLS server certificate separately
+   (`relayCAPEM`), so the enrollment HTTPS endpoint can be protected by a
+   different CA (for example an intranet wildcard).
+
+Rate limits are 4 requests per e-mail and 12 per IP in a 10-minute window.
+Allowed domains are **exact** matches; subdomains are not implicitly allowed.
+
+If the enrollment endpoint's certificate is not trusted, the proxy never accepts
+it silently: it shows subject, issuer and SHA-256 fingerprint and asks the user
+to confirm. On confirmation the exact certificate is pinned (fingerprint +
+hostname) for the enrollment and code confirmation. The pin is not persisted
+after enrollment.
+
+Invite a user who does not have the proxy yet:
+
+```bash
+proxyrelay invite \
+  -email alice@example.com \
+  -public-url https://proxy.intra.example.com \
+  -download-url https://example.com/go-smart-proxy \
+  -smtp-addr smtp.example.com:587 \
+  -smtp-from relay@example.com
+```
+
+SMTP credentials can also come from `PROXYRELAY_SMTP_*` environment variables.
+
+### Kubernetes deployment
+
+[`deploy/relay-k8s.example.yaml`](deploy/relay-k8s.example.yaml) contains an
+example deployment. Copy it to `deploy/relay-k8s.local.yaml` (ignored by git)
+and adapt registry, domains, gateway name and storage class to your cluster:
+
+- mTLS relay on `:2443`, exposed by a `LoadBalancer`;
+- enrollment on `:2444`, exposed **only through an internal Istio gateway**
+  (`proxy.intra.example.com` in the example);
+- a `ClusterIP` service for the enrollment backend;
+- TLS, CA-key, and SMTP secrets;
+- a persistent volume for the address book and enrollment state.
+
+Create the secrets first (names in the manifest), adapt domains/addresses, then:
+
+```bash
+cp deploy/relay-k8s.example.yaml deploy/relay-k8s.local.yaml
+# edit deploy/relay-k8s.local.yaml for your environment
+kubectl apply -f deploy/relay-k8s.local.yaml
+```
+
+The SMTP secret can start empty: the relay serves mTLS and logs
+`enrollment disabled` until credentials are filled:
+
+```bash
+read -s SMTP_PASS
+kubectl -n networking create secret generic proxy-relay-smtp \
+  --from-literal=PROXYRELAY_SMTP_ADDR=smtp.example.com:587 \
+  --from-literal=PROXYRELAY_SMTP_USER='user' \
+  --from-literal=PROXYRELAY_SMTP_PASS="$SMTP_PASS" \
+  --from-literal=PROXYRELAY_SMTP_FROM='relay@example.com' \
+  --from-literal=PROXYRELAY_SMTP_TLS=starttls \
+  --from-literal=PROXYRELAY_SMTP_AUTH=auto \
+  --dry-run=client -o yaml | kubectl apply -f -
+unset SMTP_PASS
+
+kubectl -n networking rollout restart deploy/proxy-relay
+```
+
+The CA private key is mounted from `proxy-relay-ca`; restrict access to that
+secret with RBAC. For a production CA, consider an offline signing service
+rather than keeping the CA key in the cluster.
+
+---
+
+## Security
+
+### Configuration and credentials
+
+- `config.yml.enc` is encrypted with AES-256-GCM and a PBKDF2-derived key.
+- The master password is the only universal recovery key. **Losing it means
+  losing the configuration, credentials, relay certificate and private key.**
+- On Unix the encrypted file is created with `0600`; the legacy plaintext file
+  was also restricted before migration.
+- The macOS Keychain stores the derived key (not the password) and gates reads
+  with a Touch ID prompt when biometrics are available. This is an app-level
+  check via `LocalAuthentication`; the Keychain item uses the login keychain.
+  A same-user attacker can still target the running process or the Keychain.
+- `PROXY_NO_KEYCHAIN=1` disables the Keychain and forces a password prompt.
+- The web API never returns credential passwords. An empty password on save
+  keeps the existing one.
+- The web UI/API are unauthenticated and loopback-only. Do not bind the proxy to
+  an untrusted network unless you understand that anyone who can reach the
+  listener can use the proxy and its loopback UI from the same host.
+- The proxy/SOCKS listeners have no authentication.
+- `config.yml*`, `relay-pki`, `relay-certs`, `relay_state.json` and the built
+  binaries are ignored by git. Never commit them.
+
+### Relay
+
+- Client identities are e-mail addresses from a CA-signed certificate.
+- The private key is generated locally and never sent to the relay.
+- Enrollment proves e-mail ownership with a one-time code; codes are hashed at
+  rest, single-use, short-lived, attempt-limited and rate-limited.
+- Allowed e-mail domains are exact-match allowlists.
+- The CA private key is high-value: protect the file/secret with restrictive
+  permissions and RBAC; ideally keep it offline and use a dedicated signing
+  service.
+- The relay exit side must approve routes; rules are per contact and
+  destination. `AllowLocal` is off by default.
+- Device codes are routing labels, not per-device credentials. Devices sharing a
+  certificate authenticate as the same user.
+- Enrollment TLS trust can be established by the system roots, an explicitly
+  pasted CA, or the explicit fingerprint confirmation (TOFU). Always verify the
+  fingerprint out-of-band when prompted.
+- Certificate renewal and revocation are not automated yet. Certificates are
+  short-lived (90 days by default); use **Riconfigura** to enroll again. There is
+  no CRL/OCSP check.
+
+### Email
+
+- SMTP supports `starttls` (default), implicit TLS, and no TLS (trusted internal
+  relays only).
+- Authentication: `auto` (PLAIN, then LOGIN), `plain`, `login`, or `none`.
+- Use `PROXYRELAY_SMTP_PASS`/the Kubernetes secret rather than a command-line
+  password where possible (command-line arguments can appear in process lists).
+
+---
+
+## Environment variables
+
+| Variable | Used by | Purpose |
+|---|---|---|
+| `PROXY_MASTER_PASSWORD` | proxy | Master password for unattended startup |
+| `PROXY_NO_KEYCHAIN` | proxy (macOS) | Disable the Keychain; always prompt |
+| `PROXY_TEST_KEYCHAIN` | tests | Run the opt-in Keychain bridge test |
+| `PROXYRELAY_SMTP_ADDR` | relay | SMTP server `host:port` |
+| `PROXYRELAY_SMTP_USER` | relay | SMTP username |
+| `PROXYRELAY_SMTP_PASS` | relay | SMTP password |
+| `PROXYRELAY_SMTP_FROM` | relay | From address |
+| `PROXYRELAY_SMTP_TLS` | relay | `starttls`, `tls`, `none` |
+| `PROXYRELAY_SMTP_AUTH` | relay | `auto`, `plain`, `login`, `none` |
+
+Flags take precedence over environment variables when both are provided.
+
+---
+
+## Development
+
+### Build
+
+```bash
+make build      # web UI + ./proxy
+make relay      # CGO-free ./proxyrelay
+make test       # go test ./...
+make webui      # rebuild webui/dist only
+```
+
+The Go binary embeds `webui/dist`; a plain `go build .` fails if the UI has not
+been built. Use `make build` (or `make webui` first).
+
+Windows:
+
+```bat
+build.bat
+```
+
+macOS needs Xcode Command Line Tools for the CGO/system-tray/Keychain parts.
+
+### Tests
+
+```bash
+go test ./...
+go test -race ./...
+```
+
+The Keychain bridge test is opt-in and writes/deletes a test item in the real
+login Keychain:
+
+```bash
+PROXY_TEST_KEYCHAIN=1 go test -run TestKeychainBridge
+```
+
+The test suite covers route selection, PAC caching, NTLM/CONNECT, HTTP/SOCKS5
+tunnels, chains, relay contacts/approval, multi-device routing, encrypted
+configuration/migration, enrollment (including certificate signing and TOFU),
+and SMTP auth primitives.
+
+### Web UI
+
+The UI is React + TypeScript + Mantine + Vite (`webui/`). It is embedded at build
+time and served by the Go binary. The UI language is Italian.
+
+If you change the UI, run `npm run build` in `webui/` or `make webui`; then
+rebuild the Go binary so the new assets are embedded.
+
+---
+
+## Repository layout
+
+| Path | Description |
+|---|---|
+| `main.go` | HTTP proxy, tunnels, PAC hijack, listeners, tray, connection registry |
+| `router.go` | Routes, PAC, transports, automatic route selection, DNS cache |
+| `rules.go` | Destination rules and rules API |
+| `chain.go` | Proxy chains, SOCKS5/HTTP hops, relay hop handling |
+| `relay_client.go` | Relay client, address book, approvals, device identity |
+| `relay_provision.go` | Proxy-side enrollment (CSR, code, certificate storage, TOFU) |
+| `secret.go` | Config encryption, master password, Keychain integration |
+| `web.go`, `webui.go` | Web API, static UI embedding |
+| `socks.go` | SOCKS5 listener and handler |
+| `device.go` | Per-installation device code generation |
+| `notify.go` | Desktop notifications |
+| `relay/` | Relay protocol, server, store, CA, enrollment, SMTP |
+| `cmd/proxyrelay/` | Relay server CLI |
+| `webui/` | React management UI |
+| `deploy/` | Kubernetes example |
+| `config.yml.tpl` | Legacy plaintext configuration template |
+| `Dockerfile.relay` | Relay image |
+
+The Go module is named `proxy`; internal packages are imported as
+`proxy/relay`.
+
+---
+
+## Troubleshooting
+
+| Symptom | What to check |
+|---|---|
+| `PAC not available` | PAC URL reachable directly, cache in `cache/`, route `PacUrl`. |
+| Route never selected | `Gateway`/`IFace`/`Net` values against the Config page network state; `RulesOnly` flags. |
+| Relay does not connect | `Relay.Address`, certificate/CA, `Relay.Route`, proxy logs; re-enroll from the Relay page. |
+| `has multiple devices online: select one` | Use `relay://email/device`; see the device list on the Relay page. |
+| Enrollment returns `403 dominio non abilitato` | The relay's `-allow-domains` must contain the **exact** domain. |
+| Enrollment disabled / no email | SMTP secret/flags missing or wrong; relay logs `enrollment disabled`; restart after filling. |
+| `x509: certificate signed by unknown authority` | Paste the enrollment CA, or accept the fingerprint prompt after verifying it. |
+| Touch ID prompt does not appear | Keychain disabled (`PROXY_NO_KEYCHAIN`), no biometrics, or non-macOS; enter the master password. |
+| `wrong master password or corrupted file` | The password is wrong or the file was modified. There is no recovery without the password. |
+| Web UI returns `403` | UI/API are only available to loopback clients. |
+| Port 80 / `/etc/hosts` errors with PAC hijack | Run with the needed privileges; disable `PacHijack` if not needed. |
+| System proxy keeps being reset | A VPN client is rewriting it; use `SystemProxyExclude` or turn off the VPN's proxy enforcement. |
+| Chrome ignores the proxy | Check PAC precedence and `ForceChrome` (macOS). |
+| Relay server exits on startup | Missing `-cert/-key/-ca`; enrollment misconfiguration logs `enrollment disabled` but mTLS continues. |
+| Relay clients all show device `default` | They are older clients that do not send a device code; update them. |
+| `ld: warning: ignoring duplicate libraries: '-lobjc'` on macOS | Harmless linker warning from the combined systray/Keychain frameworks. |
+
+---
+
+## Limitations and roadmap
+
+Current limitations:
+
+- Master password rotation is not implemented (a new encrypted config must be
+  created to change it).
+- Certificate renewal is manual (Relay → Riconfigura); no revocation/CRL/OCSP.
+- Enrollment invitations are initiated by the admin CLI; there is no admin web
+  console or user database UI.
+- The local API has no authentication; it is intended for loopback use.
+- Windows lacks system proxy/PAC/Chrome policy/desktop notifications.
+- Linux system tray requires the systray GTK/AppIndicator dependencies.
+- The relay state file is single-instance; do not scale the relay horizontally.
+- Web UI strings are Italian only.
+- The macOS biometric gate is app-level `LocalAuthentication`; the Keychain item
+  is not protected by a native biometric access-control ACL.
+
+Possible future work:
+
+- Password rotation/rewrap tooling and recovery-key design.
+- Automatic certificate renewal, revocation, and audit logs.
+- Admin UI/API for invitations, users, and device management.
+- Windows system proxy/PAC/Chrome/notifications.
+- UI internationalization.
+- Signed macOS builds with native Keychain access control.
+- Metrics/health endpoints, structured logs, and relay HA.
+
+---
+
+## Contributing
+
+Issues and pull requests are welcome.
+
+- Keep changes focused and consistent with the existing style.
+- Run `gofmt`, `go vet ./...`, and `go test ./...` (and `-race` where possible).
+- Rebuild the web UI when changing `webui/`.
+- Never commit credentials, `config.yml*`, `relay-certs`, `relay-pki`, or relay
+  state files.
+- For security-sensitive changes (crypto, certificate handling, proxy
+  authentication, relay), explain the threat model and add tests.
+
+---
+
+## License
+
+Copyright the Go Smart Proxy contributors.
+
+Licensed under the **Apache License 2.0**. See [LICENSE](LICENSE).

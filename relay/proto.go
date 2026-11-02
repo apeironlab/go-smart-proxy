@@ -34,8 +34,9 @@ type ClientMsg struct {
 
 // Contact is an entry of the address book.
 type Contact struct {
-	Email  string `json:"email"`
-	Online bool   `json:"online"`
+	Email   string   `json:"email"`
+	Online  bool     `json:"online"`
+	Devices []string `json:"devices,omitempty"` // online devices of the contact
 }
 
 // State is the snapshot of a client's address book pushed by the relay.
@@ -51,10 +52,13 @@ type State struct {
 // DialReq opens a stream to Target through contact Via (client -> relay) or
 // asks the contact to dial it on behalf of From (relay -> contact).
 type DialReq struct {
-	T      string `json:"t"`
-	Via    string `json:"via,omitempty"`
-	From   string `json:"from,omitempty"`
-	Target string `json:"target"`
+	T          string `json:"t"`
+	Via        string `json:"via,omitempty"`
+	ViaDevice  string `json:"viaDevice,omitempty"` // specific device of the contact
+	From       string `json:"from,omitempty"`
+	FromDevice string `json:"fromDevice,omitempty"` // device of the requester
+	Device     string `json:"device,omitempty"`     // control stream: this client's device
+	Target     string `json:"target"`
 }
 
 // DialResp is the answer to a DialReq.
@@ -93,6 +97,25 @@ func NormalizeEmail(s string) (string, bool) {
 	s = strings.ToLower(strings.TrimSpace(s))
 	at := strings.IndexByte(s, '@')
 	if at <= 0 || at == len(s)-1 || len(s) > 254 || strings.ContainsAny(s, " \t\r\n,;<>\"") {
+		return "", false
+	}
+	return s, true
+}
+
+// NormalizeDevice validates a device code. An empty string means "not
+// specified" and is valid.
+func NormalizeDevice(s string) (string, bool) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return "", true
+	}
+	if len(s) > 40 || s[0] == '-' || s[len(s)-1] == '-' {
+		return "", false
+	}
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
 		return "", false
 	}
 	return s, true

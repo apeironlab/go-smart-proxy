@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  ActionIcon, Alert, Badge, Button, Card, Checkbox, Code, Divider, Group, Modal, Select, SimpleGrid, Stack, Switch, Table,
+  ActionIcon, Alert, Autocomplete, Badge, Button, Card, Checkbox, Code, Divider, Group, Modal, Select, SimpleGrid, Stack, Switch, Table,
   TagsInput, Text, TextInput, Title, Tooltip, Accordion,
 } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
 import { IconArrowDown, IconArrowUp, IconPencil, IconPlus, IconRefresh, IconTrash } from '@tabler/icons-react'
 import { api } from '../api'
-import type { Credential, Hop, RouteInfo, StateInfo, SystemProxyState } from '../api'
+import type { Credential, Hop, RelayStatus, RouteInfo, StateInfo, SystemProxyState } from '../api'
 
 const pacColors: Record<string, string> = {
   none: 'gray',
@@ -35,6 +35,7 @@ function chainText(r: RouteInfo) {
 
 export default function ConfigPage() {
   const [state, setState] = useState<StateInfo | null>(null)
+  const [relaySt, setRelaySt] = useState<RelayStatus | null>(null)
   const [creds, setCreds] = useState<Credential[]>([])
   const [error, setError] = useState<string | null>(null)
   const [address, setAddress] = useState('')
@@ -72,6 +73,7 @@ export default function ConfigPage() {
     }).catch((e) => setError(String(e)))
     api.credentials().then(setCreds).catch(() => {})
     api.systemProxy().then(setSysProxyState).catch(() => {})
+    api.relay().then(setRelaySt).catch(() => {})
   }, [configLoaded])
 
   useEffect(() => {
@@ -149,6 +151,27 @@ export default function ConfigPage() {
 
   const routes = state?.routes ?? []
   const credOptions = creds.map((c) => ({ value: c.name, label: c.name }))
+
+  // Suggestions for the hop editor: relay contacts/devices plus every hop
+  // already used by another route.
+  const hopSuggestions = useMemo(() => {
+    const seen = new Set<string>()
+    const out: string[] = []
+    const add = (v: string) => {
+      if (v && !seen.has(v)) {
+        seen.add(v)
+        out.push(v)
+      }
+    }
+    for (const r of state?.routes ?? []) {
+      for (const h of r.hops ?? []) add(h.proxyUrl)
+    }
+    for (const c of relaySt?.contacts ?? []) {
+      add(`relay://${c.email}`)
+      for (const d of c.devices ?? []) add(`relay://${c.email}/${d}`)
+    }
+    return out
+  }, [state, relaySt])
 
   return (
     <>
@@ -288,6 +311,11 @@ export default function ConfigPage() {
             )}
           </>
         )}
+        <Text size="xs" c="dimmed" mt="sm">
+          La configurazione, incluse le credenziali e la chiave privata del relay, è cifrata in{' '}
+          <Code>config.yml.enc</Code> con la master password. Su macOS la chiave derivata può essere
+          sbloccata con Touch ID tramite il Keychain.
+        </Text>
       </Card>
 
       <Group justify="space-between" mb="sm">
@@ -417,13 +445,15 @@ export default function ConfigPage() {
           <Divider label="Catena di proxy (opzionale)" labelPosition="left" mt="xs" />
           <Text size="xs" c="dimmed">
             Il traffico passa dal primo proxy, poi dal secondo attraverso il primo, e così via fino all'uscita.
-            Con una catena, PAC e proxy upstream sono ignorati. Schemi: http://host:porta, socks5://host:porta, oppure relay://email del contatto: la catena si ferma all'hop relay (i salti precedenti servono a raggiungere il relay, quelli successivi passano dal contatto). Un salto marcato "Solo regole" ferma la catena se nessuna regola seleziona la route.
+            Con una catena, PAC e proxy upstream sono ignorati. Schemi: http://host:porta, socks5://host:porta, oppure relay://email del contatto: la catena si ferma all'hop relay (i salti precedenti servono a raggiungere il relay, quelli successivi passano dal contatto). Un salto marcato "Solo regole" ferma la catena se nessuna regola seleziona la route. Scrivendo relay:// compaiono i contatti e i loro device; sono suggeriti anche i salti già usati.
           </Text>
           {form.hops.map((h, i) => (
             <Group key={i} gap="xs" wrap="nowrap" align="flex-end">
               <Badge variant="light" size="lg" w={36} px={0}>{i + 1}</Badge>
-              <TextInput style={{ flex: 1 }} label={i === 0 ? 'Proxy' : undefined} placeholder="http://host:8080 o socks5://host:1080"
-                value={h.proxyUrl} onChange={(e) => setHop(i, { proxyUrl: e.currentTarget.value })} />
+              <Autocomplete style={{ flex: 1 }} label={i === 0 ? 'Proxy' : undefined}
+                placeholder="http://host:8080, socks5://host:1080 o relay://contatto/device"
+                data={h.proxyUrl.trim() ? hopSuggestions : []} limit={12}
+                value={h.proxyUrl} onChange={(v) => setHop(i, { proxyUrl: v })} />
               <Select w={170} label={i === 0 ? 'Credential' : undefined} placeholder="nessuna" clearable
                 data={credOptions} value={h.credential || null}
                 onChange={(v) => setHop(i, { credential: v ?? '' })} />

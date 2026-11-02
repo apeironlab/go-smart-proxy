@@ -169,6 +169,8 @@ func loadRoutes() {
 	rulesMu.Lock()
 	routeRules = compiled
 	rulesMu.Unlock()
+
+	refreshTrayMenu()
 }
 
 func getRoutes() []*ProxyRoute {
@@ -194,6 +196,7 @@ func setForceRoute(r *ProxyRoute) {
 	stateMu.Lock()
 	forceRoute = r
 	stateMu.Unlock()
+	refreshTrayMenu()
 }
 
 func getForceRoute() *ProxyRoute {

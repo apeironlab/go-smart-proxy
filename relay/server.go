@@ -5,8 +5,10 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,10 +32,12 @@ type Server struct {
 }
 
 type session struct {
-	email string
-	ys    *yamux.Session
-	mu    sync.Mutex
-	ctrl  net.Conn
+	email  string
+	device string
+	ys     *yamux.Session
+	mu     sync.Mutex
+	ctrl   net.Conn
+	ready  chan struct{} // closed once the control stream has registered the device
 }
 
 func NewServer(store *Store) *Server {
@@ -102,26 +106,10 @@ func (s *Server) handleConn(c net.Conn) {
 		c.Close()
 		return
 	}
-	sess := &session{email: email, ys: ys}
-	s.mu.Lock()
-	old := s.sessions[email]
-	s.sessions[email] = sess
-	s.mu.Unlock()
-	if old != nil {
-		old.ys.Close() // a newer connection of the same identity replaces the old one
-	}
-	s.Log.Printf("%s connected from %s", email, c.RemoteAddr())
-	s.notifyPresence(email)
-
+	sess := &session{email: email, ys: ys, ready: make(chan struct{})}
 	defer func() {
 		ys.Close()
-		s.mu.Lock()
-		if s.sessions[email] == sess {
-			delete(s.sessions, email)
-		}
-		s.mu.Unlock()
-		s.Log.Printf("%s disconnected", email)
-		s.notifyPresence(email)
+		s.unregister(sess)
 	}()
 
 	for {
@@ -133,39 +121,113 @@ func (s *Server) handleConn(c net.Conn) {
 	}
 }
 
+// unregister removes the session from the registry (if it was registered) and
+// notifies its contacts that the device went offline.
+func (s *Server) unregister(sess *session) {
+	s.mu.Lock()
+	removed := false
+	for key, cur := range s.sessions {
+		if cur == sess {
+			delete(s.sessions, key)
+			removed = true
+		}
+	}
+	s.mu.Unlock()
+	if !removed {
+		return
+	}
+	sess.mu.Lock()
+	email, device := sess.email, sess.device
+	sess.mu.Unlock()
+	s.Log.Printf("%s/%s disconnected", email, device)
+	s.notifyPresence(email)
+}
+
 type discard struct{}
 
 func (discard) Write(p []byte) (int, error) { return len(p), nil }
 
-func (s *Server) online(email string) *session {
+func sessionKey(email, device string) string { return email + "\x00" + device }
+
+// onlineDevices returns the sorted online device codes of a user.
+func (s *Server) onlineDevices(email string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.sessions[email]
+	var out []string
+	for _, sess := range s.sessions {
+		if sess.email == email && sess.device != "" {
+			out = append(out, sess.device)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
-// pushState sends the current snapshot to email, if connected.
+// peer returns the online session of a contact. An empty device means "any":
+// it works only when a single device is online, so a multi-device user is never
+// routed by chance.
+func (s *Server) peer(email, device string) (*session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if device != "" {
+		if sess := s.sessions[sessionKey(email, device)]; sess != nil {
+			return sess, nil
+		}
+		return nil, fmt.Errorf("%s/%s is offline", email, device)
+	}
+	var found []*session
+	for _, sess := range s.sessions {
+		if sess.email == email {
+			found = append(found, sess)
+		}
+	}
+	switch len(found) {
+	case 0:
+		return nil, fmt.Errorf("%s is offline", email)
+	case 1:
+		return found[0], nil
+	default:
+		return nil, fmt.Errorf("%s has multiple devices online: select one (relay://%s/device)", email, email)
+	}
+}
+
+// pushState sends the current snapshot to every device of email.
 func (s *Server) pushState(email, notice string) {
-	sess := s.online(email)
-	if sess == nil {
+	s.pushStateDevice(email, "", notice)
+}
+
+// pushStateDevice sends the current snapshot to one device of email, or to all
+// of them when device is empty.
+func (s *Server) pushStateDevice(email, device, notice string) {
+	s.mu.Lock()
+	var targets []*session
+	for _, sess := range s.sessions {
+		if sess.email == email && (device == "" || sess.device == device) {
+			targets = append(targets, sess)
+		}
+	}
+	s.mu.Unlock()
+	if len(targets) == 0 {
 		return
 	}
-	sess.mu.Lock()
-	ctrl := sess.ctrl
-	sess.mu.Unlock()
-	if ctrl == nil {
-		return
-	}
+
 	contacts, in, out := s.Store.Snapshot(email)
 	st := State{T: TState, Email: email, Incoming: in, Outgoing: out, Notice: notice}
 	for _, c := range contacts {
-		st.Contacts = append(st.Contacts, Contact{Email: c, Online: s.online(c) != nil})
+		devices := s.onlineDevices(c)
+		st.Contacts = append(st.Contacts, Contact{Email: c, Online: len(devices) > 0, Devices: devices})
 	}
-	sess.mu.Lock()
-	ctrl.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	err := WriteLine(ctrl, st)
-	sess.mu.Unlock()
-	if err != nil {
-		ctrl.Close()
+
+	for _, sess := range targets {
+		sess.mu.Lock()
+		ctrl := sess.ctrl
+		if ctrl != nil {
+			ctrl.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := WriteLine(ctrl, st); err != nil {
+				ctrl.Close()
+			}
+		}
+		sess.mu.Unlock()
 	}
 }
 
@@ -195,7 +257,12 @@ func (s *Server) handleStream(sess *session, st net.Conn) {
 	}
 	switch head.T {
 	case TControl:
-		s.handleControl(sess, st, br)
+		var req DialReq
+		if err := json.Unmarshal(line, &req); err != nil {
+			st.Close()
+			return
+		}
+		s.handleControl(sess, st, br, req)
 	case TDial:
 		var req DialReq
 		if err := json.Unmarshal(line, &req); err != nil {
@@ -208,7 +275,16 @@ func (s *Server) handleStream(sess *session, st net.Conn) {
 	}
 }
 
-func (s *Server) handleControl(sess *session, st net.Conn, br *bufio.Reader) {
+func (s *Server) handleControl(sess *session, st net.Conn, br *bufio.Reader, hello DialReq) {
+	device, ok := NormalizeDevice(hello.Device)
+	if !ok {
+		st.Close()
+		return
+	}
+	if device == "" {
+		device = "default" // clients that predate device identities
+	}
+
 	sess.mu.Lock()
 	if sess.ctrl != nil {
 		sess.mu.Unlock()
@@ -216,10 +292,24 @@ func (s *Server) handleControl(sess *session, st net.Conn, br *bufio.Reader) {
 		return
 	}
 	sess.ctrl = st
+	sess.device = device
 	sess.mu.Unlock()
+
+	key := sessionKey(sess.email, device)
+	s.mu.Lock()
+	old := s.sessions[key]
+	s.sessions[key] = sess
+	s.mu.Unlock()
+	if old != nil && old != sess {
+		old.ys.Close() // a newer connection of the same user+device replaces the old one
+	}
+	close(sess.ready)
+	s.Log.Printf("%s/%s connected", sess.email, device)
+	s.pushStateDevice(sess.email, device, "")
+	s.notifyPresence(sess.email)
+
 	defer st.Close()
 
-	s.pushState(sess.email, "")
 	for {
 		var m ClientMsg
 		if err := ReadLine(br, &m); err != nil {
@@ -227,7 +317,7 @@ func (s *Server) handleControl(sess *session, st net.Conn, br *bufio.Reader) {
 		}
 		other, ok := NormalizeEmail(m.Email)
 		if !ok {
-			s.pushState(sess.email, "invalid e-mail address")
+			s.pushStateDevice(sess.email, sess.device, "invalid e-mail address")
 			continue
 		}
 		var changed []string
@@ -243,7 +333,7 @@ func (s *Server) handleControl(sess *session, st net.Conn, br *bufio.Reader) {
 			notice = "unknown command"
 		}
 		if notice != "" {
-			s.pushState(sess.email, notice)
+			s.pushStateDevice(sess.email, sess.device, notice)
 		}
 		for _, e := range changed {
 			if notice != "" && e == sess.email {
@@ -268,8 +358,19 @@ func (s *Server) handleDial(sess *session, st net.Conn, br *bufio.Reader, req Di
 		WriteLine(st, DialResp{Error: msg})
 		st.Close()
 	}
+	select {
+	case <-sess.ready:
+	case <-time.After(5 * time.Second):
+		fail("control stream not ready")
+		return
+	}
+	sess.mu.Lock()
+	fromDevice := sess.device
+	sess.mu.Unlock()
+
 	via, ok := NormalizeEmail(req.Via)
-	if !ok || !validTarget(req.Target) {
+	viaDevice, dok := NormalizeDevice(req.ViaDevice)
+	if !ok || !dok || !validTarget(req.Target) {
 		fail("invalid request")
 		return
 	}
@@ -277,9 +378,9 @@ func (s *Server) handleDial(sess *session, st net.Conn, br *bufio.Reader, req Di
 		fail(via + " is not in your contacts")
 		return
 	}
-	peer := s.online(via)
-	if peer == nil {
-		fail(via + " is offline")
+	peer, err := s.peer(via, viaDevice)
+	if err != nil {
+		fail(err.Error())
 		return
 	}
 	ps, err := peer.ys.OpenStream()
@@ -287,7 +388,7 @@ func (s *Server) handleDial(sess *session, st net.Conn, br *bufio.Reader, req Di
 		fail(via + " is unreachable")
 		return
 	}
-	if err := WriteLine(ps, DialReq{T: TDial, From: sess.email, Target: req.Target}); err != nil {
+	if err := WriteLine(ps, DialReq{T: TDial, From: sess.email, FromDevice: fromDevice, Target: req.Target}); err != nil {
 		ps.Close()
 		fail(via + " is unreachable")
 		return
@@ -310,6 +411,6 @@ func (s *Server) handleDial(sess *session, st net.Conn, br *bufio.Reader, req Di
 		st.Close()
 		return
 	}
-	s.Log.Printf("%s -> %s -> %s", sess.email, via, req.Target)
+	s.Log.Printf("%s/%s -> %s/%s -> %s", sess.email, fromDevice, via, viaDevice, req.Target)
 	Pipe(st, br, ps, pbr)
 }
