@@ -913,6 +913,8 @@ macOS needs Xcode Command Line Tools for the CGO/system-tray/Keychain parts.
 
 ### Release packages
 
+Local packaging:
+
 ```bash
 ./package.sh 0.1.0
 ```
@@ -932,6 +934,21 @@ runtime; build other architectures with
 `LINUX_ARCHS="amd64 arm64" ./package.sh <version>`. The archives contain the
 binary, `README.md` and `LICENSE`; they do not contain configurations,
 credentials or relay certificates.
+
+### GitHub release
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow builds the web UI once, then produces the macOS universal, Windows
+amd64 and Linux amd64 packages on native GitHub runners, generates
+`SHA256SUMS`, and publishes them as assets of a GitHub Release with generated
+notes. The release can be edited from the repository's **Releases** page; no
+local Docker or cross-compiler is needed.
 
 ### Tests
 

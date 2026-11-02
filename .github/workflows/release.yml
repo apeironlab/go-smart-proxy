@@ -1,0 +1,134 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  webui:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+      - run: npm ci --prefix webui
+      - run: npm run build --prefix webui
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webui-dist
+          path: webui/dist
+
+  darwin:
+    needs: webui
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: webui-dist
+          path: webui/dist
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build universal package
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p build/darwin-arm64 build/darwin-amd64 build/darwin-universal
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
+            go build -trimpath -ldflags "-s -w" -o build/darwin-arm64/proxy .
+          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 CC="clang -arch x86_64" \
+            go build -trimpath -ldflags "-s -w" -o build/darwin-amd64/proxy .
+          lipo -create -output build/darwin-universal/proxy \
+            build/darwin-arm64/proxy build/darwin-amd64/proxy
+          cp README.md LICENSE build/darwin-universal/
+          tar -czf "go-smart-proxy_${version}_darwin_universal.tar.gz" -C build/darwin-universal .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darwin-universal
+          path: go-smart-proxy_*_darwin_universal.tar.gz
+
+  windows:
+    needs: webui
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: webui-dist
+          path: webui/dist
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build amd64 package
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          $env:CGO_ENABLED = '0'
+          $env:GOOS = 'windows'
+          $env:GOARCH = 'amd64'
+          go build -trimpath -ldflags "-s -w -H=windowsgui" -o proxy.exe .
+          New-Item -ItemType Directory -Force -Path build/windows | Out-Null
+          Copy-Item proxy.exe, README.md, LICENSE build/windows/
+          Compress-Archive -Path build/windows/* -DestinationPath "go-smart-proxy_${version}_windows_amd64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-amd64
+          path: go-smart-proxy_*_windows_amd64.zip
+
+  linux:
+    needs: webui
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: webui-dist
+          path: webui/dist
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install GTK/AppIndicator headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev
+      - name: Build amd64 package
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p build/linux
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+            go build -trimpath -ldflags "-s -w" -o build/linux/proxy .
+          cp README.md LICENSE build/linux/
+          tar -czf "go-smart-proxy_${version}_linux_amd64.tar.gz" -C build/linux .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-amd64
+          path: go-smart-proxy_*_linux_amd64.tar.gz
+
+  release:
+    needs: [darwin, windows, linux]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum ./*.tar.gz ./*.zip > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
