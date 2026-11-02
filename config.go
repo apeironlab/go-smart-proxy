@@ -128,16 +128,26 @@ func loadConfiguration() {
 	} else if os.IsNotExist(err) {
 		// Legacy plaintext configuration: load it and migrate automatically to
 		// the encrypted format, embedding the relay certificate and key.
-		secureConfigFile(plainConfig)
 		data, err := os.ReadFile(plainConfig)
-		if err != nil {
-			log.Fatalf("neither %s nor %s found", encryptedConfig, plainConfig)
-		}
-		if err := yaml.Unmarshal(data, &configuration); err != nil {
-			log.Fatalf("%s: %v", plainConfig, err)
-		}
-		if err := migrateToEncrypted(); err != nil {
-			log.Fatalf("cannot migrate %s to %s: %v", plainConfig, encryptedConfig, err)
+		switch {
+		case err == nil:
+			secureConfigFile(plainConfig)
+			if err := yaml.Unmarshal(data, &configuration); err != nil {
+				log.Fatalf("%s: %v", plainConfig, err)
+			}
+			if err := migrateToEncrypted(); err != nil {
+				log.Fatalf("cannot migrate %s to %s: %v", plainConfig, encryptedConfig, err)
+			}
+		case os.IsNotExist(err):
+			// No configuration at all: start with usable defaults and let the
+			// web UI handle the rest. The master password is chosen now.
+			log.Printf("No configuration found: creating a new encrypted configuration with defaults")
+			configuration = Configuration{Address: "127.0.0.1:3128"}
+			if err := migrateToEncrypted(); err != nil {
+				log.Fatalf("cannot create %s: %v", encryptedConfig, err)
+			}
+		default:
+			log.Fatalf("cannot read %s: %v", plainConfig, err)
 		}
 	} else {
 		log.Fatal(err)

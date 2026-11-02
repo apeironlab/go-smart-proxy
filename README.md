@@ -165,9 +165,9 @@ curl --socks5-hostname 127.0.0.1:1080 https://example.com
 
 On macOS/Windows the same actions are available from the tray icon.
 
-A ready-to-copy **legacy plaintext** configuration template is provided in
-[`config.yml.tpl`](config.yml.tpl). At the first start it is migrated to the
-encrypted format.
+There is no configuration template to copy: on first start the proxy creates an
+encrypted configuration with usable defaults (`127.0.0.1:3128`), and the rest is
+managed from the web UI.
 
 ---
 
@@ -191,8 +191,9 @@ At startup:
    - embeds the relay certificate, private key and CA into the configuration,
    - writes and verifies `config.yml.enc`,
    - removes the plaintext configuration and the plaintext relay private key.
-3. If neither file exists, the proxy exits. Start from `config.yml.tpl` to create
-   a new configuration.
+3. If neither file exists, the proxy starts with defaults
+   (`Address: 127.0.0.1:3128`), asks for a new master password and writes
+   `config.yml.enc`.
 
 **Unlock sources**, in order:
 
@@ -875,7 +876,6 @@ rebuild the Go binary so the new assets are embedded.
 | `cmd/proxyrelay/` | Relay server CLI |
 | `webui/` | React management UI |
 | `deploy/` | Kubernetes example |
-| `config.yml.tpl` | Legacy plaintext configuration template |
 | `Dockerfile.relay` | Relay image |
 
 The Go module is named `proxy`; internal packages are imported as
