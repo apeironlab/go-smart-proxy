@@ -8,8 +8,9 @@ that lets trusted contacts reach each other's networks without exposing services
 to the internet.
 
 The management UI is embedded in the binary and served on the proxy listener
-(loopback only). The UI is currently in Italian; code, comments and this README
-are in English.
+(loopback only). The UI supports the 24 official languages of the European
+Union, selected from the browser locale or manually from the header menu, with
+English as fallback; code, comments and this README are in English.
 
 > **Security first:** the configuration contains proxy credentials and can contain
 > the relay private key. It is encrypted at rest with a master password
@@ -1080,7 +1081,6 @@ Current limitations:
 - Windows lacks system proxy/PAC/Chrome policy/desktop notifications.
 - Linux system tray requires the systray GTK/AppIndicator dependencies.
 - The relay state file is single-instance; do not scale the relay horizontally.
-- Web UI strings are Italian only.
 - The macOS biometric gate is app-level `LocalAuthentication`; the Keychain item
   is not protected by a native biometric access-control ACL.
 
@@ -1095,7 +1095,6 @@ Possible future work:
 - Automatic certificate renewal, revocation, and audit logs.
 - Admin UI/API for invitations, users, and device management.
 - Windows system proxy/PAC/Chrome/notifications.
-- UI internationalization.
 - Signed macOS builds with native Keychain access control.
 - Metrics/health endpoints, structured logs, and relay HA.
 
