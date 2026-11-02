@@ -51,10 +51,12 @@ jobs:
             build/darwin-arm64/proxy build/darwin-amd64/proxy
           cp README.md LICENSE build/darwin-universal/
           tar -czf "go-smart-proxy_${version}_darwin_universal.tar.gz" -C build/darwin-universal .
+      - name: Build DMG installer
+        run: installer/macos/build-dmg.sh build/darwin-universal/proxy "${GITHUB_REF_NAME#v}" "go-smart-proxy_${GITHUB_REF_NAME#v}_darwin_universal.dmg"
       - uses: actions/upload-artifact@v4
         with:
           name: darwin-universal
-          path: go-smart-proxy_*_darwin_universal.tar.gz
+          path: go-smart-proxy_*_darwin_universal.*
 
   windows:
     needs: webui
@@ -76,14 +78,24 @@ jobs:
           $env:CGO_ENABLED = '0'
           $env:GOOS = 'windows'
           $env:GOARCH = 'amd64'
-          go build -trimpath -ldflags "-s -w -H=windowsgui" -o proxy.exe .
-          New-Item -ItemType Directory -Force -Path build/windows | Out-Null
-          Copy-Item proxy.exe, README.md, LICENSE build/windows/
+          New-Item -ItemType Directory -Force -Path build/windows, dist | Out-Null
+          go build -trimpath -ldflags "-s -w -H=windowsgui" -o build/windows/proxy.exe .
+          Copy-Item README.md, LICENSE build/windows/
           Compress-Archive -Path build/windows/* -DestinationPath "go-smart-proxy_${version}_windows_amd64.zip"
+      - name: Build Inno Setup installer
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          choco install innosetup -y --no-progress
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          & $iscc "/DMyAppVersion=$version" "installer\windows\go-smart-proxy.iss"
+          Copy-Item "dist\go-smart-proxy_${version}_windows_amd64_setup.exe" .
       - uses: actions/upload-artifact@v4
         with:
           name: windows-amd64
-          path: go-smart-proxy_*_windows_amd64.zip
+          path: |
+            go-smart-proxy_*_windows_amd64.zip
+            go-smart-proxy_*_windows_amd64_setup.exe
 
   linux:
     needs: webui
@@ -106,15 +118,28 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          mkdir -p build/linux
+          mkdir -p build/linux dist
           CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
             go build -trimpath -ldflags "-s -w" -o build/linux/proxy .
           cp README.md LICENSE build/linux/
           tar -czf "go-smart-proxy_${version}_linux_amd64.tar.gz" -C build/linux .
+      - name: Build deb and rpm packages
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.43.0
+          export VERSION="$version"
+          "$(go env GOPATH)/bin/nfpm" package --config installer/linux/nfpm.yaml --packager deb \
+            --target "go-smart-proxy_${version}_linux_amd64.deb"
+          "$(go env GOPATH)/bin/nfpm" package --config installer/linux/nfpm.yaml --packager rpm \
+            --target "go-smart-proxy_${version}_linux_amd64.rpm"
       - uses: actions/upload-artifact@v4
         with:
           name: linux-amd64
-          path: go-smart-proxy_*_linux_amd64.tar.gz
+          path: |
+            go-smart-proxy_*_linux_amd64.tar.gz
+            go-smart-proxy_*_linux_amd64.deb
+            go-smart-proxy_*_linux_amd64.rpm
 
   release:
     needs: [darwin, windows, linux]
@@ -127,7 +152,9 @@ jobs:
       - name: Generate checksums
         run: |
           cd dist
-          sha256sum ./*.tar.gz ./*.zip > SHA256SUMS
+          find . -maxdepth 1 -type f \
+            \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.dmg' -o -name '*.deb' -o -name '*.rpm' -o -name '*_setup.exe' \) \
+            -exec sha256sum {} + | sort -k2 > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*

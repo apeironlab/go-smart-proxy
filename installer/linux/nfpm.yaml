@@ -1,0 +1,36 @@
+# nfpm configuration for the Linux .deb and .rpm packages.
+# Build with: VERSION=<version> nfpm package --config installer/linux/nfpm.yaml \
+#   --packager deb --target dist/<name>.deb
+name: go-smart-proxy
+arch: amd64
+platform: linux
+version: "${VERSION}"
+section: net
+priority: optional
+maintainer: ApeironLab <dev@apeironlab.tech>
+description: Smart HTTP/SOCKS5 proxy with routes, rules and an encrypted relay
+vendor: ApeironLab
+homepage: https://github.com/apeironlab/go-smart-proxy
+license: Apache-2.0
+
+contents:
+  - src: build/linux/proxy
+    dst: /usr/bin/go-smart-proxy
+    file_info:
+      mode: 0755
+  - src: installer/linux/go-smart-proxy.desktop
+    dst: /usr/share/applications/go-smart-proxy.desktop
+  - src: README.md
+    dst: /usr/share/doc/go-smart-proxy/README.md
+  - src: LICENSE
+    dst: /usr/share/doc/go-smart-proxy/LICENSE
+
+depends:
+  - libgtk-3-0
+  - libayatana-appindicator3-1
+
+overrides:
+  rpm:
+    depends:
+      - gtk3
+      - libayatana-appindicator-gtk3

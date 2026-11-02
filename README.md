@@ -239,6 +239,14 @@ available. Set `PROXY_NO_KEYCHAIN=1` to always ask for the master password.
 Saving from the web UI keeps the same salt and derived key, so the Keychain
 entry stays valid. The configuration is re-encrypted on every change.
 
+**Data directory**: a portable run (archive extracted in a writable folder) keeps
+`config.yml.enc`, `relay_state.json` and `cache/` next to the binary. When the
+working directory is not writable — for example an app bundle opened from Finder
+— the proxy uses the user configuration directory instead:
+`~/Library/Application Support/go-smart-proxy` on macOS, `%AppData%\go-smart-proxy`
+on Windows, `~/.config/go-smart-proxy` on Linux. Set `PROXY_HOME` to force a
+specific directory.
+
 ### Configuration reference
 
 The following is the *plaintext* schema. The encrypted file contains the same
@@ -876,6 +884,7 @@ rather than keeping the CA key in the cluster.
 | Variable | Used by | Purpose |
 |---|---|---|
 | `PROXY_MASTER_PASSWORD` | proxy | Master password for unattended startup |
+| `PROXY_HOME` | proxy | Data directory for config, relay state and PAC cache |
 | `PROXY_NO_KEYCHAIN` | proxy (macOS) | Disable the Keychain; always prompt |
 | `PROXY_TEST_KEYCHAIN` | tests | Run the opt-in Keychain bridge test |
 | `PROXYRELAY_SMTP_ADDR` | relay | SMTP server `host:port` |
@@ -924,10 +933,14 @@ to `dist/` (ignored by git):
 
 - `go-smart-proxy_<version>_darwin_universal.tar.gz` — universal binary for
   Apple Silicon and Intel;
+- `go-smart-proxy_<version>_darwin_universal.dmg` — `.app` bundle with drag to
+  `/Applications`;
 - `go-smart-proxy_<version>_windows_amd64.zip` — GUI binary without a console
   window;
 - `go-smart-proxy_<version>_linux_amd64.tar.gz` — built in Docker so the GTK 3
-  and Ayatana AppIndicator headers are available.
+  and Ayatana AppIndicator headers are available;
+- `go-smart-proxy_<version>_linux_amd64.deb` and `.rpm` — when `nfpm` is
+  installed locally (otherwise GitHub Actions builds them).
 
 The Linux binary links GTK/AppIndicator dynamically and needs those libraries at
 runtime; build other architectures with
@@ -944,11 +957,34 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The workflow builds the web UI once, then produces the macOS universal, Windows
-amd64 and Linux amd64 packages on native GitHub runners, generates
-`SHA256SUMS`, and publishes them as assets of a GitHub Release with generated
-notes. The release can be edited from the repository's **Releases** page; no
-local Docker or cross-compiler is needed.
+The workflow builds the web UI once, then produces on native GitHub runners:
+
+- macOS universal `.dmg` (with `.app` bundle) and `.tar.gz`;
+- Windows amd64 `_setup.exe` (Inno Setup, per-user) and `.zip`;
+- Linux amd64 `.deb`, `.rpm` and `.tar.gz`.
+
+It also generates `SHA256SUMS` and publishes everything as assets of a GitHub
+Release with generated notes. The release can be edited from the repository's
+**Releases** page; no local Docker or cross-compiler is needed.
+
+Install:
+
+- **macOS**: open the `.dmg`, drag **Go Smart Proxy** to `/Applications`.
+  The app is ad-hoc signed but **not notarized**; on first launch use
+  right-click → **Open** (or remove the quarantine flag with
+  `xattr -dr com.apple.quarantine "/Applications/Go Smart Proxy.app"`).
+- **Windows**: run the `_setup.exe`. It is unsigned, so SmartScreen may show
+  **More info → Run anyway**. The installer is per-user and can optionally
+  create a startup entry.
+- **Linux**:
+  `sudo apt install ./go-smart-proxy_<version>_linux_amd64.deb` or
+  `sudo dnf install ./go-smart-proxy_<version>_linux_amd64.rpm`.
+  GTK 3 and Ayatana AppIndicator are runtime dependencies.
+
+Installer signing/notarization is not configured: it requires an Apple Developer
+ID certificate and a Windows code-signing certificate. The macOS bundle is
+ad-hoc signed (`codesign -`), and `MACOS_SIGN_IDENTITY` can be set for a real
+Developer ID signature in `installer/macos/build-dmg.sh`.
 
 ### Tests
 

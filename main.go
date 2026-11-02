@@ -148,6 +148,7 @@ const (
 )
 
 func main() {
+	prepareWorkingDirectory()
 
 	dnsCache = expirablelru.NewExpirableLRU(500, nil, 1*time.Hour, 2*time.Hour)
 

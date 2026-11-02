@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Go Smart Proxy
+Comment=Smart HTTP/SOCKS5 proxy with routes, rules and relay
+Exec=go-smart-proxy
+Terminal=false
+StartupNotify=false
+Categories=Network;Utility;

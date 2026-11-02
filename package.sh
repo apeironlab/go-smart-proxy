@@ -49,6 +49,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   lipo -create -output "$mac_out/proxy" "$mac_arm/proxy" "$mac_intel/proxy"
   copy_docs "$mac_out"
   tar -czf "$dist/go-smart-proxy_${version}_darwin_universal.tar.gz" -C "$mac_out" .
+  installer/macos/build-dmg.sh "$mac_out/proxy" "$version" "$dist/go-smart-proxy_${version}_darwin_universal.dmg"
 else
   echo "==> macOS skipped (not running on Darwin)" >&2
 fi
@@ -79,6 +80,23 @@ if command -v docker >/dev/null 2>&1; then
       '
     copy_docs "$linux_out"
     tar -czf "$dist/go-smart-proxy_${version}_linux_${arch}.tar.gz" -C "$linux_out" .
+
+    # Build .deb/.rpm with nfpm when available (the GitHub workflow installs it).
+    nfpm_bin="$(command -v nfpm || true)"
+    if [[ -z "$nfpm_bin" && -x "$(go env GOPATH)/bin/nfpm" ]]; then
+      nfpm_bin="$(go env GOPATH)/bin/nfpm"
+    fi
+    if [[ -n "$nfpm_bin" && "$arch" == "amd64" ]]; then
+      mkdir -p build/linux
+      cp "$linux_out/proxy" build/linux/proxy
+      VERSION="$version" "$nfpm_bin" package --config installer/linux/nfpm.yaml \
+        --packager deb --target "$dist/go-smart-proxy_${version}_linux_amd64.deb"
+      VERSION="$version" "$nfpm_bin" package --config installer/linux/nfpm.yaml \
+        --packager rpm --target "$dist/go-smart-proxy_${version}_linux_amd64.rpm"
+      rm -rf build
+    else
+      echo "==> nfpm not found: skipping Linux .deb/.rpm (CI builds them)" >&2
+    fi
   done
 else
   echo "==> Linux skipped: Docker not found" >&2
@@ -87,7 +105,9 @@ fi
 rm -rf "$stage"
 
 echo "==> Checksums"
-(cd "$dist" && shasum -a 256 ./*.tar.gz ./*.zip > SHA256SUMS)
+(cd "$dist" && find . -maxdepth 1 -type f \
+  \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.dmg' -o -name '*.deb' -o -name '*.rpm' \) \
+  -exec shasum -a 256 {} + | sort -k2 > SHA256SUMS)
 
 echo
 ls -lh "$dist"
