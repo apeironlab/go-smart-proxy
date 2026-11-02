@@ -244,6 +244,9 @@ export default function ConfigPage() {
       add(`relay://${c.email}`)
       for (const d of c.devices ?? []) add(`relay://${c.email}/${d}`)
     }
+    if (relaySt?.email) {
+      for (const d of relaySt.myDevices ?? []) add(`relay://${relaySt.email}/${d.id}`)
+    }
     return out
   }, [state, relaySt])
 

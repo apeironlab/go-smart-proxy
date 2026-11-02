@@ -13,15 +13,20 @@ type Store struct {
 	path     string
 	contacts map[string]map[string]bool // email -> set of contact emails (symmetric)
 	pending  map[string]map[string]bool // to -> set of requesters
+	devices  map[string]map[string]bool // email -> set of known device codes
 }
 
 type storeFile struct {
 	Contacts map[string][]string `json:"contacts"`
 	Pending  map[string][]string `json:"pending"`
+	Devices  map[string][]string `json:"devices"`
 }
 
 func NewStore(path string) (*Store, error) {
-	s := &Store{path: path, contacts: map[string]map[string]bool{}, pending: map[string]map[string]bool{}}
+	s := &Store{
+		path: path, contacts: map[string]map[string]bool{}, pending: map[string]map[string]bool{},
+		devices: map[string]map[string]bool{},
+	}
 	if path == "" {
 		return s, nil
 	}
@@ -44,6 +49,11 @@ func NewStore(path string) (*Store, error) {
 	for k, v := range f.Pending {
 		for _, c := range v {
 			addTo(s.pending, k, c)
+		}
+	}
+	for k, v := range f.Devices {
+		for _, d := range v {
+			addTo(s.devices, k, d)
 		}
 	}
 	return s, nil
@@ -80,12 +90,15 @@ func (s *Store) saveLocked() {
 	if s.path == "" {
 		return
 	}
-	f := storeFile{Contacts: map[string][]string{}, Pending: map[string][]string{}}
+	f := storeFile{Contacts: map[string][]string{}, Pending: map[string][]string{}, Devices: map[string][]string{}}
 	for k, v := range s.contacts {
 		f.Contacts[k] = keys(v)
 	}
 	for k, v := range s.pending {
 		f.Pending[k] = keys(v)
+	}
+	for k, v := range s.devices {
+		f.Devices[k] = keys(v)
 	}
 	b, _ := json.MarshalIndent(f, "", "  ")
 	tmp := s.path + ".tmp"
@@ -98,6 +111,25 @@ func (s *Store) IsContact(a, b string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.contacts[a][b]
+}
+
+// RememberDevice records a device that connected at least once for an email.
+func (s *Store) RememberDevice(email, device string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.devices[email][device] {
+		return false
+	}
+	addTo(s.devices, email, device)
+	s.saveLocked()
+	return true
+}
+
+// Devices returns all known devices of an email, sorted.
+func (s *Store) Devices(email string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return keys(s.devices[email])
 }
 
 // Snapshot returns the contacts, incoming and outgoing requests of email.

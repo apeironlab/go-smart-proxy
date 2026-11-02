@@ -220,9 +220,15 @@ export interface RelayApproval {
   time: string
 }
 
+export interface RelayDeviceInfo {
+  id: string
+  online: boolean
+}
+
 export interface RelayRule {
   id: number
   from: string
+  fromDevice?: string
   host: string
   port: number
 }
@@ -238,6 +244,7 @@ export interface RelayStatus {
   error?: string
   notice?: string
   contacts: RelayContact[]
+  myDevices: RelayDeviceInfo[]
   incoming: string[]
   outgoing: string[]
   approvals: RelayApproval[]

@@ -39,14 +39,21 @@ type Contact struct {
 	Devices []string `json:"devices,omitempty"` // online devices of the contact
 }
 
+// DeviceInfo describes one of the user's own devices.
+type DeviceInfo struct {
+	ID     string `json:"id"`
+	Online bool   `json:"online"`
+}
+
 // State is the snapshot of a client's address book pushed by the relay.
 type State struct {
-	T        string    `json:"t"`
-	Email    string    `json:"email"`
-	Contacts []Contact `json:"contacts"`
-	Incoming []string  `json:"incoming"` // requests waiting for our answer
-	Outgoing []string  `json:"outgoing"` // requests we sent, not answered yet
-	Notice   string    `json:"notice,omitempty"`
+	T         string       `json:"t"`
+	Email     string       `json:"email"`
+	Contacts  []Contact    `json:"contacts"`
+	MyDevices []DeviceInfo `json:"myDevices,omitempty"`
+	Incoming  []string     `json:"incoming"` // requests waiting for our answer
+	Outgoing  []string     `json:"outgoing"` // requests we sent, not answered yet
+	Notice    string       `json:"notice,omitempty"`
 }
 
 // DialReq opens a stream to Target through contact Via (client -> relay) or

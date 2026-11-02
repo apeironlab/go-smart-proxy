@@ -215,6 +215,32 @@ export default function RelayPage() {
       {st.notice && <Alert color="yellow">{st.notice}</Alert>}
       {!st.connected && st.error && <Alert color="red" title="Connessione al relay">{st.error}</Alert>}
 
+      <Card withBorder>
+        <Text fw={700} mb="xs">I miei dispositivi</Text>
+        <Text size="xs" c="dimmed" mb="xs">
+          I tuoi dispositivi si possono usare direttamente, senza richiesta di contatto:
+          l'uscita richiederà comunque l'approvazione della rotta.
+        </Text>
+        <Table>
+          <Table.Tbody>
+            {(st.myDevices ?? []).map((d) => (
+              <Table.Tr key={d.id}>
+                <Table.Td>{d.id}</Table.Td>
+                <Table.Td>
+                  <Badge size="sm" variant="light" color={d.online ? 'green' : 'gray'}>
+                    {d.online ? 'online' : 'offline'}
+                  </Badge>
+                </Table.Td>
+                <Table.Td>
+                  <Code>{st.email ? `relay://${st.email}/${d.id}` : d.id}</Code>
+                </Table.Td>
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
+        </Table>
+        {!(st.myDevices ?? []).length && <Text size="sm" c="dimmed">Nessun dispositivo registrato.</Text>}
+      </Card>
+
       {st.approvals.length > 0 && (
         <Card withBorder>
           <Text fw={700} mb="xs">Richieste di rotta da approvare</Text>
@@ -338,6 +364,7 @@ export default function RelayPage() {
         <Text size="xs" c="dimmed" mt="xs">
           Per uscire dalla rete di un contatto usa <Code>relay://email/device</Code> come primo proxy
           della catena di una route. Con un solo device online basta <Code>relay://email</Code>.
+          I tuoi dispositivi sono utilizzabili direttamente, senza richiesta di contatto.
         </Text>
       </Card>
 
@@ -347,7 +374,10 @@ export default function RelayPage() {
           <Table.Tbody>
             {st.rules.map((r) => (
               <Table.Tr key={r.id}>
-                <Table.Td>{r.from}</Table.Td>
+                <Table.Td>
+                  <Text>{r.from}</Text>
+                  {r.fromDevice && <Text size="xs" c="dimmed">device {r.fromDevice}</Text>}
+                </Table.Td>
                 <Table.Td><Code>{r.host}:{r.port || '*'}</Code></Table.Td>
                 <Table.Td>
                   <ActionIcon variant="subtle" color="red" title="Revoca" onClick={() => run(() => api.relayDeleteRule(r.id))}>

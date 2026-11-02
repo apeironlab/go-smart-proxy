@@ -175,6 +175,13 @@ func TestMultipleDevices(t *testing.T) {
 	}
 	bobDesktop := connectTestClient(t, addr, pool, bobCert, "bob@example.com", "desktop")
 
+	// Bob sees both of his devices, without establishing a contact with himself.
+	my := bobDefault.waitState(t, func(s State) bool { return len(s.MyDevices) == 2 })
+	if my.MyDevices[0].ID != "default" || my.MyDevices[0].Online != true ||
+		my.MyDevices[1].ID != "desktop" || my.MyDevices[1].Online != true {
+		t.Fatalf("unexpected own devices: %+v", my.MyDevices)
+	}
+
 	// Establish the contact.
 	WriteLine(alice.ctrl, ClientMsg{T: TContactRequest, Email: "bob@example.com"})
 	bobDefault.waitState(t, func(s State) bool { return len(s.Incoming) == 1 })
@@ -196,7 +203,8 @@ func TestMultipleDevices(t *testing.T) {
 			go func() {
 				br := NewReader(s)
 				var req DialReq
-				if ReadLine(br, &req) != nil || req.From != "alice@example.com" {
+				if ReadLine(br, &req) != nil ||
+					(req.From != "alice@example.com" && req.From != "bob@example.com") {
 					s.Close()
 					return
 				}
@@ -215,6 +223,15 @@ func TestMultipleDevices(t *testing.T) {
 		t.Fatalf("dial to desktop failed: %+v err=%v", resp, err)
 	}
 	st1.Close()
+
+	// A user can use another one of their devices directly, without a contact
+	// request between themselves.
+	stSelf, _ := bobDefault.ys.OpenStream()
+	WriteLine(stSelf, DialReq{T: TDial, Via: "bob@example.com", ViaDevice: "desktop", Target: "10.1.2.3:80"})
+	if err := ReadLine(NewReader(stSelf), &resp); err != nil || !resp.OK {
+		t.Fatalf("self-device dial failed: %+v err=%v", resp, err)
+	}
+	stSelf.Close()
 
 	// Without a device, two online devices are ambiguous and must not be
 	// chosen by chance.

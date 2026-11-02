@@ -28,12 +28,13 @@ const (
 	relayNoticeTTL     = 15 * time.Second
 )
 
-// relayRule remembers a route (contact + destination) that was approved.
+// relayRule remembers a route (contact + device + destination) that was approved.
 type relayRule struct {
-	ID   int64  `json:"id"`
-	From string `json:"from"`
-	Host string `json:"host"`
-	Port int    `json:"port"` // 0 = any port
+	ID         int64  `json:"id"`
+	From       string `json:"from"`
+	FromDevice string `json:"fromDevice,omitempty"`
+	Host       string `json:"host"`
+	Port       int    `json:"port"` // 0 = any port
 }
 
 type relayDecision struct {
@@ -71,6 +72,7 @@ type relayClient struct {
 	lastErr   string
 	route     string
 	device    string
+	email     string
 	state     relay.State
 	notice    string
 	noticeAt  time.Time
@@ -129,6 +131,16 @@ func (r *relayClient) loadFile() {
 	for i := range r.state.Contacts {
 		r.state.Contacts[i].Online = false
 		r.state.Contacts[i].Devices = nil
+	}
+	for i := range r.state.MyDevices {
+		r.state.MyDevices[i].Online = false
+	}
+	for i := range r.rules {
+		// Rules saved before per-device approvals apply to the legacy "default"
+		// device used by older clients.
+		if r.rules[i].FromDevice == "" {
+			r.rules[i].FromDevice = "default"
+		}
 	}
 	r.mu.Unlock()
 }
@@ -212,6 +224,13 @@ func (r *relayClient) connectOnce() error {
 	cert, err := relayCertificate(cfg)
 	if err != nil {
 		return fmt.Errorf("client certificate: %w", err)
+	}
+	if leaf, err := x509.ParseCertificate(cert.Certificate[0]); err == nil {
+		if email, ok := relay.EmailFromCert(leaf); ok {
+			r.mu.Lock()
+			r.email = email
+			r.mu.Unlock()
+		}
 	}
 	tlsCfg := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 	if cfg.CAPEM != "" {
@@ -442,7 +461,14 @@ func (r *relayClient) handleIncoming(st net.Conn) {
 	deny := func(msg string) { relay.WriteLine(st, relay.DialResp{Error: msg}) }
 
 	from, ok := relay.NormalizeEmail(req.From)
-	if !ok || !r.isContact(from) {
+	if !ok {
+		deny("invalid identity")
+		return
+	}
+	r.mu.Lock()
+	self := r.email
+	r.mu.Unlock()
+	if from != self && !r.isContact(from) {
 		deny("not a contact")
 		return
 	}
@@ -519,13 +545,20 @@ func deviceSuffix(device string) string {
 
 // authorize returns true when the route is already approved, otherwise it
 // asks the user (through the web UI) and waits for the answer.
-func (r *relayClient) authorize(from, fromDevice, host string, port int) bool {
-	r.mu.Lock()
+func (r *relayClient) ruleAllowsLocked(from, fromDevice, host string, port int) bool {
 	for _, rule := range r.rules {
-		if rule.From == from && rule.Host == host && (rule.Port == 0 || rule.Port == port) {
-			r.mu.Unlock()
+		if rule.From == from && rule.FromDevice == fromDevice && rule.Host == host && (rule.Port == 0 || rule.Port == port) {
 			return true
 		}
+	}
+	return false
+}
+
+func (r *relayClient) authorize(from, fromDevice, host string, port int) bool {
+	r.mu.Lock()
+	if r.ruleAllowsLocked(from, fromDevice, host, port) {
+		r.mu.Unlock()
+		return true
 	}
 	r.nextID++
 	a := &relayApproval{ID: r.nextID, From: from, FromDevice: fromDevice, Host: host, Port: port, Time: time.Now(), ch: make(chan relayDecision, 1)}
@@ -544,7 +577,7 @@ func (r *relayClient) authorize(from, fromDevice, host string, port int) bool {
 	defer r.mu.Unlock()
 	delete(r.approvals, a.ID)
 	if dec.Allow && dec.Always {
-		rule := relayRule{ID: a.ID, From: from, Host: host, Port: port}
+		rule := relayRule{ID: a.ID, From: from, FromDevice: a.FromDevice, Host: host, Port: port}
 		if dec.AnyPort {
 			rule.Port = 0
 		}
@@ -583,20 +616,21 @@ func (r *relayClient) RemoveRule(id int64) {
 }
 
 type relayStatusJSON struct {
-	Enabled   bool             `json:"enabled"`
-	Connected bool             `json:"connected"`
-	Address   string           `json:"address"`
-	Route     string           `json:"route"`
-	Email     string           `json:"email"`
-	Device    string           `json:"device"`
-	EnrollURL string           `json:"enrollUrl,omitempty"`
-	Error     string           `json:"error,omitempty"`
-	Notice    string           `json:"notice,omitempty"`
-	Contacts  []relay.Contact  `json:"contacts"`
-	Incoming  []string         `json:"incoming"`
-	Outgoing  []string         `json:"outgoing"`
-	Approvals []*relayApproval `json:"approvals"`
-	Rules     []relayRule      `json:"rules"`
+	Enabled   bool               `json:"enabled"`
+	Connected bool               `json:"connected"`
+	Address   string             `json:"address"`
+	Route     string             `json:"route"`
+	Email     string             `json:"email"`
+	Device    string             `json:"device"`
+	EnrollURL string             `json:"enrollUrl,omitempty"`
+	Error     string             `json:"error,omitempty"`
+	Notice    string             `json:"notice,omitempty"`
+	Contacts  []relay.Contact    `json:"contacts"`
+	MyDevices []relay.DeviceInfo `json:"myDevices"`
+	Incoming  []string           `json:"incoming"`
+	Outgoing  []string           `json:"outgoing"`
+	Approvals []*relayApproval   `json:"approvals"`
+	Rules     []relayRule        `json:"rules"`
 }
 
 func (r *relayClient) Status() relayStatusJSON {
@@ -609,6 +643,7 @@ func (r *relayClient) Status() relayStatusJSON {
 		Email:     r.state.Email,
 		Error:     r.lastErr,
 		Contacts:  append([]relay.Contact{}, r.state.Contacts...),
+		MyDevices: append([]relay.DeviceInfo{}, r.state.MyDevices...),
 		Incoming:  append([]string{}, r.state.Incoming...),
 		Outgoing:  append([]string{}, r.state.Outgoing...),
 		Approvals: []*relayApproval{},

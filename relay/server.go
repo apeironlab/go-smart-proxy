@@ -141,6 +141,7 @@ func (s *Server) unregister(sess *session) {
 	sess.mu.Unlock()
 	s.Log.Printf("%s/%s disconnected", email, device)
 	s.notifyPresence(email)
+	s.pushState(email, "")
 }
 
 type discard struct{}
@@ -216,6 +217,17 @@ func (s *Server) pushStateDevice(email, device, notice string) {
 	for _, c := range contacts {
 		devices := s.onlineDevices(c)
 		st.Contacts = append(st.Contacts, Contact{Email: c, Online: len(devices) > 0, Devices: devices})
+	}
+	ownOnline := map[string]bool{}
+	s.mu.Lock()
+	for _, sess := range s.sessions {
+		if sess.email == email {
+			ownOnline[sess.device] = true
+		}
+	}
+	s.mu.Unlock()
+	for _, id := range s.Store.Devices(email) {
+		st.MyDevices = append(st.MyDevices, DeviceInfo{ID: id, Online: ownOnline[id]})
 	}
 
 	for _, sess := range targets {
@@ -304,8 +316,9 @@ func (s *Server) handleControl(sess *session, st net.Conn, br *bufio.Reader, hel
 		old.ys.Close() // a newer connection of the same user+device replaces the old one
 	}
 	close(sess.ready)
+	s.Store.RememberDevice(sess.email, device)
 	s.Log.Printf("%s/%s connected", sess.email, device)
-	s.pushStateDevice(sess.email, device, "")
+	s.pushState(sess.email, "")
 	s.notifyPresence(sess.email)
 
 	defer st.Close()
@@ -374,13 +387,17 @@ func (s *Server) handleDial(sess *session, st net.Conn, br *bufio.Reader, req Di
 		fail("invalid request")
 		return
 	}
-	if !s.Store.IsContact(sess.email, via) {
+	if via != sess.email && !s.Store.IsContact(sess.email, via) {
 		fail(via + " is not in your contacts")
 		return
 	}
 	peer, err := s.peer(via, viaDevice)
 	if err != nil {
 		fail(err.Error())
+		return
+	}
+	if peer == sess {
+		fail("cannot use this device as the relay exit")
 		return
 	}
 	ps, err := peer.ys.OpenStream()

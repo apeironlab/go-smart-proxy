@@ -112,6 +112,21 @@ func TestRelayRouteStopsAtRulesOnlyHop(t *testing.T) {
 	}
 }
 
+func TestRelayApprovalIsPerDevice(t *testing.T) {
+	r := &relayClient{rules: []relayRule{{
+		ID: 1, From: "alice@example.com", FromDevice: "laptop", Host: "10.0.0.1", Port: 443,
+	}}}
+	if !r.ruleAllowsLocked("alice@example.com", "laptop", "10.0.0.1", 443) {
+		t.Fatal("the approved device must reuse the rule")
+	}
+	if r.ruleAllowsLocked("alice@example.com", "desktop", "10.0.0.1", 443) {
+		t.Fatal("another device of the same user must require a new approval")
+	}
+	if r.ruleAllowsLocked("alice@example.com", "laptop", "10.0.0.1", 80) {
+		t.Fatal("a different port must require a new approval")
+	}
+}
+
 func TestRelayRouteEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	ca := filepath.Join(dir, "ca")

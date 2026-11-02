@@ -598,20 +598,26 @@ Route syntax:
   one at random.
 - `relay://alice@example.com/quiet-otter-7f3a` — use a specific device.
 
-The Relay page lists the online devices of each contact; the route editor
-autocompletes `relay://email/device` as you type and also suggests hops already
-used in other routes. Device codes are routing labels, not separate
-authentication: devices sharing one certificate all authenticate as the same
-user.
+The Relay page lists **all your known devices** (online and offline), each with
+its usable `relay://you@example.com/device` address. Your devices can be used
+directly, without sending a contact request to yourself; the exit device still
+requires the normal route approval. The page also lists the online devices of
+each contact; the route editor autocompletes `relay://email/device` as you type
+and suggests hops already used in other routes. Device codes are routing labels,
+not separate authentication: devices sharing one certificate all authenticate as
+the same user.
 
 ### Contacts and route approvals
 
 1. Add a contact by e-mail from the Relay page.
 2. The contacted user accepts or refuses the request from their Relay page.
 3. The first time traffic is sent through a contact, the exit side receives an
-   approval request showing contact, device, host and port.
-4. Approve once, remember the route (host/port), or remember it for any port.
-5. Remembered rules can be revoked from the Relay page.
+   approval request showing contact, **device**, host and port.
+4. Approve once, remember the route (device + host/port), or remember it for any
+   port.
+5. Remembered rules are bound to the requesting device: another device of the
+   same user must ask for approval again. Rules can be revoked from the Relay
+   page.
 
 ### Relay server
 
