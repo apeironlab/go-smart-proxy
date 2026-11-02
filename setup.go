@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"crypto/subtle"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -176,6 +177,7 @@ func setupHandler(token, address, socksAddress string, done func()) http.Handler
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		page := strings.ReplaceAll(setupPage, "__ADDRESS__", html.EscapeString(address))
 		page = strings.ReplaceAll(page, "__SOCKS__", html.EscapeString(socksAddress))
+		page = strings.ReplaceAll(page, "__SETUP_I18N__", setupI18nJSON)
 		fmt.Fprint(w, page)
 	})
 
@@ -242,12 +244,15 @@ func writeSetupError(w http.ResponseWriter, status int, msg string) {
 	writeSetupJSON(w, status, map[string]string{"error": msg})
 }
 
+//go:embed setup_i18n.json
+var setupI18nJSON string
+
 const setupPage = `<!doctype html>
 <html lang="it">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Go Smart Proxy — Primo avvio</title>
+<title>Go Smart Proxy — First run</title>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
@@ -289,32 +294,42 @@ const setupPage = `<!doctype html>
   <div class="card">
     <div id="form">
       <div class="logo">Go Smart Proxy</div>
-      <h1>Scegli la master password</h1>
-      <p>
-        Protegge credenziali, certificati e chiavi del relay. La configurazione verrà salvata
-        cifrata in <span class="code">config.yml.enc</span>. Non può essere recuperata.
+      <h1 data-i18n="title">Choose the master password</h1>
+      <p data-i18n="intro">
+        It protects credentials, certificates and relay keys. The configuration will be saved encrypted in
+        <span class="code">config.yml.enc</span>. It cannot be recovered.
       </p>
       <form id="setup-form">
-        <label for="password">Master password</label>
+        <label for="password" data-i18n="password_label">Master password</label>
         <input id="password" type="password" autocomplete="new-password" minlength="8" required autofocus>
-        <div class="hint">Almeno 8 caratteri. Usa una password lunga e conservala al sicuro.</div>
-        <label for="confirm">Ripeti la master password</label>
+        <div class="hint" data-i18n="password_hint">At least 8 characters. Use a long password and keep it safe.</div>
+        <label for="confirm" data-i18n="confirm_label">Repeat the master password</label>
         <input id="confirm" type="password" autocomplete="new-password" minlength="8" required>
-        <button id="submit" type="submit">Crea la configurazione</button>
+        <button id="submit" type="submit" data-i18n="submit">Create configuration</button>
         <div class="error" id="error"></div>
       </form>
     </div>
     <div class="ok" id="ok">
       <div class="check">✓</div>
-      <h1>Tutto pronto</h1>
-      <p>La configurazione cifrata è stata creata. Sto aprendo l'interfaccia…</p>
+      <h1 data-i18n="success_title">All set</h1>
+      <p data-i18n="success_text">The encrypted configuration has been created. Opening the interface…</p>
       <div class="addresses">
-        Proxy HTTP / UI: <span class="code">__ADDRESS__</span><br>
-        Proxy SOCKS5: <span class="code">__SOCKS__</span>
+        <span data-i18n="proxy_label">Proxy HTTP / UI:</span> <span class="code">__ADDRESS__</span><br>
+        <span data-i18n="socks_label">SOCKS5 proxy:</span> <span class="code">__SOCKS__</span>
       </div>
     </div>
   </div>
 <script>
+  const setupI18n = __SETUP_I18N__;
+  const lang = (localStorage.getItem('gsp.language') || navigator.language || 'en').toLowerCase().split('-')[0];
+  const t = (key) => (setupI18n[lang] && setupI18n[lang][key]) || setupI18n.en[key] || key;
+  function applyI18n() {
+    document.documentElement.lang = lang;
+    document.title = t('document_title');
+    for (const el of document.querySelectorAll('[data-i18n]')) el.textContent = t(el.getAttribute('data-i18n'));
+  }
+  applyI18n();
+
   const token = new URLSearchParams(location.search).get('token') || '';
   const form = document.getElementById('setup-form');
   const err = document.getElementById('error');
@@ -323,8 +338,8 @@ const setupPage = `<!doctype html>
     err.textContent = '';
     const password = document.getElementById('password').value;
     const confirm = document.getElementById('confirm').value;
-    if (password.length < 8) { err.textContent = 'La master password deve avere almeno 8 caratteri.'; return; }
-    if (password !== confirm) { err.textContent = 'Le due password non coincidono.'; return; }
+    if (password.length < 8) { err.textContent = t('error_short'); return; }
+    if (password !== confirm) { err.textContent = t('error_mismatch'); return; }
     const btn = document.getElementById('submit');
     btn.disabled = true;
     try {
@@ -334,12 +349,13 @@ const setupPage = `<!doctype html>
         body: JSON.stringify({ password, confirm })
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { err.textContent = data.error || ('Errore ' + res.status); btn.disabled = false; return; }
+      if (!res.ok) { err.textContent = data.error || (t('error_generic') + res.status); btn.disabled = false; return; }
       document.getElementById('form').style.display = 'none';
       document.getElementById('ok').style.display = 'block';
+      applyI18n();
       setTimeout(() => location.replace('/'), 1800);
     } catch (e) {
-      err.textContent = 'Impossibile completare il setup: ' + e;
+      err.textContent = t('error_generic') + e;
       btn.disabled = false;
     }
   });

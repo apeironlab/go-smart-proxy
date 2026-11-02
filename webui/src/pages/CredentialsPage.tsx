@@ -4,10 +4,12 @@ import {
 } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
 import { IconPencil, IconPlus, IconTrash } from '@tabler/icons-react'
+import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import type { Credential } from '../api'
 
 export default function CredentialsPage() {
+  const { t } = useTranslation()
   const [creds, setCreds] = useState<Credential[]>([])
   const [opened, { open, close }] = useDisclosure(false)
   const [error, setError] = useState<string | null>(null)
@@ -47,7 +49,7 @@ export default function CredentialsPage() {
   }
 
   const remove = async (name: string) => {
-    if (!window.confirm(`Eliminare la credenziale "${name}"?`)) return
+    if (!window.confirm(t('Delete the credential "{{name}}"?', { name }))) return
     try {
       await api.deleteCredential(name)
       await load()
@@ -59,18 +61,18 @@ export default function CredentialsPage() {
   return (
     <>
       <Group justify="space-between" mb="md">
-        <Title order={3}>Credenziali</Title>
-        <Button leftSection={<IconPlus size={16} />} onClick={openNew}>Aggiungi</Button>
+        <Title order={3}>{t('Credentials')}</Title>
+        <Button leftSection={<IconPlus size={16} />} onClick={openNew}>{t('Add')}</Button>
       </Group>
 
-      {error && <Alert color="red" mb="md">Errore: {error}</Alert>}
+      {error && <Alert color="red" mb="md">{t('Error:')} {error}</Alert>}
 
       <Table striped highlightOnHover withTableBorder>
         <Table.Thead>
           <Table.Tr>
-            <Table.Th>Nome</Table.Th>
-            <Table.Th>Utente</Table.Th>
-            <Table.Th>Password</Table.Th>
+            <Table.Th>{t('Name')}</Table.Th>
+            <Table.Th>{t('User')}</Table.Th>
+            <Table.Th>{t('Password')}</Table.Th>
             <Table.Th />
           </Table.Tr>
         </Table.Thead>
@@ -80,14 +82,14 @@ export default function CredentialsPage() {
               <Table.Td><Text fw={600}>{c.name}</Text></Table.Td>
               <Table.Td>{c.user}</Table.Td>
               <Table.Td>
-                <Text c="dimmed">{c.hasPassword ? '••••••••' : 'nessuna'}</Text>
+                <Text c="dimmed">{c.hasPassword ? '••••••••' : t('none')}</Text>
               </Table.Td>
               <Table.Td>
                 <Group gap="xs" justify="flex-end">
-                  <ActionIcon variant="subtle" color="blue" onClick={() => openEdit(c)} title="Modifica">
+                  <ActionIcon variant="subtle" color="blue" onClick={() => openEdit(c)} title={t('Edit')}>
                     <IconPencil size={16} />
                   </ActionIcon>
-                  <ActionIcon variant="subtle" color="red" onClick={() => remove(c.name)} title="Elimina">
+                  <ActionIcon variant="subtle" color="red" onClick={() => remove(c.name)} title={t('Delete')}>
                     <IconTrash size={16} />
                   </ActionIcon>
                 </Group>
@@ -97,29 +99,29 @@ export default function CredentialsPage() {
         </Table.Tbody>
       </Table>
 
-      <Modal opened={opened} onClose={close} title={editing ? `Modifica ${editing.name}` : 'Nuova credenziale'} centered>
+      <Modal opened={opened} onClose={close} title={editing ? t('Edit {{name}}', { name: editing.name }) : t('New credential')} centered>
         <Stack gap="sm">
           <TextInput
-            label="Nome"
-            placeholder="es. Azienda"
+            label={t('Name')}
+            placeholder={t('e.g. Company')}
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.currentTarget.value })}
           />
           <TextInput
-            label="Utente"
-            placeholder="username oppure DOMAIN\\username"
+            label={t('User')}
+            placeholder={t('username or DOMAIN\\username')}
             value={form.user}
             onChange={(e) => setForm({ ...form, user: e.currentTarget.value })}
           />
           <PasswordInput
-            label="Password"
-            description={editing ? 'Lascia vuoto per mantenere la password attuale' : undefined}
+            label={t('Password')}
+            description={editing ? t('Leave empty to keep the current password') : undefined}
             value={form.password}
             onChange={(e) => setForm({ ...form, password: e.currentTarget.value })}
           />
           <Group justify="flex-end">
-            <Button variant="default" onClick={close}>Annulla</Button>
-            <Button onClick={save} loading={busy} disabled={!form.name}>Salva</Button>
+            <Button variant="default" onClick={close}>{t('Cancel')}</Button>
+            <Button onClick={save} loading={busy} disabled={!form.name}>{t('Save')}</Button>
           </Group>
         </Stack>
       </Modal>

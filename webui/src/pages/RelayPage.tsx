@@ -3,6 +3,7 @@ import {
   ActionIcon, Alert, Badge, Button, Card, Code, Group, Modal, Stack, Table, Text, Textarea, TextInput, Title,
 } from '@mantine/core'
 import { IconCheck, IconPencil, IconPlus, IconTrash, IconX } from '@tabler/icons-react'
+import { useTranslation } from 'react-i18next'
 import { api, ApiError } from '../api'
 import type { CertificatePrompt, RelayStatus } from '../api'
 
@@ -10,6 +11,7 @@ const formatFingerprint = (fp: string) =>
   fp.replace(/(..)(?!$)/g, '$1:').toUpperCase()
 
 export default function RelayPage() {
+  const { t } = useTranslation()
   const [st, setSt] = useState<RelayStatus | null>(null)
   const [email, setEmail] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -100,80 +102,77 @@ export default function RelayPage() {
   if (!st.enabled || showEnroll) {
     return (
       <Stack>
-        <Title order={3}>Relay</Title>
+        <Title order={3}>{t('Relay')}</Title>
         {error && <Alert color="red" withCloseButton onClose={() => setError(null)}>{error}</Alert>}
         {enrollPhase === 'form' ? (
           <Card withBorder>
-            <Text fw={700} mb="xs">Collega questo dispositivo al relay</Text>
+            <Text fw={700} mb="xs">{t('Connect this device to the relay')}</Text>
             <Text size="sm" c="dimmed" mb="sm">
-              Inserisci l'indirizzo dell'endpoint di enrollment e la tua e-mail. Il relay invierà un
-              codice di conferma; il certificato verrà creato localmente e firmato dal relay.
+              {t('Enter the enrollment endpoint address and your email. The relay will send a confirmation code; the certificate will be created locally and signed by the relay.')}
             </Text>
             <Stack gap="sm">
-              <TextInput label="Indirizzo relay (enrollment)" placeholder="relay.example.com:8444"
+              <TextInput label={t('Relay address (enrollment)')} placeholder="relay.example.com:8444"
                 value={enrollAddress} onChange={(e) => setEnrollAddress(e.currentTarget.value)} />
-              <TextInput label="E-mail" placeholder="nome@dominio.it"
+              <TextInput label={t('Email')} placeholder="nome@dominio.it"
                 value={enrollEmail} onChange={(e) => setEnrollEmail(e.currentTarget.value)} />
-              <Textarea label="CA per l'endpoint di enrollment (opzionale, PEM)"
-                description="Serve solo se l'endpoint HTTPS di enrollment usa una CA interna. La CA del relay mTLS viene fornita dal relay."
+              <Textarea label={t('CA for the enrollment endpoint (optional, PEM)')}
+                description={t('Only needed if the HTTPS enrollment endpoint uses an internal CA. The mTLS relay CA is provided by the relay.')}
                 minRows={3} value={enrollCA} onChange={(e) => setEnrollCA(e.currentTarget.value)} />
               <Group justify="flex-end">
-                {st.enabled && <Button variant="subtle" onClick={() => setShowEnroll(false)}>Annulla</Button>}
+                {st.enabled && <Button variant="subtle" onClick={() => setShowEnroll(false)}>{t('Cancel')}</Button>}
                 <Button onClick={() => requestEnrollment()} loading={busy}
                   disabled={!enrollAddress.trim() || !enrollEmail.trim()}>
-                  Invia richiesta
+                  {t('Send request')}
                 </Button>
               </Group>
             </Stack>
           </Card>
         ) : (
           <Card withBorder>
-            <Text fw={700} mb="xs">Codice inviato a {enrollEmail}</Text>
+            <Text fw={700} mb="xs">{t('Code sent to {{email}}', { email: enrollEmail })}</Text>
             <Text size="sm" c="dimmed" mb="sm">
-              Controlla l'e-mail e inserisci qui il codice di conferma. Il codice scade dopo 15 minuti.
+              {t('Check your email and enter the confirmation code here. The code expires after 15 minutes.')}
             </Text>
             <Group gap="xs" align="flex-end">
-              <TextInput label="Codice" placeholder="ABCD-EFGH" value={enrollCode}
+              <TextInput label={t('Code')} placeholder="ABCD-EFGH" value={enrollCode}
                 onChange={(e) => setEnrollCode(e.currentTarget.value)}
                 onKeyDown={(e) => e.key === 'Enter' && enrollCode.trim() && confirmEnrollment()} />
-              <Button onClick={confirmEnrollment} loading={busy} disabled={!enrollCode.trim()}>Conferma</Button>
-              <Button variant="subtle" onClick={() => setEnrollPhase('form')}>Indietro</Button>
+              <Button onClick={confirmEnrollment} loading={busy} disabled={!enrollCode.trim()}>{t('Confirm')}</Button>
+              <Button variant="subtle" onClick={() => setEnrollPhase('form')}>{t('Back')}</Button>
             </Group>
           </Card>
         )}
 
         <Modal opened={!!certPrompt} onClose={() => setCertPrompt(null)}
-          title="Certificato non riconosciuto" centered size="lg">
+          title={t('Unrecognized certificate')} centered size="lg">
           {certPrompt && (
             <Stack gap="sm">
               <Alert color="yellow">
-                La CA di questo certificato non è conosciuta. Verifica il fingerprint con
-                l'amministratore prima di accettare: da quel momento il proxy si fiderà di questo
-                certificato per completare l'enrollment.
+                {t('The CA for this certificate is unknown. Verify the fingerprint with the administrator before accepting: from that point on, the proxy will trust this certificate to complete the enrollment.')}
               </Alert>
               <div>
-                <Text size="xs" c="dimmed">Soggetto</Text>
+                <Text size="xs" c="dimmed">{t('Subject')}</Text>
                 <Text size="sm">{certPrompt.subject}</Text>
               </div>
               <div>
-                <Text size="xs" c="dimmed">Emittente</Text>
+                <Text size="xs" c="dimmed">{t('Issuer')}</Text>
                 <Text size="sm">{certPrompt.issuer}</Text>
               </div>
               <div>
-                <Text size="xs" c="dimmed">Fingerprint SHA-256</Text>
+                <Text size="xs" c="dimmed">{t('SHA-256 fingerprint')}</Text>
                 <Code style={{ wordBreak: 'break-all' }}>{formatFingerprint(certPrompt.fingerprint)}</Code>
               </div>
               {certPrompt.caFingerprint && (
                 <div>
-                  <Text size="xs" c="dimmed">CA presentata dal server</Text>
+                  <Text size="xs" c="dimmed">{t('CA presented by the server')}</Text>
                   <Text size="sm">{certPrompt.caSubject}</Text>
                   <Code style={{ wordBreak: 'break-all' }}>{formatFingerprint(certPrompt.caFingerprint)}</Code>
                 </div>
               )}
               <Group justify="flex-end">
-                <Button variant="default" onClick={() => setCertPrompt(null)}>Annulla</Button>
+                <Button variant="default" onClick={() => setCertPrompt(null)}>{t('Cancel')}</Button>
                 <Button color="orange" onClick={() => requestEnrollment(certPrompt.fingerprint)} loading={busy}>
-                  Accetta e continua
+                  {t('Accept and continue')}
                 </Button>
               </Group>
             </Stack>
@@ -186,43 +185,43 @@ export default function RelayPage() {
   return (
     <Stack>
       <Group justify="space-between">
-        <Title order={3}>Relay</Title>
+        <Title order={3}>{t('Relay')}</Title>
         <Group gap="xs">
           <Badge color={st.connected ? 'green' : 'red'} variant="light">
-            {st.connected ? 'connesso' : 'non connesso'}
+            {st.connected ? t('connected') : t('not connected')}
           </Badge>
           <Code>{st.address}</Code>
           {st.email && <Badge variant="outline" color="gray">{st.email}</Badge>}
           {st.device && (
             <Group gap={2} wrap="nowrap">
-              <Badge variant="outline" color="grape">device {st.device}</Badge>
-              <ActionIcon size="sm" variant="subtle" color="grape" title="Rinomina dispositivo"
+              <Badge variant="outline" color="grape">{t('device {{id}}', { id: st.device })}</Badge>
+              <ActionIcon size="sm" variant="subtle" color="grape" title={t('Rename device')}
                 onClick={() => { setDeviceValue(st.device); setDeviceOpen(true) }}>
                 <IconPencil size={13} />
               </ActionIcon>
             </Group>
           )}
-          {st.connected && st.route && <Badge variant="outline" color="gray">via {st.route}</Badge>}
+          {st.connected && st.route && <Badge variant="outline" color="gray">{t('via {{route}}', { route: st.route })}</Badge>}
           <Button size="xs" variant="subtle" onClick={() => {
             setEnrollAddress(st.enrollUrl ?? '')
             setEnrollEmail(st.email ?? '')
             setShowEnroll(true)
-          }}>Riconfigura</Button>
+          }}>{t('Reconfigure')}</Button>
         </Group>
       </Group>
 
       {error && <Alert color="red" withCloseButton onClose={() => setError(null)}>{error}</Alert>}
       {st.notice && <Alert color="yellow">{st.notice}</Alert>}
-      {!st.connected && st.error && <Alert color="red" title="Connessione al relay">{st.error}</Alert>}
+      {!st.connected && st.error && <Alert color="red" title={t('Relay connection')}>{st.error}</Alert>}
 
       {st.incoming.length > 0 && (
         <Card withBorder style={{ borderColor: 'var(--mantine-color-yellow-6)' }}>
           <Group justify="space-between" mb="xs">
-            <Text fw={700}>Richieste di contatto</Text>
+            <Text fw={700}>{t('Contact requests')}</Text>
             <Badge color="yellow">{st.incoming.length}</Badge>
           </Group>
           <Text size="xs" c="dimmed" mb="xs">
-            Un utente vuole aggiungerti alla propria rubrica. Accetta o rifiuta per liberare la richiesta.
+            {t('A user wants to add you to their address book. Accept or decline to clear the request.')}
           </Text>
           <Table>
             <Table.Tbody>
@@ -232,10 +231,10 @@ export default function RelayPage() {
                   <Table.Td>
                     <Group gap="xs" justify="flex-end">
                       <Button size="xs" leftSection={<IconCheck size={14} />} onClick={() => run(() => api.relayRespond(e, true))}>
-                        Accetta
+                        {t('Accept')}
                       </Button>
                       <Button size="xs" color="red" variant="light" leftSection={<IconX size={14} />} onClick={() => run(() => api.relayRespond(e, false))}>
-                        Rifiuta
+                        {t('Decline')}
                       </Button>
                     </Group>
                   </Table.Td>
@@ -247,10 +246,9 @@ export default function RelayPage() {
       )}
 
       <Card withBorder>
-        <Text fw={700} mb="xs">I miei dispositivi</Text>
+        <Text fw={700} mb="xs">{t('My devices')}</Text>
         <Text size="xs" c="dimmed" mb="xs">
-          I tuoi dispositivi si possono usare direttamente, senza richiesta di contatto:
-          l'uscita richiederà comunque l'approvazione della rotta.
+          {t('Your devices can be used directly, without a contact request; outbound traffic will still require route approval.')}
         </Text>
         <Table>
           <Table.Tbody>
@@ -259,7 +257,7 @@ export default function RelayPage() {
                 <Table.Td>{d.id}</Table.Td>
                 <Table.Td>
                   <Badge size="sm" variant="light" color={d.online ? 'green' : 'gray'}>
-                    {d.online ? 'online' : 'offline'}
+                    {d.online ? t('online') : t('offline')}
                   </Badge>
                 </Table.Td>
                 <Table.Td>
@@ -269,14 +267,14 @@ export default function RelayPage() {
             ))}
           </Table.Tbody>
         </Table>
-        {!(st.myDevices ?? []).length && <Text size="sm" c="dimmed">Nessun dispositivo registrato.</Text>}
+        {!(st.myDevices ?? []).length && <Text size="sm" c="dimmed">{t('No registered devices.')}</Text>}
       </Card>
 
       {st.approvals.length > 0 && (
         <Card withBorder>
-          <Text fw={700} mb="xs">Richieste di rotta da approvare</Text>
+          <Text fw={700} mb="xs">{t('Route requests to approve')}</Text>
           <Text size="xs" c="dimmed" mb="xs">
-            Un contatto vuole uscire dalla tua rete verso questa destinazione. Scade dopo 60 secondi.
+            {t('A contact wants to exit your network toward this destination. Expires after 60 seconds.')}
           </Text>
           <Table>
             <Table.Tbody>
@@ -284,22 +282,22 @@ export default function RelayPage() {
                 <Table.Tr key={a.id}>
                   <Table.Td>
                     <Text fw={600}>{a.from}</Text>
-                    {a.fromDevice && <Text size="xs" c="dimmed">device {a.fromDevice}</Text>}
+                    {a.fromDevice && <Text size="xs" c="dimmed">{t('device {{id}}', { id: a.fromDevice })}</Text>}
                   </Table.Td>
                   <Table.Td><Code>{a.host}:{a.port}</Code></Table.Td>
                   <Table.Td>
                     <Group gap="xs" justify="flex-end">
                       <Button size="xs" variant="default" onClick={() => run(() => api.relayDecide(a.id, { allow: true }))}>
-                        Consenti una volta
+                        {t('Allow once')}
                       </Button>
                       <Button size="xs" onClick={() => run(() => api.relayDecide(a.id, { allow: true, always: true }))}>
-                        Consenti sempre
+                        {t('Always allow')}
                       </Button>
                       <Button size="xs" variant="light" onClick={() => run(() => api.relayDecide(a.id, { allow: true, always: true, anyPort: true }))}>
-                        Sempre, tutte le porte
+                        {t('Always, all ports')}
                       </Button>
                       <Button size="xs" color="red" variant="light" onClick={() => run(() => api.relayDecide(a.id, { allow: false }))}>
-                        Nega
+                        {t('Deny')}
                       </Button>
                     </Group>
                   </Table.Td>
@@ -312,7 +310,7 @@ export default function RelayPage() {
 
       <Card withBorder>
         <Group justify="space-between" mb="xs">
-          <Text fw={700}>Rubrica</Text>
+          <Text fw={700}>{t('Contacts')}</Text>
           <form
             onSubmit={(ev) => {
               ev.preventDefault()
@@ -321,10 +319,10 @@ export default function RelayPage() {
             }}
           >
             <Group gap="xs">
-              <TextInput size="xs" placeholder="indirizzo e-mail del contatto" value={email}
+              <TextInput size="xs" placeholder={t('contact email address')} value={email}
                 onChange={(e) => setEmail(e.currentTarget.value)} w={280} />
               <Button size="xs" type="submit" leftSection={<IconPlus size={14} />} disabled={!st.connected}>
-                Invia richiesta
+                {t('Send request')}
               </Button>
             </Group>
           </form>
@@ -334,7 +332,7 @@ export default function RelayPage() {
             {st.contacts.map((c) => (
               <Table.Tr key={c.email}>
                 <Table.Td>{c.email}</Table.Td>
-                <Table.Td><Badge size="sm" variant="light" color={c.online ? 'green' : 'gray'}>{c.online ? 'online' : 'offline'}</Badge></Table.Td>
+                <Table.Td><Badge size="sm" variant="light" color={c.online ? 'green' : 'gray'}>{c.online ? t('online') : t('offline')}</Badge></Table.Td>
                 <Table.Td>
                   <Group gap={4}>
                     {(c.devices ?? []).map((d) => (
@@ -345,8 +343,8 @@ export default function RelayPage() {
                   </Group>
                 </Table.Td>
                 <Table.Td>
-                  <ActionIcon variant="subtle" color="red" title="Rimuovi contatto"
-                    onClick={() => window.confirm(`Rimuovere ${c.email}?`) && run(() => api.relayRemove(c.email))}>
+                  <ActionIcon variant="subtle" color="red" title={t('Remove contact')}
+                    onClick={() => window.confirm(t('Remove {{email}}?', { email: c.email })) && run(() => api.relayRemove(c.email))}>
                     <IconTrash size={16} />
                   </ActionIcon>
                 </Table.Td>
@@ -355,10 +353,10 @@ export default function RelayPage() {
             {st.outgoing.map((e) => (
               <Table.Tr key={e}>
                 <Table.Td>{e}</Table.Td>
-                <Table.Td><Badge size="sm" variant="light" color="yellow">in attesa</Badge></Table.Td>
+                <Table.Td><Badge size="sm" variant="light" color="yellow">{t('pending')}</Badge></Table.Td>
                 <Table.Td />
                 <Table.Td>
-                  <ActionIcon variant="subtle" color="gray" title="Annulla richiesta" onClick={() => run(() => api.relayRemove(e))}>
+                  <ActionIcon variant="subtle" color="gray" title={t('Cancel request')} onClick={() => run(() => api.relayRemove(e))}>
                     <IconX size={16} />
                   </ActionIcon>
                 </Table.Td>
@@ -366,27 +364,27 @@ export default function RelayPage() {
             ))}
           </Table.Tbody>
         </Table>
-        {!st.contacts.length && !st.outgoing.length && <Text c="dimmed" size="sm">Nessun contatto</Text>}
+        {!st.contacts.length && !st.outgoing.length && <Text c="dimmed" size="sm">{t('No contacts')}</Text>}
         <Text size="xs" c="dimmed" mt="xs">
-          Per uscire dalla rete di un contatto usa <Code>relay://email/device</Code> come primo proxy
-          della catena di una route. Con un solo device online basta <Code>relay://email</Code>.
-          I tuoi dispositivi sono utilizzabili direttamente, senza richiesta di contatto.
+          {t("To exit a contact's network, use")} <Code>relay://email/device</Code>{' '}
+          {t('as the first proxy in a route chain. With only one device online,')} <Code>relay://email</Code>{' '}
+          {t('is enough. Your devices can be used directly, without a contact request.')}
         </Text>
       </Card>
 
       <Card withBorder>
-        <Text fw={700} mb="xs">Rotte approvate (chi può uscire dalla tua rete)</Text>
+        <Text fw={700} mb="xs">{t('Approved routes (who can exit your network)')}</Text>
         <Table>
           <Table.Tbody>
             {st.rules.map((r) => (
               <Table.Tr key={r.id}>
                 <Table.Td>
                   <Text>{r.from}</Text>
-                  {r.fromDevice && <Text size="xs" c="dimmed">device {r.fromDevice}</Text>}
+                  {r.fromDevice && <Text size="xs" c="dimmed">{t('device {{id}}', { id: r.fromDevice })}</Text>}
                 </Table.Td>
                 <Table.Td><Code>{r.host}:{r.port || '*'}</Code></Table.Td>
                 <Table.Td>
-                  <ActionIcon variant="subtle" color="red" title="Revoca" onClick={() => run(() => api.relayDeleteRule(r.id))}>
+                  <ActionIcon variant="subtle" color="red" title={t('Revoke')} onClick={() => run(() => api.relayDeleteRule(r.id))}>
                     <IconTrash size={16} />
                   </ActionIcon>
                 </Table.Td>
@@ -394,20 +392,19 @@ export default function RelayPage() {
             ))}
           </Table.Tbody>
         </Table>
-        {!st.rules.length && <Text c="dimmed" size="sm">Nessuna rotta approvata</Text>}
+        {!st.rules.length && <Text c="dimmed" size="sm">{t('No approved routes')}</Text>}
       </Card>
 
-      <Modal opened={deviceOpen} onClose={() => setDeviceOpen(false)} title="Nome del dispositivo" centered>
+      <Modal opened={deviceOpen} onClose={() => setDeviceOpen(false)} title={t('Device name')} centered>
         <Stack gap="sm">
           <Text size="sm" c="dimmed">
-            Identifica questo PC agli occhi dei contatti, così possono instradare verso un device
-            specifico. Lettere minuscole, numeri, '-' e '_' (max 40 caratteri).
+            {t("Identify this PC to your contacts so they can route to a specific device. Lowercase letters, numbers, '-' and '_' (max 40 characters).")}
           </Text>
-          <TextInput value={deviceValue} placeholder="es. quiet-otter-7f3a"
+          <TextInput value={deviceValue} placeholder={t('e.g. quiet-otter-7f3a')}
             onChange={(e) => setDeviceValue(e.currentTarget.value)} />
           <Group justify="flex-end">
-            <Button variant="default" onClick={() => setDeviceOpen(false)}>Annulla</Button>
-            <Button onClick={saveDevice} disabled={!deviceValue.trim()}>Salva</Button>
+            <Button variant="default" onClick={() => setDeviceOpen(false)}>{t('Cancel')}</Button>
+            <Button onClick={saveDevice} disabled={!deviceValue.trim()}>{t('Save')}</Button>
           </Group>
         </Stack>
       </Modal>

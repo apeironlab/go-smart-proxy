@@ -5,6 +5,8 @@ import {
 } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
 import { IconArrowDown, IconArrowUp, IconPencil, IconPlus, IconRefresh, IconTrash } from '@tabler/icons-react'
+import type { TFunction } from 'i18next'
+import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import type { Credential, Hop, RelayConfigInfo, RelayStatus, RouteInfo, StateInfo, SystemProxyState } from '../api'
 
@@ -24,16 +26,16 @@ function Info({ label, value }: { label: string; value: string }) {
   )
 }
 
-function chainText(r: RouteInfo) {
+function chainText(r: RouteInfo, t: TFunction) {
   if (r.hops?.length) {
     return r.hops
       .map((h, i) => {
         const text = h.dynamic
-          ? 'dinamico'
+          ? t('dynamic')
           : h.pacUrl
             ? `pac ${h.pacUrl}`
             : (r.chain?.[i] ?? h.proxyUrl ?? '')
-        return h.rulesOnly ? `${text} (regole)` : text
+        return h.rulesOnly ? t('{{text}} (rules)', { text }) : text
       })
       .join(' → ')
   }
@@ -47,6 +49,7 @@ const hopKind = (h: HopForm): HopKind =>
   h.kind ?? (h.dynamic ? 'dynamic' : h.pacUrl ? 'pac' : 'proxy')
 
 export default function ConfigPage() {
+  const { t } = useTranslation()
   const [state, setState] = useState<StateInfo | null>(null)
   const [relaySt, setRelaySt] = useState<RelayStatus | null>(null)
   const [creds, setCreds] = useState<Credential[]>([])
@@ -108,8 +111,8 @@ export default function ConfigPage() {
 
   useEffect(() => {
     load()
-    const t = setInterval(load, 5000)
-    return () => clearInterval(t)
+    const timer = setInterval(load, 5000)
+    return () => clearInterval(timer)
   }, [load])
 
   const hostsObject = () =>
@@ -248,7 +251,7 @@ export default function ConfigPage() {
   }
 
   const remove = async (name: string) => {
-    if (!window.confirm(`Eliminare la route "${name}"?`)) return
+    if (!window.confirm(t('Delete route "{{name}}"?', { name }))) return
     try {
       await api.deleteRoute(name)
       load()
@@ -307,41 +310,41 @@ export default function ConfigPage() {
 
   return (
     <>
-      <Title order={3} mb="md">Configurazione</Title>
-      {error && <Alert color="red" mb="md">Errore: {error}</Alert>}
+      <Title order={3} mb="md">{t('Configuration')}</Title>
+      {error && <Alert color="red" mb="md">{t('Error: {{error}}', { error })}</Alert>}
 
       <Card withBorder mb="lg">
-        <Text fw={700} mb="sm">Rete</Text>
+        <Text fw={700} mb="sm">{t('Network')}</Text>
         <SimpleGrid cols={{ base: 1, sm: 3, md: 5 }}>
-          <Info label="Interfaccia corrente" value={state?.iface ?? ''} />
-          <Info label="Gateway" value={state?.gateway ?? ''} />
-          <Info label="Network" value={state?.network ?? ''} />
-          <Info label="Uptime" value={state ? `${Math.floor(state.uptimeSeconds / 60)}m` : ''} />
-          <Info label="Connessioni attive" value={String(state?.activeConns ?? 0)} />
+          <Info label={t('Current interface')} value={state?.iface ?? ''} />
+          <Info label={t('Gateway')} value={state?.gateway ?? ''} />
+          <Info label={t('Network')} value={state?.network ?? ''} />
+          <Info label={t('Uptime')} value={state ? `${Math.floor(state.uptimeSeconds / 60)}m` : ''} />
+          <Info label={t('Active connections')} value={String(state?.activeConns ?? 0)} />
         </SimpleGrid>
         <Group mt="md" align="flex-end">
           <TextInput
-            label="Indirizzo di ascolto"
-            description="Il riavvio del listener è automatico"
+            label={t('Listen address')}
+            description={t('The listener restarts automatically')}
             style={{ minWidth: 220 }}
             value={address}
             onChange={(e) => setAddress(e.currentTarget.value)}
           />
           <TextInput
-            label="SOCKS5"
-            description="Vuoto = disabilitato"
+            label={t('SOCKS5')}
+            description={t('Empty = disabled')}
             placeholder="127.0.0.1:1080"
             style={{ minWidth: 200 }}
             value={socksAddress}
             onChange={(e) => setSocksAddress(e.currentTarget.value)}
           />
-          <Button onClick={saveConfig} disabled={!address}>Salva</Button>
+          <Button onClick={saveConfig} disabled={!address}>{t('Save')}</Button>
           <Select
-            label="Route forzata"
-            description="Vuota = automatica. Le regole di destinazione sono valutate solo in Auto."
+            label={t('Forced route')}
+            description={t('Empty = automatic. Destination rules are only evaluated in Auto.')}
             style={{ minWidth: 220 }}
             clearable
-            placeholder="Auto"
+            placeholder={t('Auto')}
             data={selectableRoutes.map((r) => ({ value: r.name, label: r.name }))}
             value={forceRoute || null}
             onChange={(v) => applyForceRoute(v)}
@@ -349,8 +352,8 @@ export default function ConfigPage() {
         </Group>
         <Switch
           mt="md"
-          label="PAC hijack (wpad)"
-          description="La VPN impone il PAC aziendale (http://wpad/wpad.dat): il proxy lo serve lui stesso su porta 80 e fa risolvere l'host a 127.0.0.1, così i browser passano dal proxy senza mai toccare le impostazioni della VPN (serve sudo)"
+          label={t('PAC hijack (wpad)')}
+          description={t('The VPN enforces the corporate PAC (http://wpad/wpad.dat): the proxy serves it itself on port 80 and resolves the host to 127.0.0.1, so browsers go through the proxy without ever touching the VPN settings (requires sudo)')}
           checked={pacHijack}
           onChange={(e) => {
             const v = e.currentTarget.checked
@@ -363,8 +366,8 @@ export default function ConfigPage() {
         {pacHijack && (
           <TextInput
             mt="xs"
-            label="Host del PAC da intercettare"
-            description="Voce aggiunta a /etc/hosts (default: wpad)"
+            label={t('PAC host to intercept')}
+            description={t('Entry added to /etc/hosts (default: wpad)')}
             style={{ maxWidth: 280 }}
             value={pacHijackHost}
             onChange={(e) => setPacHijackHost(e.currentTarget.value)}
@@ -373,8 +376,8 @@ export default function ConfigPage() {
         )}
         <Switch
           mt="md"
-          label="Reimposta proxy di sistema al cambio rete"
-          description="Con Pulse connesso riscrive solo lo stato runtime del servizio Pulse (via scutil, nessun conflitto né riconnessioni); senza VPN usa networksetup"
+          label={t('Reset system proxy on network change')}
+          description={t('With Pulse connected it only rewrites the runtime state of the Pulse service (via scutil, no conflict or reconnections); without VPN it uses networksetup')}
           checked={sysProxy}
           onChange={(e) => {
             const v = e.currentTarget.checked
@@ -386,8 +389,8 @@ export default function ConfigPage() {
         />
         <TagsInput
           mt="md"
-          label="Esclusioni proxy di sistema"
-          description="Interfacce o nomi di servizio da non toccare (es. utun4, VPN): evita il conflitto col client VPN che riconnette in continuazione"
+          label={t('System proxy exclusions')}
+          description={t('Interfaces or service names to leave alone (e.g. utun4, VPN): avoids conflicts with the VPN client that keeps reconnecting')}
           placeholder="utun4"
           value={exclude}
           onChange={(v) => {
@@ -400,150 +403,146 @@ export default function ConfigPage() {
         {sysProxyState && (
           <>
             <Group gap="xs" mt="sm">
-              <Text size="sm" fw={600}>Proxy di sistema effettivo (visto da Chrome):</Text>
+              <Text size="sm" fw={600}>{t('Effective system proxy (as seen by Chrome):')}</Text>
               <Badge
                 color={sysProxyState.httpEnabled && sysProxyState.httpProxy ? 'green' : 'red'}
                 variant="light"
               >
-                HTTP: {sysProxyState.httpEnabled ? `${sysProxyState.httpProxy}:${sysProxyState.httpPort}` : 'disabilitato'}
+                HTTP: {sysProxyState.httpEnabled ? `${sysProxyState.httpProxy}:${sysProxyState.httpPort}` : t('disabled')}
               </Badge>
               <Badge
                 color={sysProxyState.httpsEnabled && sysProxyState.httpsProxy ? 'green' : 'red'}
                 variant="light"
               >
-                HTTPS: {sysProxyState.httpsEnabled ? `${sysProxyState.httpsProxy}:${sysProxyState.httpsPort}` : 'disabilitato'}
+                HTTPS: {sysProxyState.httpsEnabled ? `${sysProxyState.httpsProxy}:${sysProxyState.httpsPort}` : t('disabled')}
               </Badge>
               <Badge color={sysProxyState.pacEnabled ? 'red' : 'gray'} variant="light">
-                PAC: {sysProxyState.pacEnabled ? `attivo (${sysProxyState.pacUrl}) — ha la precedenza!` : 'disattivato'}
+                PAC: {sysProxyState.pacEnabled ? t('active ({{url}}) — takes precedence!', { url: sysProxyState.pacUrl }) : t('disabled')}
               </Badge>
             </Group>
             <Text size="xs" c="dimmed" mt={4}>
-              Servizio primario: <Code>{sysProxyState.primaryService || '?'}</Code>
+              {t('Primary service:')} <Code>{sysProxyState.primaryService || '?'}</Code>
               {sysProxyState.vpnService && (
                 <>
-                  {' '}· Servizio VPN dinamico: <Code>{sysProxyState.vpnService}</Code>{' '}
-                  · Proxies VPN:{' '}
+                  {' '}· {t('Dynamic VPN service:')} <Code>{sysProxyState.vpnService}</Code>{' '}
+                  · {t('VPN proxies:')}{' '}
                   <Code>
-                    {sysProxyState.vpnHttpEnabled ? `${sysProxyState.vpnHttpProxy}:${sysProxyState.vpnHttpPort}` : 'HTTP off'}
+                    {sysProxyState.vpnHttpEnabled ? `${sysProxyState.vpnHttpProxy}:${sysProxyState.vpnHttpPort}` : t('HTTP off')}
                     {' / '}
-                    {sysProxyState.vpnHttpsEnabled ? `${sysProxyState.vpnHttpsProxy}:${sysProxyState.vpnHttpsPort}` : 'HTTPS off'}
-                    {sysProxyState.vpnPacEnabled ? ' / PAC ON' : ''}
+                    {sysProxyState.vpnHttpsEnabled ? `${sysProxyState.vpnHttpsProxy}:${sysProxyState.vpnHttpsPort}` : t('HTTPS off')}
+                    {sysProxyState.vpnPacEnabled ? ` / ${t('PAC ON')}` : ''}
                   </Code>
                 </>
               )}
             </Text>
             <Text size="xs" c="dimmed" mt={4}>
-              Eccezioni (bypass): {(sysProxyState.exceptions ?? []).join(', ') || 'nessuna'}
+              {t('Exclusions (bypass):')} {(sysProxyState.exceptions ?? []).join(', ') || t('none')}
             </Text>
             {sysProxyState.pacEnabled && (
-              <Alert color="red" mt="sm" title="PAC attivo">
-                Il PAC ({sysProxyState.pacUrl}) ha la precedenza sul proxy manuale: i browser lo useranno
-                al posto di questo proxy. Attiva "Reimposta proxy di sistema" per disattivarlo.
+              <Alert color="red" mt="sm" title={t('PAC active')}>
+                {t('The PAC ({{url}}) takes precedence over the manual proxy: browsers will use it instead of this proxy. Enable "Reset system proxy" to disable it.', { url: sysProxyState.pacUrl })}
               </Alert>
             )}
           </>
         )}
         <Text size="xs" c="dimmed" mt="sm">
-          La configurazione, incluse le credenziali e la chiave privata del relay, è cifrata in{' '}
-          <Code>config.yml.enc</Code> con la master password. Su macOS la chiave derivata può essere
-          sbloccata con Touch ID tramite il Keychain.
+          {t('The configuration, including credentials and the relay private key, is encrypted in')}{' '}
+          <Code>config.yml.enc</Code>{' '}
+          {t('with the master password. On macOS the derived key can be unlocked with Touch ID through the Keychain.')}
         </Text>
       </Card>
 
       <Card withBorder mb="lg">
         <Group justify="space-between" mb="xs">
           <div>
-            <Text fw={700}>Host fissi</Text>
+            <Text fw={700}>{t('Fixed hosts')}</Text>
             <Text size="xs" c="dimmed">
-              Risolvi un hostname a un IP fisso, ignorando il DNS (utile per nomi interni non
-              risolvibili dalla VPN). Lascia vuoto per usare il DNS normale.
+              {t('Resolve a hostname to a fixed IP, ignoring DNS (useful for internal names that cannot be resolved through the VPN). Leave empty to use normal DNS.')}
             </Text>
           </div>
           <Button size="xs" leftSection={<IconPlus size={14} />}
             onClick={() => setHosts([...hosts, { host: '', ip: '' }])}>
-            Aggiungi
+            {t('Add')}
           </Button>
         </Group>
         <Stack gap="xs">
           {hosts.map((h, i) => (
             <Group key={i} gap="xs" align="flex-end">
-              <TextInput style={{ flex: 2 }} label={i === 0 ? 'Host' : undefined}
+              <TextInput style={{ flex: 2 }} label={i === 0 ? t('Host') : undefined}
                 placeholder="repo.intra.example.com" value={h.host}
                 onChange={(e) => setHostRow(i, { host: e.currentTarget.value })} />
-              <TextInput style={{ flex: 1 }} label={i === 0 ? 'IP' : undefined}
+              <TextInput style={{ flex: 1 }} label={i === 0 ? t('IP') : undefined}
                 placeholder="192.0.2.40" value={h.ip}
                 onChange={(e) => setHostRow(i, { ip: e.currentTarget.value })} />
-              <ActionIcon variant="subtle" color="red" title="Rimuovi"
+              <ActionIcon variant="subtle" color="red" title={t('Remove')}
                 onClick={() => setHosts(hosts.filter((_, j) => j !== i))}>
                 <IconTrash size={16} />
               </ActionIcon>
             </Group>
           ))}
-          {!hosts.length && <Text size="sm" c="dimmed">Nessun host fisso.</Text>}
+          {!hosts.length && <Text size="sm" c="dimmed">{t('No fixed hosts.')}</Text>}
         </Stack>
         <Group justify="flex-end" mt="sm">
-          <Button variant="light" onClick={saveConfig}>Salva host</Button>
+          <Button variant="light" onClick={saveConfig}>{t('Save hosts')}</Button>
         </Group>
       </Card>
 
       <Card withBorder mb="lg">
         <Group justify="space-between" mb="xs">
           <div>
-            <Text fw={700}>Relay</Text>
+            <Text fw={700}>{t('Relay')}</Text>
             <Text size="xs" c="dimmed">
-              Configurazione della connessione mTLS al relay. Per ottenere il certificato via
-              e-mail usa la pagina Relay; qui puoi anche incollare un certificato manuale.
+              {t('mTLS connection configuration for the relay. To get the certificate by email use the Relay page; here you can also paste a manual certificate.')}
             </Text>
           </div>
           <Badge color={relayCfg?.hasCertificate ? 'green' : 'gray'} variant="light">
-            certificato {relayCfg?.hasCertificate ? 'presente' : 'assente'}
+            {relayCfg?.hasCertificate ? t('certificate present') : t('certificate missing')}
           </Badge>
         </Group>
         <SimpleGrid cols={{ base: 1, sm: 2 }} mb="sm">
-          <TextInput label="Indirizzo mTLS" placeholder="relay.example.com:8443"
+          <TextInput label={t('mTLS address')} placeholder="relay.example.com:8443"
             value={relayAddress} onChange={(e) => setRelayAddress(e.currentTarget.value)} />
-          <Select label="Route per raggiungere il relay" clearable placeholder="Automatica"
+          <Select label={t('Route to reach the relay')} clearable placeholder={t('Automatic')}
             data={selectableRoutes.map((r) => ({ value: r.name, label: r.name }))}
             value={relayRoute || null} onChange={(v) => setRelayRoute(v ?? '')} />
         </SimpleGrid>
-        <Switch label="Consenti ai contatti di raggiungere servizi su questa macchina"
-          description="AllowLocal: sconsigliato se non strettamente necessario."
+        <Switch label={t('Allow contacts to reach services on this machine')}
+          description={t('AllowLocal: not recommended unless strictly necessary.')}
           checked={relayAllowLocal} onChange={(e) => setRelayAllowLocal(e.currentTarget.checked)} />
         <Group justify="space-between" mt="sm">
           <Text size="xs" c="dimmed">
-            {relayCfg?.device ? <>Device: <Code>{relayCfg.device}</Code> (modificabile dalla pagina Relay)</> : 'Device non ancora assegnato'}
+            {relayCfg?.device ? <>{t('Device:')} <Code>{relayCfg.device}</Code> {t('(editable from the Relay page)')}</> : t('Device not yet assigned')}
           </Text>
           <Button variant="light" onClick={() => saveRelay(false)} disabled={!relayAddress.trim()}>
-            Salva relay
+            {t('Save relay')}
           </Button>
         </Group>
 
         <Accordion mt="sm" variant="contained">
           <Accordion.Item value="cert">
             <Accordion.Control>
-              <Text size="sm" fw={600}>Certificato manuale</Text>
+              <Text size="sm" fw={600}>{t('Manual certificate')}</Text>
             </Accordion.Control>
             <Accordion.Panel>
               <Stack gap="xs">
                 <Text size="xs" c="dimmed">
-                  Lascia vuoto per mantenere il certificato attuale. Il contenuto viene salvato
-                  solo nel config cifrato e non viene più restituito dall'API.
+                  {t('Leave empty to keep the current certificate. The content is saved only in the encrypted config and is no longer returned by the API.')}
                 </Text>
-                <Textarea label="Certificato client (PEM)" minRows={3} value={relayCert}
+                <Textarea label={t('Client certificate (PEM)')} minRows={3} value={relayCert}
                   onChange={(e) => setRelayCert(e.currentTarget.value)} autosize />
-                <Textarea label="Chiave privata client (PEM)" minRows={3} value={relayKey}
+                <Textarea label={t('Client private key (PEM)')} minRows={3} value={relayKey}
                   onChange={(e) => setRelayKey(e.currentTarget.value)} autosize />
-                <Textarea label="CA del relay (PEM, opzionale)" minRows={2} value={relayCA}
+                <Textarea label={t('Relay CA (PEM, optional)')} minRows={2} value={relayCA}
                   onChange={(e) => setRelayCA(e.currentTarget.value)} autosize />
                 <Group justify="space-between">
                   <Button variant="subtle" color="red"
-                    onClick={() => window.confirm('Rimuovere il certificato e la chiave del relay?') && saveRelay(true)}
+                    onClick={() => window.confirm(t('Remove the relay certificate and key?')) && saveRelay(true)}
                     disabled={!relayCfg?.hasCertificate}>
-                    Rimuovi certificato
+                    {t('Remove certificate')}
                   </Button>
                   <Button onClick={() => saveRelay(false)}
                     disabled={(!relayCert && !relayKey && !relayCA) || !relayAddress.trim()}>
-                    Salva certificato
+                    {t('Save certificate')}
                   </Button>
                 </Group>
               </Stack>
@@ -553,20 +552,20 @@ export default function ConfigPage() {
       </Card>
 
       <Group justify="space-between" mb="sm">
-        <Title order={4}>Route</Title>
-        <Button leftSection={<IconPlus size={16} />} onClick={openNew}>Aggiungi</Button>
+        <Title order={4}>{t('Routes')}</Title>
+        <Button leftSection={<IconPlus size={16} />} onClick={openNew}>{t('Add')}</Button>
       </Group>
 
       <Table striped highlightOnHover withTableBorder>
         <Table.Thead>
           <Table.Tr>
-            <Table.Th>Nome</Table.Th>
-            <Table.Th>Iface</Table.Th>
-            <Table.Th>Gateway</Table.Th>
-            <Table.Th>Net</Table.Th>
-            <Table.Th>PAC / Proxy</Table.Th>
-            <Table.Th>Applicabile</Table.Th>
-            <Table.Th>PAC</Table.Th>
+            <Table.Th>{t('Name')}</Table.Th>
+            <Table.Th>{t('Iface')}</Table.Th>
+            <Table.Th>{t('Gateway')}</Table.Th>
+            <Table.Th>{t('Net')}</Table.Th>
+            <Table.Th>{t('PAC / Proxy')}</Table.Th>
+            <Table.Th>{t('Applicable')}</Table.Th>
+            <Table.Th>{t('PAC')}</Table.Th>
             <Table.Th />
           </Table.Tr>
         </Table.Thead>
@@ -576,19 +575,19 @@ export default function ConfigPage() {
               <Table.Td>
                 <Group gap={6} wrap="nowrap">
                   <Text fw={600}>{r.name}</Text>
-                  {r.rulesOnly && <Badge size="xs" variant="light">regole</Badge>}
+                  {r.rulesOnly && <Badge size="xs" variant="light">{t('rules')}</Badge>}
                 </Group>
               </Table.Td>
               <Table.Td>{r.iface || '-'}</Table.Td>
               <Table.Td>{r.gateway || '-'}</Table.Td>
               <Table.Td>{r.net || '-'}</Table.Td>
               <Table.Td>
-                <Text size="sm" truncate="end" maw={220}>{chainText(r)}</Text>
+                <Text size="sm" truncate="end" maw={220}>{chainText(r, t)}</Text>
               </Table.Td>
               <Table.Td>
                 <Tooltip label={r.whyNot || 'OK'} disabled={!r.whyNot}>
                   <Badge size="sm" color={r.applicable ? 'green' : 'red'} variant="light">
-                    {r.applicable ? 'sì' : 'no'}
+                    {r.applicable ? t('yes') : t('no')}
                   </Badge>
                 </Tooltip>
               </Table.Td>
@@ -601,25 +600,25 @@ export default function ConfigPage() {
               </Table.Td>
               <Table.Td>
                 <Group gap="xs" justify="flex-end">
-                  <ActionIcon variant="subtle" color="gray" title="Sposta su"
+                  <ActionIcon variant="subtle" color="gray" title={t('Move up')}
                     disabled={routePos(r.name) <= 0} onClick={() => moveRoute(r.name, -1)}>
                     <IconArrowUp size={16} />
                   </ActionIcon>
-                  <ActionIcon variant="subtle" color="gray" title="Sposta giù"
+                  <ActionIcon variant="subtle" color="gray" title={t('Move down')}
                     disabled={routePos(r.name) < 0 || routePos(r.name) >= configRouteNames.length - 1}
                     onClick={() => moveRoute(r.name, 1)}>
                     <IconArrowDown size={16} />
                   </ActionIcon>
                   {r.pacStatus !== 'none' && (
-                    <ActionIcon variant="subtle" color="blue" title="Ricaricare il PAC"
+                    <ActionIcon variant="subtle" color="blue" title={t('Reload PAC')}
                       onClick={() => api.refreshPac(r.name).then(load).catch((e) => setError(String(e)))}>
                       <IconRefresh size={16} />
                     </ActionIcon>
                   )}
-                  <ActionIcon variant="subtle" color="blue" onClick={() => openEdit(r)} title="Modifica">
+                  <ActionIcon variant="subtle" color="blue" onClick={() => openEdit(r)} title={t('Edit')}>
                     <IconPencil size={16} />
                   </ActionIcon>
-                  <ActionIcon variant="subtle" color="red" onClick={() => remove(r.name)} title="Elimina">
+                  <ActionIcon variant="subtle" color="red" onClick={() => remove(r.name)} title={t('Delete')}>
                     <IconTrash size={16} />
                   </ActionIcon>
                 </Group>
@@ -632,52 +631,51 @@ export default function ConfigPage() {
       <Accordion mt="lg" variant="separated">
         <Accordion.Item value="dns">
           <Accordion.Control>
-            <Text fw={600}>Cache DNS ({state?.dns.length ?? 0} voci)</Text>
+            <Text fw={600}>{t('DNS cache ({{count}} entries)', { count: state?.dns.length ?? 0 })}</Text>
           </Accordion.Control>
           <Accordion.Panel>
             {state?.dns.length ? (
               <Table striped withTableBorder>
                 <Table.Thead>
-                  <Table.Tr><Table.Th>Host</Table.Th><Table.Th>IP</Table.Th></Table.Tr>
+                  <Table.Tr><Table.Th>{t('Host')}</Table.Th><Table.Th>{t('IP')}</Table.Th></Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
                   {state.dns.map((d) => (
                     <Table.Tr key={d.host}>
                       <Table.Td>{d.host}</Table.Td>
-                      <Table.Td><Code>{d.ip || '(non risolto)'}</Code></Table.Td>
+                      <Table.Td><Code>{d.ip || t('(unresolved)')}</Code></Table.Td>
                     </Table.Tr>
                   ))}
                 </Table.Tbody>
               </Table>
             ) : (
-              <Text c="dimmed" size="sm">Nessuna voce</Text>
+              <Text c="dimmed" size="sm">{t('No entries')}</Text>
             )}
           </Accordion.Panel>
         </Accordion.Item>
       </Accordion>
 
-      <Modal opened={opened} onClose={close} title={editing ? `Modifica ${editing.name}` : 'Nuova route'} centered size="xl">
+      <Modal opened={opened} onClose={close} title={editing ? t('Edit {{name}}', { name: editing.name }) : t('New route')} centered size="xl">
         <Stack gap="sm">
           <SimpleGrid cols={2}>
-            <TextInput label="Nome" value={form.name}
+            <TextInput label={t('Name')} value={form.name}
               onChange={(e) => setForm({ ...form, name: e.currentTarget.value })} />
-            <TextInput label="Interfaccia (opzionale)" placeholder="es. utun4"
+            <TextInput label={t('Interface (optional)')} placeholder={t('e.g. utun4')}
               value={form.iface} onChange={(e) => setForm({ ...form, iface: e.currentTarget.value })} />
-            <TextInput label="Gateway (opzionale)" value={form.gateway}
+            <TextInput label={t('Gateway (optional)')} value={form.gateway}
               onChange={(e) => setForm({ ...form, gateway: e.currentTarget.value })} />
-            <TextInput label="Network (opzionale)" placeholder="es. 192.168.1.0/24"
+            <TextInput label={t('Network (optional)')} placeholder={t('e.g. 192.168.1.0/24')}
               value={form.net} onChange={(e) => setForm({ ...form, net: e.currentTarget.value })} />
           </SimpleGrid>
           <Switch
-            label="Solo per regole"
-            description="La route è usata solo quando una regola di destinazione la indica: non viene scelta automaticamente né appare tra le route forzabili. Per collegarsi al relay viene usata solo la parte della catena che precede l'hop relay."
+            label={t('Rules only')}
+            description={t('The route is used only when a destination rule points to it: it is not chosen automatically and does not appear among routes that can be forced. To connect to the relay, only the part of the chain before the relay hop is used.')}
             checked={form.rulesOnly}
             onChange={(e) => setForm({ ...form, rulesOnly: e.currentTarget.checked })}
           />
-          <Divider label="Upstream (salti)" labelPosition="left" mt="xs" />
+          <Divider label={t('Upstream (hops)')} labelPosition="left" mt="xs" />
           <Text size="xs" c="dimmed">
-            Il traffico passa dal primo salto, poi dal secondo attraverso il primo, e così via fino all'uscita.
-            Schemi: http://host:porta, socks5://host:porta, oppure relay://email del contatto: la catena si ferma all'hop relay (i salti precedenti servono a raggiungere il relay, quelli successivi passano dal contatto). Un salto marcato "Solo regole" ferma la catena se nessuna regola seleziona la route. Un salto PAC valuta un file PAC e deve essere l'unico salto della catena. Un salto Dinamico valuta le regole per la destinazione e applica la route scelta; se nessuna corrisponde prosegue diretto, e deve essere l'ultimo salto. Scrivendo relay:// compaiono i contatti e i loro device; sono suggeriti anche i salti già usati.
+            {t('Traffic goes through the first hop, then the second through the first, and so on to the exit. Schemes: http://host:port, socks5://host:port, or relay://contact email: the chain stops at the relay hop (previous hops are used to reach the relay, subsequent ones go through the contact). A hop marked "Rules only" stops the chain if no rule selects the route. A PAC hop evaluates a PAC file and must be the only hop in the chain. A Dynamic hop evaluates the rules for the destination and applies the chosen route; if none matches it continues direct, and must be the last hop. Typing relay:// shows contacts and their devices; hops already used are also suggested.')}
           </Text>
           {form.hops.map((h, i) => {
             const kind = hopKind(h)
@@ -687,58 +685,57 @@ export default function ConfigPage() {
               <Paper key={i} withBorder p="xs" radius="sm">
                 <Group gap="xs" wrap="nowrap" align="flex-end">
                   <Badge variant="light" size="lg" w={36} px={0}>{i + 1}</Badge>
-                  <Select w={145} label={i === 0 ? 'Tipo' : undefined}
+                  <Select w={145} label={i === 0 ? t('Type') : undefined}
                     data={[
-                      { value: 'proxy', label: 'Proxy / Relay' },
-                      { value: 'pac', label: 'PAC' },
-                      { value: 'dynamic', label: 'Dinamico' },
+                      { value: 'proxy', label: t('Proxy / Relay') },
+                      { value: 'pac', label: t('PAC') },
+                      { value: 'dynamic', label: t('Dynamic') },
                     ]}
                     value={kind} allowDeselect={false}
                     onChange={(v) => v && setHopKind(i, v as HopKind)} />
                   {isDynamic ? (
                     <Text size="xs" c="dimmed" style={{ flex: 1, minWidth: 260 }} mb={8}>
-                      Valuta le regole per la destinazione e applica la route scelta; se nessuna corrisponde prosegue
-                      verso il target dai salti già percorsi.
+                      {t('Evaluates the rules for the destination and applies the chosen route; if none matches it continues toward the target through the hops already traversed.')}
                     </Text>
                   ) : isPac ? (
-                    <TextInput style={{ flex: 1, minWidth: 260 }} label={i === 0 ? 'PAC URL' : undefined}
+                    <TextInput style={{ flex: 1, minWidth: 260 }} label={i === 0 ? t('PAC URL') : undefined}
                       placeholder="http://host/pac.pac"
                       value={h.pacUrl ?? ''} onChange={(e) => setHop(i, { pacUrl: e.currentTarget.value })} />
                   ) : (
-                    <Autocomplete style={{ flex: 1, minWidth: 260 }} label={i === 0 ? 'Proxy' : undefined}
-                      placeholder="http://host:8080, socks5://host:1080 o relay://contatto/device"
+                    <Autocomplete style={{ flex: 1, minWidth: 260 }} label={i === 0 ? t('Proxy') : undefined}
+                      placeholder={t('http://host:8080, socks5://host:1080 or relay://contact/device')}
                       data={(h.proxyUrl ?? '').trim() ? hopSuggestions : []} limit={12}
                       value={h.proxyUrl ?? ''} onChange={(v) => setHop(i, { proxyUrl: v })} />
                   )}
                   {isDynamic ? (
-                    <Text size="xs" c="dimmed" w={160} mb={8}>solo regole</Text>
+                    <Text size="xs" c="dimmed" w={160} mb={8}>{t('rules only')}</Text>
                   ) : (
-                    <Select w={160} label={i === 0 ? 'Credential' : undefined} placeholder="nessuna" clearable
+                    <Select w={160} label={i === 0 ? t('Credential') : undefined} placeholder={t('none')} clearable
                       data={credOptions} value={h.credential || null}
                       onChange={(v) => setHop(i, { credential: v ?? '' })} />
                   )}
-                  <ActionIcon variant="subtle" color="red" title="Rimuovi"
+                  <ActionIcon variant="subtle" color="red" title={t('Remove')}
                     onClick={() => setForm({ ...form, hops: form.hops.filter((_, j) => j !== i) })}>
                     <IconTrash size={16} />
                   </ActionIcon>
                 </Group>
                 <Group gap="md" mt={6} pl={48}>
                   <Tooltip label={isPac
-                    ? 'Con questa opzione la route PAC è usata solo quando una regola la seleziona'
+                    ? t('With this option the PAC route is used only when a rule selects it')
                     : isDynamic
-                      ? 'La route si ferma prima del salto dinamico se nessuna regola seleziona la route'
-                      : 'La catena si ferma prima di questo salto se nessuna regola seleziona la route'}>
-                    <Checkbox label="Solo regole" size="xs"
+                      ? t('The route stops before the dynamic hop if no rule selects the route')
+                      : t('The chain stops before this hop if no rule selects the route')}>
+                    <Checkbox label={t('Rules only')} size="xs"
                       checked={h.rulesOnly ?? false}
                       onChange={(e) => setHop(i, { rulesOnly: e.currentTarget.checked })} />
                   </Tooltip>
                   <Group gap={4}>
                     <ActionIcon variant="subtle" color="gray" size="sm" disabled={i === 0 || isDynamic}
-                      title="Sposta su" onClick={() => moveHop(i, -1)}>
+                      title={t('Move up')} onClick={() => moveHop(i, -1)}>
                       <IconArrowUp size={16} />
                     </ActionIcon>
                     <ActionIcon variant="subtle" color="gray" size="sm" disabled={i === form.hops.length - 1 || isDynamic}
-                      title="Sposta giù" onClick={() => moveHop(i, 1)}>
+                      title={t('Move down')} onClick={() => moveHop(i, 1)}>
                       <IconArrowDown size={16} />
                     </ActionIcon>
                   </Group>
@@ -750,11 +747,11 @@ export default function ConfigPage() {
             <Button variant="light" size="xs" leftSection={<IconPlus size={14} />}
               disabled={form.hops.some((h) => hopKind(h) !== 'proxy')}
               onClick={() => setForm({ ...form, hops: [...form.hops, { proxyUrl: '', credential: '', rulesOnly: false, kind: 'proxy' }] })}>
-              Aggiungi salto
+              {t('Add hop')}
             </Button>
           </Group>
           <Group justify="flex-end">
-            <Button variant="default" onClick={close}>Annulla</Button>
+            <Button variant="default" onClick={close}>{t('Cancel')}</Button>
             <Button onClick={save} loading={busy}
               disabled={!form.name
                 || form.hops.some((h) => {
@@ -764,7 +761,7 @@ export default function ConfigPage() {
                     : kind === 'proxy' ? !(h.proxyUrl ?? '').trim() : false
                 })
                 || (form.hops.some((h) => hopKind(h) === 'pac') && form.hops.length > 1)}>
-              Salva
+              {t('Save')}
             </Button>
           </Group>
         </Stack>

@@ -3,6 +3,7 @@ import {
   ActionIcon, Alert, Badge, Card, Code, Drawer, Group, SimpleGrid, Stack, Switch, Table, Text, TextInput, Title,
 } from '@mantine/core'
 import { IconSearch, IconX } from '@tabler/icons-react'
+import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import type { ConnInfo } from '../api'
 
@@ -52,6 +53,7 @@ function Info({ label, value }: { label: string; value: string }) {
 }
 
 function ConnDetails({ conn }: { conn: ConnInfo }) {
+  const { t } = useTranslation()
   return (
     <Stack gap="md">
       <Group gap="xs">
@@ -61,21 +63,21 @@ function ConnDetails({ conn }: { conn: ConnInfo }) {
           <Badge color={conn.status < 400 ? 'green' : 'red'} variant="outline">HTTP {conn.status}</Badge>
         )}
       </Group>
-      {conn.error && <Alert color="red" title="Errore">{conn.error}</Alert>}
+      {conn.error && <Alert color="red" title={t('Error')}>{conn.error}</Alert>}
       <SimpleGrid cols={2}>
         <Info label="ID" value={String(conn.id)} />
-        <Info label="Tipo" value={conn.type} />
-        <Info label="Metodo" value={conn.method || '-'} />
+        <Info label={t('Type')} value={conn.type} />
+        <Info label={t('Method')} value={conn.method || '-'} />
         <Info label="URL" value={conn.url || '-'} />
         <Info label="Client" value={conn.client || '-'} />
-        <Info label="Host richiesto" value={conn.host || '-'} />
-        <Info label="Target connesso" value={conn.target || '-'} />
-        <Info label="Proxy upstream" value={conn.proxy || '-'} />
+        <Info label={t('Requested host')} value={conn.host || '-'} />
+        <Info label={t('Connected target')} value={conn.target || '-'} />
+        <Info label={t('Upstream proxy')} value={conn.proxy || '-'} />
         <Info label="Route" value={conn.route || '-'} />
         <Info label="Credential" value={conn.cred || '-'} />
-        <Info label="Inizio" value={fmtTime(conn.started)} />
-        <Info label="Fine" value={conn.ended ? fmtTime(conn.ended) : '-'} />
-        <Info label="Durata" value={fmtDur(conn)} />
+        <Info label={t('Start')} value={fmtTime(conn.started)} />
+        <Info label={t('End')} value={conn.ended ? fmtTime(conn.ended) : '-'} />
+        <Info label={t('Duration')} value={fmtDur(conn)} />
       </SimpleGrid>
       <SimpleGrid cols={4}>
         <Info label="Client → proxy" value={fmtBytes(conn.bytesClientIn)} />
@@ -84,9 +86,9 @@ function ConnDetails({ conn }: { conn: ConnInfo }) {
         <Info label="Upstream → proxy" value={fmtBytes(conn.bytesUpIn)} />
       </SimpleGrid>
       <div>
-        <Text fw={700} mb="xs">Eventi</Text>
+        <Text fw={700} mb="xs">{t('Events')}</Text>
         <Code block style={{ maxHeight: 300, overflow: 'auto' }}>
-          {(conn.events ?? []).map((e) => `${fmtTime(e.time)}  ${e.msg}`).join('\n') || '(nessun evento)'}
+          {(conn.events ?? []).map((e) => `${fmtTime(e.time)}  ${e.msg}`).join('\n') || t('(no events)')}
         </Code>
       </div>
     </Stack>
@@ -94,6 +96,7 @@ function ConnDetails({ conn }: { conn: ConnInfo }) {
 }
 
 export default function ConnectionsPage() {
+  const { t } = useTranslation()
   const [conns, setConns] = useState<ConnInfo[]>([])
   const [showClosed, setShowClosed] = useState(false)
   const [filter, setFilter] = useState('')
@@ -107,8 +110,8 @@ export default function ConnectionsPage() {
         .then(setConns)
         .catch((e) => setError(String(e)))
     load()
-    const t = setInterval(load, 2000)
-    return () => clearInterval(t)
+    const timer = setInterval(load, 2000)
+    return () => clearInterval(timer)
   }, [showClosed])
 
   const filtered = useMemo(() => {
@@ -138,10 +141,10 @@ export default function ConnectionsPage() {
   return (
     <>
       <Group justify="space-between" mb="md">
-        <Title order={3}>Connessioni</Title>
+        <Title order={3}>{t('Connections')}</Title>
         <Group>
           <TextInput
-            placeholder="Filtra per host, URL, proxy, route..."
+            placeholder={t('Filter by host, URL, proxy, route...')}
             leftSection={<IconSearch size={14} />}
             value={filter}
             onChange={(e) => setFilter(e.currentTarget.value)}
@@ -153,17 +156,17 @@ export default function ConnectionsPage() {
             w={300}
           />
           <Switch
-            label="Mostra chiuse"
+            label={t('Show closed')}
             checked={showClosed}
             onChange={(e) => setShowClosed(e.currentTarget.checked)}
           />
         </Group>
       </Group>
 
-      {error && <Alert color="red" mb="md">Errore nel caricamento: {error}</Alert>}
+      {error && <Alert color="red" mb="md">{t('Failed to load: {{error}}', { error })}</Alert>}
 
       <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }} mb="md">
-        <Card withBorder><Text size="sm" c="dimmed">Connessioni attive</Text><Text fw={700} size="xl">{active}</Text></Card>
+        <Card withBorder><Text size="sm" c="dimmed">{t('Active connections')}</Text><Text fw={700} size="xl">{active}</Text></Card>
         <Card withBorder><Text size="sm" c="dimmed">Client → proxy</Text><Text fw={700} size="lg">{fmtBytes(totals.in)}</Text></Card>
         <Card withBorder><Text size="sm" c="dimmed">Proxy → client</Text><Text fw={700} size="lg">{fmtBytes(totals.out)}</Text></Card>
         <Card withBorder>
@@ -176,19 +179,19 @@ export default function ConnectionsPage() {
         <Table.Thead>
           <Table.Tr>
             <Table.Th>#</Table.Th>
-            <Table.Th>Tipo</Table.Th>
-            <Table.Th>Da</Table.Th>
-            <Table.Th>Host richiesto</Table.Th>
-            <Table.Th>A</Table.Th>
+            <Table.Th>{t('Type')}</Table.Th>
+            <Table.Th>{t('From')}</Table.Th>
+            <Table.Th>{t('Requested host')}</Table.Th>
+            <Table.Th>{t('To')}</Table.Th>
             <Table.Th>Proxy</Table.Th>
             <Table.Th>Route</Table.Th>
             <Table.Th>Auth</Table.Th>
-            <Table.Th>Stato</Table.Th>
+            <Table.Th>{t('State')}</Table.Th>
             <Table.Th>↓ client</Table.Th>
             <Table.Th>↑ client</Table.Th>
             <Table.Th>↓ upstream</Table.Th>
             <Table.Th>↑ upstream</Table.Th>
-            <Table.Th>Durata</Table.Th>
+            <Table.Th>{t('Duration')}</Table.Th>
             <Table.Th />
           </Table.Tr>
         </Table.Thead>
@@ -211,7 +214,7 @@ export default function ConnectionsPage() {
               <Table.Td><Text size="xs">{fmtDur(c)}</Text></Table.Td>
               <Table.Td onClick={(e) => e.stopPropagation()}>
                 {!c.ended && (
-                  <ActionIcon size="sm" color="red" variant="subtle" title="Chiudi connessione"
+                  <ActionIcon size="sm" color="red" variant="subtle" title={t('Close connection')}
                     onClick={() => api.closeConnection(c.id)}>
                     <IconX size={14} />
                   </ActionIcon>
@@ -227,7 +230,7 @@ export default function ConnectionsPage() {
         onClose={() => setSelectedId(null)}
         position="right"
         size="lg"
-        title={selected ? `Connessione #${selected.id}` : ''}
+        title={selected ? t('Connection #{{id}}', { id: selected.id }) : ''}
       >
         {selected && <ConnDetails conn={selected} />}
       </Drawer>

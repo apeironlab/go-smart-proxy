@@ -4,6 +4,7 @@ import {
 } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
 import { IconArrowDown, IconArrowUp, IconPencil, IconPlus, IconTrash } from '@tabler/icons-react'
+import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import type { RoutingRule, RuleTest } from '../api'
 
@@ -19,6 +20,7 @@ const normalize = (r: RoutingRule): RoutingRule => ({
 })
 
 export default function RulesPage() {
+  const { t } = useTranslation()
   const [rules, setRules] = useState<RoutingRule[]>([])
   const [routeNames, setRouteNames] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -74,31 +76,31 @@ export default function RulesPage() {
   return (
     <Stack>
       <Group justify="space-between">
-        <Title order={3}>Regole per destinazione</Title>
+        <Title order={3}>{t('Destination rules')}</Title>
         <Button leftSection={<IconPlus size={16} />} onClick={() => { setEditIdx(null); setForm(empty); open() }}>
-          Nuova regola
+          {t('New rule')}
         </Button>
       </Group>
       <Text size="sm" c="dimmed">
-        Le regole sono valutate solo con selezione <b>Auto</b> (o esplicitamente da un salto <b>Dinamico</b>), in
-        ordine: vince la prima che corrisponde e la cui route è applicabile sulla rete corrente. Se nessuna
-        corrisponde si usa la selezione normale. Una route forzata ha la precedenza e disattiva le regole.
+        {t('Rules are evaluated only with')} <b>Auto</b>{' '}
+        {t('selection (or explicitly from a')} <b>Dynamic</b>{' '}
+        {t('hop), in order: the first matching rule whose route is applicable on the current network wins. If none matches, normal selection is used. A forced route takes precedence and disables the rules.')}
       </Text>
       {error && <Alert color="red" withCloseButton onClose={() => setError(null)}>{error}</Alert>}
 
       <Card withBorder>
-        <Text fw={700} mb="xs">Verifica una destinazione</Text>
+        <Text fw={700} mb="xs">{t('Test a destination')}</Text>
         <Group gap="xs" align="flex-end">
-          <TextInput placeholder="www.example.com oppure 10.1.2.3" value={testHost} w={320}
+          <TextInput placeholder={t('www.example.com or 10.1.2.3')} value={testHost} w={320}
             onChange={(e) => setTestHost(e.currentTarget.value)}
             onKeyDown={(e) => e.key === 'Enter' && testHost.trim() && test()} />
-          <Button variant="light" onClick={test} disabled={!testHost.trim()}>Verifica</Button>
+          <Button variant="light" onClick={test} disabled={!testHost.trim()}>{t('Test')}</Button>
         </Group>
         {testRes && (
           <Text size="sm" mt="xs">
             {testRes.ip && <>IP <Code>{testRes.ip}</Code> · </>}
-            route <b>{testRes.route ?? 'nessuna'}</b>
-            {testRes.rule ? <> (regola <b>{testRes.rule}</b>)</> : ' (selezione normale)'}
+            {t('route')} <b>{testRes.route ?? t('none')}</b>
+            {testRes.rule ? <> ({t('rule')} <b>{testRes.rule}</b>)</> : <> ({t('normal selection')})</>}
           </Text>
         )}
       </Card>
@@ -106,7 +108,7 @@ export default function RulesPage() {
       <Table withTableBorder striped>
         <Table.Thead>
           <Table.Tr>
-            <Table.Th>#</Table.Th><Table.Th>Nome</Table.Th><Table.Th>Destinazioni</Table.Th><Table.Th>Route</Table.Th><Table.Th />
+            <Table.Th>#</Table.Th><Table.Th>{t('Name')}</Table.Th><Table.Th>{t('Destinations')}</Table.Th><Table.Th>{t('Route')}</Table.Th><Table.Th />
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
@@ -128,7 +130,7 @@ export default function RulesPage() {
                   <ActionIcon variant="subtle" color="gray" disabled={i === rules.length - 1} onClick={() => move(i, 1)}><IconArrowDown size={16} /></ActionIcon>
                   <ActionIcon variant="subtle" onClick={() => { setEditIdx(i); setForm({ ...r }); open() }}><IconPencil size={16} /></ActionIcon>
                   <ActionIcon variant="subtle" color="red"
-                    onClick={() => window.confirm(`Eliminare la regola "${r.name}"?`) && persist(rules.filter((_, j) => j !== i))}>
+                    onClick={() => window.confirm(t('Delete the rule "{{name}}"?', { name: r.name })) && persist(rules.filter((_, j) => j !== i))}>
                     <IconTrash size={16} />
                   </ActionIcon>
                 </Group>
@@ -137,24 +139,24 @@ export default function RulesPage() {
           ))}
         </Table.Tbody>
       </Table>
-      {!rules.length && <Text c="dimmed" size="sm">Nessuna regola</Text>}
+      {!rules.length && <Text c="dimmed" size="sm">{t('No rules')}</Text>}
 
-      <Modal opened={opened} onClose={close} title={editIdx === null ? 'Nuova regola' : 'Modifica regola'} centered size="lg">
+      <Modal opened={opened} onClose={close} title={editIdx === null ? t('New rule') : t('Edit rule')} centered size="lg">
         <Stack gap="sm">
-          <TextInput label="Nome" value={form.name} onChange={(e) => setForm({ ...form, name: e.currentTarget.value })} />
-          <TagsInput label="Domini (compresi i sottodomini)" placeholder="example.com, corp.local — Invio per aggiungere"
+          <TextInput label={t('Name')} value={form.name} onChange={(e) => setForm({ ...form, name: e.currentTarget.value })} />
+          <TagsInput label={t('Domains (including subdomains)')} placeholder={t('example.com, corp.local — Press Enter to add')}
             value={form.domains} onChange={(v) => setForm({ ...form, domains: v })} />
-          <TagsInput label="Host esatti" placeholder="intranet.example.com"
+          <TagsInput label={t('Exact hosts')} placeholder="intranet.example.com"
             value={form.hosts} onChange={(v) => setForm({ ...form, hosts: v })} />
-          <TagsInput label="IP o reti CIDR" placeholder="10.0.0.0/8, 192.168.1.5"
+          <TagsInput label={t('IPs or CIDR networks')} placeholder="10.0.0.0/8, 192.168.1.5"
             value={form.networks} onChange={(v) => setForm({ ...form, networks: v })} />
-          <Select label="Route" data={routeOptions} value={form.route || null}
+          <Select label={t('Route')} data={routeOptions} value={form.route || null}
             onChange={(v) => setForm({ ...form, route: v ?? '' })} />
           <Group justify="flex-end">
-            <Button variant="default" onClick={close}>Annulla</Button>
+            <Button variant="default" onClick={close}>{t('Cancel')}</Button>
             <Button onClick={save}
               disabled={!form.name || !form.route || form.domains.length + form.hosts.length + form.networks.length === 0}>
-              Salva
+              {t('Save')}
             </Button>
           </Group>
         </Stack>
