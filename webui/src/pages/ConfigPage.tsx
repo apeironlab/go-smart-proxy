@@ -40,6 +40,12 @@ function chainText(r: RouteInfo) {
   return r.chain?.length ? r.chain.join(' → ') : '-'
 }
 
+type HopKind = 'proxy' | 'pac' | 'dynamic'
+type HopForm = Hop & { kind?: HopKind }
+
+const hopKind = (h: HopForm): HopKind =>
+  h.kind ?? (h.dynamic ? 'dynamic' : h.pacUrl ? 'pac' : 'proxy')
+
 export default function ConfigPage() {
   const [state, setState] = useState<StateInfo | null>(null)
   const [relaySt, setRelaySt] = useState<RelayStatus | null>(null)
@@ -67,7 +73,7 @@ export default function ConfigPage() {
   const [editing, setEditing] = useState<RouteInfo | null>(null)
   const [form, setForm] = useState({
     name: '', gateway: '', iface: '', net: '',
-    hops: [] as Hop[], rulesOnly: false,
+    hops: [] as HopForm[], rulesOnly: false,
   })
   const [busy, setBusy] = useState(false)
 
@@ -182,21 +188,27 @@ export default function ConfigPage() {
         dynamic: h.dynamic ?? false,
         credential: h.credential ?? '',
         rulesOnly: h.rulesOnly ?? false,
+        kind: hopKind(h),
       })),
       rulesOnly: r.rulesOnly ?? false,
     })
     open()
   }
 
-  const setHop = (i: number, patch: Partial<Hop>) =>
+  const setHop = (i: number, patch: Partial<HopForm>) =>
     setForm({ ...form, hops: form.hops.map((h, j) => (j === i ? { ...h, ...patch } : h)) })
-  const setHopKind = (i: number, kind: string) => {
+  const setHopKind = (i: number, kind: HopKind) => {
     const hop = form.hops[i]
     if (kind === 'pac') {
-      // A PAC is not a proxy: it must be the only hop of the chain.
+      // A PAC is not a proxy: it must be the only hop of the chain. Keep the
+      // kind explicit even while the URL is still empty, otherwise the select
+      // would immediately fall back to "proxy".
       setForm({
         ...form,
-        hops: [{ proxyUrl: '', pacUrl: hop.pacUrl ?? '', dynamic: false, credential: hop.credential, rulesOnly: hop.rulesOnly }],
+        hops: [{
+          proxyUrl: '', pacUrl: hop.pacUrl ?? '', dynamic: false, credential: hop.credential,
+          rulesOnly: hop.rulesOnly, kind: 'pac',
+        }],
       })
     } else if (kind === 'dynamic') {
       // A dynamic hop is terminal: keep the prefix and drop what came after.
@@ -204,11 +216,11 @@ export default function ConfigPage() {
         ...form,
         hops: [
           ...form.hops.slice(0, i),
-          { proxyUrl: '', pacUrl: '', dynamic: true, credential: '', rulesOnly: hop.rulesOnly },
+          { proxyUrl: '', pacUrl: '', dynamic: true, credential: '', rulesOnly: hop.rulesOnly, kind: 'dynamic' },
         ],
       })
     } else {
-      setHop(i, { pacUrl: '', dynamic: false })
+      setHop(i, { pacUrl: '', dynamic: false, kind: 'proxy' })
     }
   }
   const moveHop = (i: number, d: number) => {
@@ -220,7 +232,12 @@ export default function ConfigPage() {
   const save = async () => {
     setBusy(true)
     try {
-      await api.saveRoute(form)
+      const hops = form.hops.map((h) => {
+        const copy = { ...h }
+        delete copy.kind
+        return copy
+      })
+      await api.saveRoute({ ...form, hops })
       close()
       load()
     } catch (e) {
@@ -663,8 +680,9 @@ export default function ConfigPage() {
             Schemi: http://host:porta, socks5://host:porta, oppure relay://email del contatto: la catena si ferma all'hop relay (i salti precedenti servono a raggiungere il relay, quelli successivi passano dal contatto). Un salto marcato "Solo regole" ferma la catena se nessuna regola seleziona la route. Un salto PAC valuta un file PAC e deve essere l'unico salto della catena. Un salto Dinamico valuta le regole per la destinazione e applica la route scelta; se nessuna corrisponde prosegue diretto, e deve essere l'ultimo salto. Scrivendo relay:// compaiono i contatti e i loro device; sono suggeriti anche i salti già usati.
           </Text>
           {form.hops.map((h, i) => {
-            const isDynamic = Boolean(h.dynamic)
-            const isPac = Boolean(h.pacUrl)
+            const kind = hopKind(h)
+            const isDynamic = kind === 'dynamic'
+            const isPac = kind === 'pac'
             return (
               <Paper key={i} withBorder p="xs" radius="sm">
                 <Group gap="xs" wrap="nowrap" align="flex-end">
@@ -675,8 +693,8 @@ export default function ConfigPage() {
                       { value: 'pac', label: 'PAC' },
                       { value: 'dynamic', label: 'Dinamico' },
                     ]}
-                    value={isDynamic ? 'dynamic' : isPac ? 'pac' : 'proxy'} allowDeselect={false}
-                    onChange={(v) => v && setHopKind(i, v)} />
+                    value={kind} allowDeselect={false}
+                    onChange={(v) => v && setHopKind(i, v as HopKind)} />
                   {isDynamic ? (
                     <Text size="xs" c="dimmed" style={{ flex: 1, minWidth: 260 }} mb={8}>
                       Valuta le regole per la destinazione e applica la route scelta; se nessuna corrisponde prosegue
@@ -730,8 +748,8 @@ export default function ConfigPage() {
           })}
           <Group>
             <Button variant="light" size="xs" leftSection={<IconPlus size={14} />}
-              disabled={form.hops.some((h) => h.pacUrl || h.dynamic)}
-              onClick={() => setForm({ ...form, hops: [...form.hops, { proxyUrl: '', credential: '', rulesOnly: false }] })}>
+              disabled={form.hops.some((h) => hopKind(h) !== 'proxy')}
+              onClick={() => setForm({ ...form, hops: [...form.hops, { proxyUrl: '', credential: '', rulesOnly: false, kind: 'proxy' }] })}>
               Aggiungi salto
             </Button>
           </Group>
@@ -739,8 +757,13 @@ export default function ConfigPage() {
             <Button variant="default" onClick={close}>Annulla</Button>
             <Button onClick={save} loading={busy}
               disabled={!form.name
-                || form.hops.some((h) => h.dynamic ? false : h.pacUrl ? !h.pacUrl.trim() : !(h.proxyUrl ?? '').trim())
-                || (form.hops.some((h) => h.pacUrl) && form.hops.length > 1)}>
+                || form.hops.some((h) => {
+                  const kind = hopKind(h)
+                  return kind === 'pac'
+                    ? !(h.pacUrl ?? '').trim()
+                    : kind === 'proxy' ? !(h.proxyUrl ?? '').trim() : false
+                })
+                || (form.hops.some((h) => hopKind(h) === 'pac') && form.hops.length > 1)}>
               Salva
             </Button>
           </Group>
