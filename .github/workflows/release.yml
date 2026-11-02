@@ -163,14 +163,16 @@ jobs:
         run: |
           set -euo pipefail
           echo "release cleanup token length: ${#GH_TOKEN}"
-          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}"
-          release=$(curl -fsS -H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${GH_TOKEN}" "$api" || true)
-          if [ -z "$release" ]; then
+          releases=$(curl -fsS -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100" || true)
+          release_id=$(printf '%s' "$releases" | python3 -c 'import json,sys; tag=sys.argv[1]; print(next((str(r["id"]) for r in json.load(sys.stdin) if r.get("tag_name")==tag), ""))' "$GITHUB_REF_NAME")
+          if [ -z "$release_id" ]; then
             echo "no existing release"
             exit 0
           fi
-          printf '%s' "$release" |
-            python3 -c 'import json,sys; [print(a["id"], a["name"]) for a in json.load(sys.stdin).get("assets",[])]' |
+          printf '%s' "$releases" |
+            python3 -c 'import json,sys; tag=sys.argv[1]; [print(a["id"], a["name"]) for r in json.load(sys.stdin) if r.get("tag_name")==tag for a in r.get("assets",[])]' "$GITHUB_REF_NAME" |
             while read -r id name; do
               case "$name" in
                 *.tar.gz|*.zip|*.dmg|*.deb|*.rpm|*_setup.exe|SHA256SUMS) ;;
