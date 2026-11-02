@@ -18,11 +18,12 @@ import (
 // chainHop is one proxy of a route chain. The protocol spoken to it depends on
 // the scheme of its ProxyUrl: http:// (CONNECT, NTLM/Basic) or socks5://.
 type chainHop struct {
-	scheme   string // "http" or "socks5"
-	addr     string // host:port
-	user     string
-	password string
-	cred     string
+	scheme    string // "http", "socks5" or "relay"
+	addr      string // host:port, or the contact e-mail for relay hops
+	user      string
+	password  string
+	cred      string
+	rulesOnly bool // chain stops before this hop unless a rule selected the route
 }
 
 func buildChain(cfg []ConfigHop) ([]*chainHop, error) {
@@ -37,7 +38,7 @@ func buildChain(cfg []ConfigHop) ([]*chainHop, error) {
 		if err != nil || u.Host == "" {
 			return nil, fmt.Errorf("hop %d: invalid ProxyUrl %q", i+1, h.ProxyUrl)
 		}
-		hop := &chainHop{scheme: strings.ToLower(u.Scheme), addr: u.Host, cred: h.Credential}
+		hop := &chainHop{scheme: strings.ToLower(u.Scheme), addr: u.Host, cred: h.Credential, rulesOnly: h.RulesOnly}
 		switch hop.scheme {
 		case "http":
 		case "relay": // relay://alice@example.com: exit through the network of a contact
@@ -49,7 +50,7 @@ func buildChain(cfg []ConfigHop) ([]*chainHop, error) {
 				return nil, fmt.Errorf("hop %d: use relay://name@domain with the contact's e-mail", i+1)
 			}
 			relayHop = i
-			hops = append(hops, &chainHop{scheme: "relay", addr: email})
+			hops = append(hops, &chainHop{scheme: "relay", addr: email, rulesOnly: h.RulesOnly})
 			continue
 		case "socks5", "socks5h":
 			hop.scheme = "socks5"
@@ -76,6 +77,25 @@ func buildChain(cfg []ConfigHop) ([]*chainHop, error) {
 		hops = append(hops, hop)
 	}
 	return hops, nil
+}
+
+// automaticChain returns the part of the chain usable by the automatic
+// selection: it stops before the first hop marked RulesOnly, because that hop
+// and the ones after it are only traversed when a destination rule selects the
+// route. The last value reports whether the chain was cut.
+func automaticChain(chain []*chainHop, hops []ConfigHop) ([]*chainHop, []ConfigHop, bool) {
+	for i, h := range chain {
+		if !h.rulesOnly {
+			continue
+		}
+		outChain := append([]*chainHop{}, chain[:i]...)
+		var outHops []ConfigHop
+		if i <= len(hops) {
+			outHops = append([]ConfigHop{}, hops[:i]...)
+		}
+		return outChain, outHops, true
+	}
+	return nil, nil, false
 }
 
 func chainStrings(hops []*chainHop) []string {

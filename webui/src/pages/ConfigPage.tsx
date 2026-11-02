@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
-  ActionIcon, Alert, Badge, Button, Card, Code, Divider, Group, Modal, Select, SimpleGrid, Stack, Switch, Table,
+  ActionIcon, Alert, Badge, Button, Card, Checkbox, Code, Divider, Group, Modal, Select, SimpleGrid, Stack, Switch, Table,
   TagsInput, Text, TextInput, Title, Tooltip, Accordion,
 } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
@@ -24,11 +24,21 @@ function Info({ label, value }: { label: string; value: string }) {
   )
 }
 
+function chainText(r: RouteInfo) {
+  if (r.chain?.length) {
+    return r.chain
+      .map((hop, i) => (r.hops?.[i]?.rulesOnly ? `${hop} (regole)` : hop))
+      .join(' → ')
+  }
+  return r.pacUrl || r.proxyUrl || '-'
+}
+
 export default function ConfigPage() {
   const [state, setState] = useState<StateInfo | null>(null)
   const [creds, setCreds] = useState<Credential[]>([])
   const [error, setError] = useState<string | null>(null)
   const [address, setAddress] = useState('')
+  const [socksAddress, setSocksAddress] = useState('')
   const [sysProxy, setSysProxy] = useState(false)
   const [exclude, setExclude] = useState<string[]>([])
   const [pacHijack, setPacHijack] = useState(false)
@@ -50,6 +60,7 @@ export default function ConfigPage() {
       setState(s)
       if (!configLoaded) {
         setAddress(s.address)
+        setSocksAddress(s.socksAddress ?? '')
         setSysProxy(s.systemProxy)
         setExclude(s.systemProxyExclude ?? [])
         setPacHijack(s.pacHijack)
@@ -71,7 +82,7 @@ export default function ConfigPage() {
 
   const saveConfig = async () => {
     try {
-      await api.saveConfig({ address, systemProxy: sysProxy, systemProxyExclude: exclude, pacHijack, pacHijackHost, forceChrome })
+      await api.saveConfig({ address, socksAddress, systemProxy: sysProxy, systemProxyExclude: exclude, pacHijack, pacHijackHost, forceChrome })
       load()
     } catch (e) {
       setError(String(e))
@@ -99,7 +110,7 @@ export default function ConfigPage() {
     setForm({
       name: r.name, gateway: r.gateway, iface: r.iface, net: r.net,
       pacUrl: r.pacUrl, proxyUrl: r.proxyUrl, credential: r.credential,
-      hops: (r.hops ?? []).map((h) => ({ ...h })),
+      hops: (r.hops ?? []).map((h) => ({ ...h, rulesOnly: h.rulesOnly ?? false })),
       rulesOnly: r.rulesOnly ?? false,
     })
     open()
@@ -161,6 +172,14 @@ export default function ConfigPage() {
             value={address}
             onChange={(e) => setAddress(e.currentTarget.value)}
           />
+          <TextInput
+            label="SOCKS5"
+            description="Vuoto = disabilitato"
+            placeholder="127.0.0.1:1080"
+            style={{ minWidth: 200 }}
+            value={socksAddress}
+            onChange={(e) => setSocksAddress(e.currentTarget.value)}
+          />
           <Button onClick={saveConfig} disabled={!address}>Salva</Button>
           <Select
             label="Route forzata"
@@ -181,7 +200,7 @@ export default function ConfigPage() {
           onChange={(e) => {
             const v = e.currentTarget.checked
             setPacHijack(v)
-            api.saveConfig({ address, systemProxy: sysProxy, systemProxyExclude: exclude, pacHijack: v, pacHijackHost, forceChrome })
+            api.saveConfig({ address, socksAddress, systemProxy: sysProxy, systemProxyExclude: exclude, pacHijack: v, pacHijackHost, forceChrome })
               .then(load)
               .catch((err) => setError(String(err)))
           }}
@@ -205,7 +224,7 @@ export default function ConfigPage() {
           onChange={(e) => {
             const v = e.currentTarget.checked
             setSysProxy(v)
-            api.saveConfig({ address, systemProxy: v, systemProxyExclude: exclude, pacHijack, pacHijackHost, forceChrome })
+            api.saveConfig({ address, socksAddress, systemProxy: v, systemProxyExclude: exclude, pacHijack, pacHijackHost, forceChrome })
               .then(load)
               .catch((err) => setError(String(err)))
           }}
@@ -218,7 +237,7 @@ export default function ConfigPage() {
           value={exclude}
           onChange={(v) => {
             setExclude(v)
-            api.saveConfig({ address, systemProxy: sysProxy, systemProxyExclude: v, pacHijack, pacHijackHost, forceChrome })
+            api.saveConfig({ address, socksAddress, systemProxy: sysProxy, systemProxyExclude: v, pacHijack, pacHijackHost, forceChrome })
               .then(load)
               .catch((err) => setError(String(err)))
           }}
@@ -303,7 +322,7 @@ export default function ConfigPage() {
               <Table.Td>{r.gateway || '-'}</Table.Td>
               <Table.Td>{r.net || '-'}</Table.Td>
               <Table.Td>
-                <Text size="sm" truncate="end" maw={220}>{r.chain?.length ? r.chain.join(' → ') : r.pacUrl || r.proxyUrl || '-'}</Text>
+                <Text size="sm" truncate="end" maw={220}>{chainText(r)}</Text>
               </Table.Td>
               <Table.Td>{r.credential || '-'}</Table.Td>
               <Table.Td>
@@ -398,7 +417,7 @@ export default function ConfigPage() {
           <Divider label="Catena di proxy (opzionale)" labelPosition="left" mt="xs" />
           <Text size="xs" c="dimmed">
             Il traffico passa dal primo proxy, poi dal secondo attraverso il primo, e così via fino all'uscita.
-            Con una catena, PAC e proxy upstream sono ignorati. Schemi: http://host:porta, socks5://host:porta, oppure relay://email del contatto: la catena si ferma all'hop relay (i salti precedenti servono a raggiungere il relay, quelli successivi passano dal contatto).
+            Con una catena, PAC e proxy upstream sono ignorati. Schemi: http://host:porta, socks5://host:porta, oppure relay://email del contatto: la catena si ferma all'hop relay (i salti precedenti servono a raggiungere il relay, quelli successivi passano dal contatto). Un salto marcato "Solo regole" ferma la catena se nessuna regola seleziona la route.
           </Text>
           {form.hops.map((h, i) => (
             <Group key={i} gap="xs" wrap="nowrap" align="flex-end">
@@ -408,6 +427,11 @@ export default function ConfigPage() {
               <Select w={170} label={i === 0 ? 'Credential' : undefined} placeholder="nessuna" clearable
                 data={credOptions} value={h.credential || null}
                 onChange={(v) => setHop(i, { credential: v ?? '' })} />
+              <Tooltip label="La catena si ferma prima di questo salto se nessuna regola seleziona la route">
+                <Checkbox label="Solo regole" size="xs" mb={6}
+                  checked={h.rulesOnly ?? false}
+                  onChange={(e) => setHop(i, { rulesOnly: e.currentTarget.checked })} />
+              </Tooltip>
               <ActionIcon variant="subtle" color="gray" disabled={i === 0} title="Sposta su" onClick={() => moveHop(i, -1)}>
                 <IconArrowUp size={16} />
               </ActionIcon>
@@ -421,7 +445,7 @@ export default function ConfigPage() {
           ))}
           <Group>
             <Button variant="light" size="xs" leftSection={<IconPlus size={14} />}
-              onClick={() => setForm({ ...form, hops: [...form.hops, { proxyUrl: '', credential: '' }] })}>
+              onClick={() => setForm({ ...form, hops: [...form.hops, { proxyUrl: '', credential: '', rulesOnly: false }] })}>
               Aggiungi proxy
             </Button>
           </Group>

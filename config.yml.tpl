@@ -1,4 +1,7 @@
 Address: 127.0.0.1:3128
+# Optional SOCKS5 listener; it uses the same routes and rules of the HTTP proxy.
+# Leave empty/omitted to disable it.
+# SocksAddress: 127.0.0.1:1080
 Credentials:
 - Name: CredentialName
   User: username or domain\username
@@ -20,6 +23,8 @@ Routes:
   # - ProxyUrl: http://corporate-proxy:8080
   #   Credential: CredentialName
   # - ProxyUrl: socks5://other-proxy:1080
+  #   # The chain stops before this hop unless a destination rule selects the route.
+  #   RulesOnly: true
   # Optional: use this route only when a destination rule names it. It is never
   # picked as the automatic (default) route; for the relay connection only the
   # hops before a relay:// hop are used.

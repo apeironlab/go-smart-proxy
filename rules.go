@@ -145,13 +145,21 @@ func routeFor(host string) (*ProxyRoute, string) {
 				}
 				for _, rt := range getRoutes() {
 					if rt.name == rule.route && rt.isApplicable(st) {
+						// A rule selects the route explicitly: use the whole
+						// chain, including the RulesOnly hops.
 						return rt, rule.name
 					}
 				}
 			}
 		}
 	}
-	return GetApplicableRoute(), ""
+	route := GetApplicableRoute()
+	if route == nil {
+		return nil, ""
+	}
+	// No destination rule matched: the chain stops before the first hop
+	// marked RulesOnly.
+	return route.autoRoute(), ""
 }
 
 func (c ConfigRule) validate() error {

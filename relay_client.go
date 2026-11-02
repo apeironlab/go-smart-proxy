@@ -181,7 +181,9 @@ func (r *relayClient) relayRoute() (*ProxyRoute, error) {
 	if route == nil {
 		return nil, errors.New("no route available")
 	}
-	return route.routeToRelay(), nil
+	// The relay connection is not selected by a destination rule: the chain
+	// stops at the first RulesOnly hop, then at the relay hop.
+	return route.autoRoute().routeToRelay(), nil
 }
 
 func (r *relayClient) connectOnce() error {

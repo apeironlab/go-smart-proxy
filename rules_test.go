@@ -72,6 +72,47 @@ func TestRulesOnlyRoutes(t *testing.T) {
 	}
 }
 
+func TestHopRulesOnlyStopsAutomaticChain(t *testing.T) {
+	resetEnv(t, nil, []ConfigRoute{
+		{Name: "chain", Chain: []ConfigHop{
+			{ProxyUrl: "http://127.0.0.1:1"},
+			{ProxyUrl: "http://127.0.0.1:2", RulesOnly: true},
+			{ProxyUrl: "http://127.0.0.1:3"},
+		}},
+	})
+	t.Cleanup(func() { setForceRoute(nil) })
+
+	// Automatic selection: the chain stops before the RulesOnly hop.
+	route, rule := routeFor("example.com")
+	if route == nil || route.name != "chain" || rule != "" {
+		t.Fatalf("automatic route = %v (%q), want chain", route, rule)
+	}
+	if got := chainStrings(route.chain); len(got) != 1 || got[0] != "http://127.0.0.1:1" {
+		t.Fatalf("automatic chain = %v, want only the hop before the RulesOnly one", got)
+	}
+
+	// A matching rule selects the whole chain.
+	configuration.Rules = []ConfigRule{{Name: "corp", Domains: []string{"corp.local"}, Route: "chain"}}
+	loadRoutes()
+	route, rule = routeFor("corp.local")
+	if route == nil || rule != "corp" {
+		t.Fatalf("rule route = %v (%q), want chain via corp", route, rule)
+	}
+	if got := chainStrings(route.chain); len(got) != 3 {
+		t.Fatalf("rule chain = %v, want all three hops", got)
+	}
+
+	// A forced route is not a rule: the barrier still applies.
+	setForceRoute(getRoutes()[0])
+	route, rule = routeFor("example.com")
+	if route == nil || rule != "" {
+		t.Fatalf("forced route = %v (%q)", route, rule)
+	}
+	if got := chainStrings(route.chain); len(got) != 1 {
+		t.Fatalf("forced chain = %v, want the chain to stop at the RulesOnly hop", got)
+	}
+}
+
 func TestRulesAPIEmitsEmptyArrays(t *testing.T) {
 	configuration = Configuration{Rules: []ConfigRule{
 		{Name: "corp", Domains: []string{"corp.local"}, Route: "Direct"},

@@ -90,6 +90,27 @@ func TestRelayRouteUsesHopsBeforeRelay(t *testing.T) {
 	}
 }
 
+func TestRelayRouteStopsAtRulesOnlyHop(t *testing.T) {
+	resetEnv(t, nil, []ConfigRoute{
+		{Name: "only rules proxy", Chain: []ConfigHop{
+			{ProxyUrl: "http://127.0.0.1:1"},
+			{ProxyUrl: "http://127.0.0.1:2", RulesOnly: true},
+			{ProxyUrl: "relay://bob@example.com"},
+		}},
+	})
+
+	r := &relayClient{cfg: &RelayConfig{Route: "only rules proxy"}}
+	route, err := r.relayRoute()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The relay connection is not selected by a rule, so the chain stops
+	// before the RulesOnly hop.
+	if got := chainStrings(route.chain); len(got) != 1 || got[0] != "http://127.0.0.1:1" {
+		t.Fatalf("relay route chain = %v, want only the proxy before the RulesOnly hop", got)
+	}
+}
+
 func TestRelayRouteEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	ca := filepath.Join(dir, "ca")

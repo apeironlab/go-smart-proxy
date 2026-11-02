@@ -123,6 +123,7 @@ type dnsEntryJSON struct {
 
 type stateJSON struct {
 	Address            string          `json:"address"`
+	SocksAddress       string          `json:"socksAddress"`
 	Iface              string          `json:"iface"`
 	Gateway            string          `json:"gateway"`
 	Network            string          `json:"network"`
@@ -143,6 +144,7 @@ func apiState(w http.ResponseWriter, r *http.Request) {
 
 	configMu.Lock()
 	address := configuration.Address
+	socksAddress := configuration.SocksAddress
 	systemProxy := configuration.SystemProxy
 	systemProxyExclude := append([]string(nil), configuration.SystemProxyExclude...)
 	pacHijack := configuration.PacHijack
@@ -152,6 +154,7 @@ func apiState(w http.ResponseWriter, r *http.Request) {
 
 	state := stateJSON{
 		Address:            address,
+		SocksAddress:       socksAddress,
 		Iface:              st.iface.Name,
 		Gateway:            fmt.Sprintf("%v", st.defaultGw),
 		Network:            netString(st.network),
@@ -439,6 +442,7 @@ func apiRefreshPAC(w http.ResponseWriter, r *http.Request) {
 func apiGetConfig(w http.ResponseWriter, r *http.Request) {
 	configMu.Lock()
 	address := configuration.Address
+	socksAddress := configuration.SocksAddress
 	systemProxy := configuration.SystemProxy
 	systemProxyExclude := append([]string(nil), configuration.SystemProxyExclude...)
 	pacHijack := configuration.PacHijack
@@ -447,6 +451,7 @@ func apiGetConfig(w http.ResponseWriter, r *http.Request) {
 	configMu.Unlock()
 	writeJSON(w, map[string]interface{}{
 		"address":            address,
+		"socksAddress":       socksAddress,
 		"systemProxy":        systemProxy,
 		"systemProxyExclude": systemProxyExclude,
 		"pacHijack":          pacHijack,
@@ -457,6 +462,7 @@ func apiGetConfig(w http.ResponseWriter, r *http.Request) {
 
 type configFormJSON struct {
 	Address            string    `json:"address"`
+	SocksAddress       *string   `json:"socksAddress"`
 	SystemProxy        *bool     `json:"systemProxy"`
 	SystemProxyExclude *[]string `json:"systemProxyExclude"`
 	PacHijack          *bool     `json:"pacHijack"`
@@ -473,9 +479,14 @@ func apiSaveConfig(w http.ResponseWriter, r *http.Request) {
 
 	configMu.Lock()
 	restart := false
+	socksRestart := false
 	if form.Address != "" && form.Address != configuration.Address {
 		restart = true
 		configuration.Address = form.Address
+	}
+	if form.SocksAddress != nil && *form.SocksAddress != configuration.SocksAddress {
+		socksRestart = true
+		configuration.SocksAddress = *form.SocksAddress
 	}
 	if form.SystemProxy != nil {
 		configuration.SystemProxy = *form.SystemProxy
@@ -507,11 +518,16 @@ func apiSaveConfig(w http.ResponseWriter, r *http.Request) {
 		pacHijackHost = "wpad"
 	}
 	forceChromeEnabled := configuration.ForceChrome
+	socksAddress := configuration.SocksAddress
 	configMu.Unlock()
 
 	if restart {
 		log.Printf("Listen address changed to %s, restarting listener", configuration.Address)
 		restartListener()
+	}
+	if socksRestart {
+		log.Printf("SOCKS5 listen address changed to %q, restarting listener", socksAddress)
+		restartSocksListener()
 	}
 	if pacHijackChanged {
 		if pacHijackEnabled {

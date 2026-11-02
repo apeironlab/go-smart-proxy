@@ -1,6 +1,7 @@
 export interface Hop {
   proxyUrl: string
   credential: string
+  rulesOnly: boolean
 }
 
 export interface RouteInfo {
@@ -84,6 +85,7 @@ export interface SystemProxyState {
 
 export interface StateInfo {
   address: string
+  socksAddress: string
   iface: string
   gateway: string
   network: string
@@ -153,6 +155,7 @@ export const api = {
   refreshPac: (name: string) => post('/api/pac/refresh', { name }),
   saveConfig: (form: {
     address: string
+    socksAddress: string
     systemProxy: boolean
     systemProxyExclude: string[]
     pacHijack: boolean

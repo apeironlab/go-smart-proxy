@@ -175,6 +175,7 @@ func main() {
 	go applySystemProxy()
 
 	go serve()
+	go serveSOCKS()
 
 	systray.Run(systrayReady, systrayExit)
 
@@ -533,10 +534,46 @@ func handleConnect(client net.Conn, clientBr *bufio.Reader, hostport string) {
 		port = "443"
 	}
 
+	upstream, upstreamBr, rec, err := dialTarget("tunnel", client.RemoteAddr().String(), host, port, "CONNECT", "")
+	if err != nil {
+		status := http.StatusBadGateway
+		if rec == nil {
+			status = http.StatusServiceUnavailable
+		}
+		connectError(client, status)
+		return
+	}
+	defer func() {
+		if rec.state() != StateFailed {
+			rec.finish(StateClosed)
+		}
+	}()
+	rec.setCloseFn(func() {
+		client.Close()
+		upstream.Close()
+	})
+	defer func() {
+		activeConns.remove(upstream)
+		upstream.Close()
+	}()
+
+	client = &countingConn{Conn: client, in: &rec.bytesClientIn, out: &rec.bytesClientOut}
+
+	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+		return
+	}
+
+	tunnel(client, clientBr, upstream, upstreamBr)
+}
+
+// dialTarget opens a tunnel to host:port through the route selected for it and
+// returns the upstream connection (with its buffered reader) and the connection
+// registry entry, so that HTTP CONNECT and SOCKS5 share the routing logic. On
+// dial errors the returned record is already marked as failed.
+func dialTarget(kind, clientAddr, host, port, method, url string) (net.Conn, *bufio.Reader, *ConnInfo, error) {
 	route, ruleName := routeFor(host)
 	if route == nil {
-		connectError(client, http.StatusServiceUnavailable)
-		return
+		return nil, nil, nil, fmt.Errorf("no route available for %s", host)
 	}
 	proxy := route.FindProxy("https://" + net.JoinHostPort(host, port) + "/")
 
@@ -553,13 +590,8 @@ func handleConnect(client net.Conn, clientBr *bufio.Reader, hostport string) {
 		}
 	}
 
-	rec := connReg.newConn("tunnel", client.RemoteAddr().String(), host, target, proxyAddr, route.name, route.cred, "CONNECT", "")
-	defer func() {
-		if rec.state() != StateFailed {
-			rec.finish(StateClosed)
-		}
-	}()
-	rec.event(fmt.Sprintf("CONNECT %s", target))
+	rec := connReg.newConn(kind, clientAddr, host, target, proxyAddr, route.name, route.cred, method, url)
+	rec.event(fmt.Sprintf("%s %s", method, target))
 	if ruleName != "" {
 		rec.event(fmt.Sprintf("rule %q -> route %q", ruleName, route.name))
 	}
@@ -569,58 +601,30 @@ func handleConnect(client net.Conn, clientBr *bufio.Reader, hostport string) {
 		rec.event("direct connection")
 	}
 
-	cc := &countingConn{Conn: client, in: &rec.bytesClientIn, out: &rec.bytesClientOut}
-	client = cc
-
 	var upstream net.Conn
 	var upstreamBr *bufio.Reader
-	rec.setCloseFn(func() {
-		client.Close()
-		if upstream != nil {
-			upstream.Close()
-		}
-	})
-	defer func() {
-		if upstream != nil {
-			activeConns.remove(upstream)
-			upstream.Close()
-		}
-	}()
-
+	var err error
 	if proxy.Type == "DIRECT" {
 		upstream, err = net.DialTimeout("tcp", target, dialTimeout)
-		if err != nil {
-			rec.setError(err.Error())
-			rec.finish(StateFailed)
-			log.Printf("Error connecting to %s: %+v", target, err)
-			connectError(client, http.StatusBadGateway)
-			return
+		if err == nil {
+			upstream = &countingConn{Conn: upstream, in: &rec.bytesUpIn, out: &rec.bytesUpOut}
+			upstreamBr = bufio.NewReader(upstream)
 		}
-		upstream = &countingConn{Conn: upstream, in: &rec.bytesUpIn, out: &rec.bytesUpOut}
-		upstreamBr = bufio.NewReader(upstream)
 	} else {
 		upstream, upstreamBr, err = dialProxyAndConnect(route, proxy, target, rec)
-		if err != nil {
-			rec.setError(err.Error())
-			rec.finish(StateFailed)
-			log.Printf("Error connecting to %s through %s: %+v", target, proxy.Address, err)
-			connectError(client, http.StatusBadGateway)
-			return
-		}
 	}
-	activeConns.add(upstream)
+	if err != nil {
+		rec.setError(err.Error())
+		rec.finish(StateFailed)
+		log.Printf("Error connecting to %s via route %q: %+v", target, route.name, err)
+		return nil, nil, rec, err
+	}
 
+	activeConns.add(upstream)
 	rec.setState(StateEstablished)
 	rec.event("tunnel established")
-
 	log.Printf("Tunnel established to %s through %s via route %q", target, proxy.Address, route.name)
-
-	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
-		upstream.Close()
-		return
-	}
-
-	tunnel(client, clientBr, upstream, upstreamBr)
+	return upstream, upstreamBr, rec, nil
 }
 
 func dialProxyAndConnect(route *ProxyRoute, proxy *gpac.Proxy, target string, rec *ConnInfo) (net.Conn, *bufio.Reader, error) {

@@ -38,6 +38,13 @@ type ProxyRoute struct {
 	hops      []ConfigHop // chain as configured, for editing
 	rulesOnly bool        // usable only by destination rules, not as default route
 
+	// automaticChain is the chain cut before the first RulesOnly hop; it is
+	// what the automatic selection uses. auto is its lazily built route.
+	autoChain []*chainHop
+	autoHops  []ConfigHop
+	autoCut   bool
+	auto      *ProxyRoute
+
 	mu             sync.Mutex
 	pac            *gpac.Parser
 	pacError       string
@@ -120,9 +127,13 @@ func loadRoutes() {
 			log.Printf("Route %q: invalid Chain: %v (route skipped)", r.Name, err)
 			continue
 		}
+		autoChain, autoHops, autoCut := automaticChain(chain, r.Chain)
 		newRoutes = append(newRoutes, &ProxyRoute{
 			chain:     chain,
 			hops:      r.Chain,
+			autoChain: autoChain,
+			autoHops:  autoHops,
+			autoCut:   autoCut,
 			name:      r.Name,
 			gateway:   r.Gateway,
 			iface:     r.IFace,
@@ -578,6 +589,26 @@ func (p *ProxyRoute) FindProxy(urlStr string) *gpac.Proxy {
 	return &gpac.Proxy{
 		Type: "DIRECT",
 	}
+}
+
+// autoRoute returns the route variant used by the automatic selection: its
+// chain stops before the first hop marked RulesOnly. Routes without such hops
+// are returned unchanged.
+func (p *ProxyRoute) autoRoute() *ProxyRoute {
+	if !p.autoCut {
+		return p
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.auto == nil {
+		p.auto = &ProxyRoute{
+			name:  p.name,
+			cred:  p.cred,
+			chain: p.autoChain,
+			hops:  p.autoHops,
+		}
+	}
+	return p.auto
 }
 
 // getRoundTripper returns a cached http.RoundTripper for the given upstream

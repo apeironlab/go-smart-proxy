@@ -36,6 +36,9 @@ type ConfigRoute struct {
 type ConfigHop struct {
 	ProxyUrl   string `yaml:"ProxyUrl" json:"proxyUrl"`
 	Credential string `yaml:"Credential" json:"credential"`
+	// RulesOnly makes this hop a boundary: the chain stops before it unless
+	// the route was selected by a destination rule.
+	RulesOnly bool `yaml:"RulesOnly,omitempty" json:"rulesOnly"`
 }
 
 // RelayConfig connects this proxy to a relay (see cmd/proxyrelay) so that it can
@@ -55,6 +58,7 @@ type RelayConfig struct {
 type Configuration struct {
 	Relay              *RelayConfig       `yaml:"Relay,omitempty"`
 	Address            string             `yaml:"Address"`
+	SocksAddress       string             `yaml:"SocksAddress,omitempty"` // optional SOCKS5 listener, empty = disabled
 	Credentials        []ConfigCredential `yaml:"Credentials"`
 	Routes             []ConfigRoute      `yaml:"Routes"`
 	Rules              []ConfigRule       `yaml:"Rules,omitempty"`
