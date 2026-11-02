@@ -886,6 +886,14 @@ func systrayReady() {
 	}()
 
 	systray.AddSeparator()
+	mOpen := systray.AddMenuItem("Open management page", "Open the web UI in the browser")
+	go func() {
+		for range mOpen.ClickedCh {
+			if err := openBrowser(webUIURL()); err != nil {
+				log.Printf("Cannot open the browser: %+v", err)
+			}
+		}
+	}()
 	mQuit := systray.AddMenuItem("Quit", "Quit proxy")
 
 	go systrayReact(mQuit)
