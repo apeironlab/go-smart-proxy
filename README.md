@@ -66,10 +66,14 @@ are in English.
 - **Rules-only routes and hops**: keep corporate/VPN/relay routes out of the
   automatic selection.
 - **Relay**: mTLS-authenticated rendezvous relay, contact address book, explicit
-  route approvals, multiple devices per user, and desktop notifications.
+  route approvals scoped per device, multiple devices per user (your own devices
+  are listed and usable without an invitation), and desktop notifications.
 - **Encrypted configuration** with a master password (PBKDF2 + AES-256-GCM).
   On macOS the derived key can be stored in the Keychain and unlocked with
   Touch ID.
+- **Complete web configuration**: listeners, SOCKS5, system integration, static
+  hosts, routes and route ordering, rules, credentials, relay settings and
+  certificates.
 - **Web first-run setup**: choose the master password in the browser and get
   working HTTP/SOCKS defaults without editing a file.
 - **System tray** with dynamic route selection and a web UI for configuration,
@@ -458,6 +462,22 @@ address/route/`AllowLocal`, manual relay certificate PEMs (write-only; the API
 never returns private keys), and route ordering. Relay certificate enrollment
 and device renaming remain on the Relay page.
 
+| Setting | Where in the web UI |
+|---|---|
+| HTTP listener and web UI | Configurazione → Rete |
+| SOCKS5 listener | Configurazione → SOCKS5 |
+| System proxy and excluded services | Configurazione → Rete |
+| PAC hijack and host name | Configurazione → Rete |
+| Chrome policy | Configurazione → Rete |
+| Static host → IP mappings | Configurazione → Host fissi |
+| Routes, chains, per-hop `RulesOnly`, route priority | Configurazione → Route |
+| Destination rules, rule order, destination test | Regole |
+| Credentials | Credenziali |
+| Forced route | Configurazione or tray |
+| Relay address, route, `AllowLocal`, manual certificate | Configurazione → Relay |
+| Relay enrollment, device name, contacts, approvals | Relay |
+| Live connections and DNS cache | Connessioni / Configurazione |
+
 The API is intentionally unauthenticated and **loopback-only**; do not expose
 the listener to untrusted networks. A non-exhaustive endpoint list:
 
@@ -599,13 +619,13 @@ Route syntax:
 - `relay://alice@example.com/quiet-otter-7f3a` — use a specific device.
 
 The Relay page lists **all your known devices** (online and offline), each with
-its usable `relay://you@example.com/device` address. Your devices can be used
-directly, without sending a contact request to yourself; the exit device still
-requires the normal route approval. The page also lists the online devices of
-each contact; the route editor autocompletes `relay://email/device` as you type
-and suggests hops already used in other routes. Device codes are routing labels,
-not separate authentication: devices sharing one certificate all authenticate as
-the same user.
+its usable `relay://you@example.com/device` address. The relay remembers devices
+across restarts. Your devices can be used directly, without sending a contact
+request to yourself; the exit device still requires the normal route approval.
+The page also lists the online devices of each contact; the route editor
+autocompletes `relay://email/device` as you type and suggests hops already used
+in other routes. Device codes are routing labels, not separate authentication:
+devices sharing one certificate all authenticate as the same user.
 
 ### Contacts and route approvals
 
@@ -964,6 +984,11 @@ Current limitations:
 
 Possible future work:
 
+- Rules/routes UX redesign: reusable upstream profiles, rule groups, a visual
+  flow (`rule → profile → hop chain`), drag-and-drop ordering, and a richer
+  destination tester.
+- Per-device certificate identities (today device codes are routing labels and
+  devices may share one certificate).
 - Password rotation/rewrap tooling and recovery-key design.
 - Automatic certificate renewal, revocation, and audit logs.
 - Admin UI/API for invitations, users, and device management.
