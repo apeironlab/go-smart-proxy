@@ -1,30 +1,6 @@
 import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
-
-import bg from './locales/bg.json'
-import cs from './locales/cs.json'
-import da from './locales/da.json'
-import de from './locales/de.json'
-import el from './locales/el.json'
 import en from './locales/en.json'
-import es from './locales/es.json'
-import et from './locales/et.json'
-import fi from './locales/fi.json'
-import fr from './locales/fr.json'
-import ga from './locales/ga.json'
-import hr from './locales/hr.json'
-import hu from './locales/hu.json'
-import it from './locales/it.json'
-import lt from './locales/lt.json'
-import lv from './locales/lv.json'
-import mt from './locales/mt.json'
-import nl from './locales/nl.json'
-import pl from './locales/pl.json'
-import pt from './locales/pt.json'
-import ro from './locales/ro.json'
-import sk from './locales/sk.json'
-import sl from './locales/sl.json'
-import sv from './locales/sv.json'
 
 export type LanguageCode =
   | 'bg' | 'hr' | 'cs' | 'da' | 'nl' | 'en' | 'et' | 'fi' | 'fr' | 'de'
@@ -58,33 +34,6 @@ export const languages: { code: LanguageCode; label: string }[] = [
   { code: 'sv', label: 'Svenska' },
 ]
 
-const resources = {
-  bg: { translation: bg },
-  hr: { translation: hr },
-  cs: { translation: cs },
-  da: { translation: da },
-  nl: { translation: nl },
-  en: { translation: en },
-  et: { translation: et },
-  fi: { translation: fi },
-  fr: { translation: fr },
-  de: { translation: de },
-  el: { translation: el },
-  hu: { translation: hu },
-  ga: { translation: ga },
-  it: { translation: it },
-  lv: { translation: lv },
-  lt: { translation: lt },
-  mt: { translation: mt },
-  pl: { translation: pl },
-  pt: { translation: pt },
-  ro: { translation: ro },
-  sk: { translation: sk },
-  sl: { translation: sl },
-  es: { translation: es },
-  sv: { translation: sv },
-}
-
 const supported = languages.map((l) => l.code)
 const storageKey = 'gsp.language'
 
@@ -99,11 +48,17 @@ export function detectLanguage(): LanguageCode {
   return 'en'
 }
 
+export async function loadLanguage(code: LanguageCode): Promise<void> {
+  if (code === 'en' || i18n.hasResourceBundle(code, 'translation')) return
+  const module = await import(`./locales/${code}.json`)
+  i18n.addResourceBundle(code, 'translation', module.default ?? module, true, true)
+}
+
 i18n
   .use(initReactI18next)
   .init({
-    resources,
-    lng: detectLanguage(),
+    resources: { en: { translation: en } },
+    lng: 'en',
     fallbackLng: 'en',
     supportedLngs: supported,
     keySeparator: false,
@@ -112,9 +67,21 @@ i18n
     returnNull: false,
   })
 
+const initial = detectLanguage()
+if (initial !== 'en') {
+  void loadLanguage(initial).then(() => {
+    void i18n.changeLanguage(initial)
+  })
+}
+
 i18n.on('languageChanged', (lng) => {
   localStorage.setItem(storageKey, lng)
   document.documentElement.lang = lng
+  if (lng !== 'en' && !i18n.hasResourceBundle(lng, 'translation')) {
+    void loadLanguage(lng as LanguageCode).then(() => {
+      void i18n.changeLanguage(lng)
+    })
+  }
 })
 
 document.documentElement.lang = i18n.language

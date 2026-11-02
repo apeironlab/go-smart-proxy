@@ -10,7 +10,7 @@ import OnboardingPage from './pages/OnboardingPage'
 import RelayPage from './pages/RelayPage'
 import RulesPage from './pages/RulesPage'
 import { api } from './api'
-import { languages } from './i18n'
+import { languages, loadLanguage } from './i18n'
 import type { StateInfo } from './api'
 
 export default function App() {
@@ -86,7 +86,10 @@ export default function App() {
               {languages.map((language) => (
                 <Menu.Item
                   key={language.code}
-                  onClick={() => i18n.changeLanguage(language.code)}
+                  onClick={async () => {
+                    await loadLanguage(language.code)
+                    await i18n.changeLanguage(language.code)
+                  }}
                   fw={i18n.language === language.code ? 700 : undefined}
                 >
                   {language.label}
