@@ -444,13 +444,19 @@ the HTTP proxy address. It is available only to loopback clients.
 Pages:
 
 - **Configurazione** — listeners, SOCKS5, system proxy, PAC hijack, Chrome
-  policy, routes and chains, DNS cache.
+  policy, static hosts, relay connection settings, routes and chains, DNS cache.
 - **Regole** — destination rules and a route test tool.
 - **Credenziali** — named credentials; passwords are never returned by the API
   (an empty field keeps the current password).
 - **Connessioni** — live/recent connections, routes, bytes, errors, events.
 - **Relay** — connection status, contacts, approved routes, device code,
   enrollment/reconfiguration.
+
+The **Configurazione** page is the single place for proxy-wide settings:
+listeners, SOCKS5, system proxy, PAC hijack, Chrome policy, static hosts, relay
+address/route/`AllowLocal`, manual relay certificate PEMs (write-only; the API
+never returns private keys), and route ordering. Relay certificate enrollment
+and device renaming remain on the Relay page.
 
 The API is intentionally unauthenticated and **loopback-only**; do not expose
 the listener to untrusted networks. A non-exhaustive endpoint list:
@@ -459,7 +465,9 @@ the listener to untrusted networks. A non-exhaustive endpoint list:
 |---|---|---|
 | GET | `/api/state` | Network, listeners, routes, DNS cache |
 | GET/POST | `/api/config` | Read/update settings |
+| POST | `/api/onboarding` | Complete first-run onboarding |
 | GET/POST | `/api/routes` | List/save routes |
+| POST | `/api/routes/order` | Reorder routes |
 | DELETE | `/api/routes/{name}` | Delete a route |
 | GET/POST | `/api/rules` | List/save rules |
 | GET | `/api/rules/test?host=...` | Which route would be used |
@@ -468,6 +476,7 @@ the listener to untrusted networks. A non-exhaustive endpoint list:
 | POST | `/api/pac/refresh` | Refresh a PAC |
 | GET | `/api/connections` | Connection log |
 | GET | `/api/relay` | Relay status, contacts, approvals |
+| GET/POST | `/api/relay/config` | Relay address/route/AllowLocal and manual certificate |
 | POST | `/api/relay/contacts` | Send a contact request |
 | POST | `/api/relay/contacts/respond` | Accept/refuse a contact |
 | POST | `/api/relay/approvals/{id}` | Approve/refuse a route |

@@ -87,6 +87,7 @@ export interface StateInfo {
   address: string
   socksAddress: string
   onboarding: boolean
+  hosts: Record<string, string>
   iface: string
   gateway: string
   network: string
@@ -153,8 +154,8 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json()
 }
 
-const post = (path: string, body: unknown) =>
-  req(path, {
+const post = <T = unknown>(path: string, body: unknown) =>
+  req<T>(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -163,6 +164,7 @@ const post = (path: string, body: unknown) =>
 export const api = {
   state: () => req<StateInfo>('/api/state'),
   routes: () => req<RouteInfo[]>('/api/routes'),
+  reorderRoutes: (names: string[]) => post('/api/routes/order', { names }),
   saveRoute: (r: RouteForm) => post('/api/routes', r),
   deleteRoute: (name: string) => req(`/api/routes/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   credentials: () => req<Credential[]>('/api/credentials'),
@@ -175,6 +177,7 @@ export const api = {
   saveConfig: (form: {
     address: string
     socksAddress: string
+    hosts: Record<string, string>
     systemProxy: boolean
     systemProxyExclude: string[]
     pacHijack: boolean
@@ -183,6 +186,8 @@ export const api = {
   }) => post('/api/config', form),
   finishOnboarding: () => post('/api/onboarding', {}),
   relay: () => req<RelayStatus>('/api/relay'),
+  relayConfig: () => req<RelayConfigInfo>('/api/relay/config'),
+  saveRelayConfig: (form: RelayConfigForm) => post<RelayConfigInfo>('/api/relay/config', form),
   relayEnroll: (address: string, email: string, caPem: string, acceptFingerprint = '') =>
     post('/api/relay/enroll', { address, email, caPem, acceptFingerprint }),
   relayEnrollStatus: () => req<{ pending: boolean; email?: string; address?: string; expiresAt?: string }>('/api/relay/enroll'),
@@ -237,6 +242,26 @@ export interface RelayStatus {
   outgoing: string[]
   approvals: RelayApproval[]
   rules: RelayRule[]
+}
+
+export interface RelayConfigInfo {
+  address: string
+  route: string
+  allowLocal: boolean
+  device: string
+  enrollUrl?: string
+  hasCertificate: boolean
+  hasCA: boolean
+}
+
+export interface RelayConfigForm {
+  address: string
+  route: string
+  allowLocal: boolean
+  certPem: string
+  keyPem: string
+  caPem: string
+  clearCertificate?: boolean
 }
 
 export interface RoutingRule {

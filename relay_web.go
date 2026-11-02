@@ -1,16 +1,143 @@
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"net"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"proxy/relay"
 )
 
+type relayConfigJSON struct {
+	Address        string `json:"address"`
+	Route          string `json:"route"`
+	AllowLocal     bool   `json:"allowLocal"`
+	Device         string `json:"device"`
+	EnrollURL      string `json:"enrollUrl,omitempty"`
+	HasCertificate bool   `json:"hasCertificate"`
+	HasCA          bool   `json:"hasCA"`
+}
+
+func relayConfigInfoLocked() relayConfigJSON {
+	if configuration.Relay == nil {
+		return relayConfigJSON{}
+	}
+	cfg := configuration.Relay
+	return relayConfigJSON{
+		Address:        cfg.Address,
+		Route:          cfg.Route,
+		AllowLocal:     cfg.AllowLocal,
+		Device:         cfg.Device,
+		EnrollURL:      cfg.EnrollURL,
+		HasCertificate: cfg.CertPEM != "" || (cfg.Cert != "" && cfg.Key != ""),
+		HasCA:          cfg.CAPEM != "" || cfg.CA != "",
+	}
+}
+
 func registerRelayRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/relay", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, relayMgr.Status())
+	})
+	m.HandleFunc("GET /api/relay/config", func(w http.ResponseWriter, r *http.Request) {
+		configMu.Lock()
+		info := relayConfigInfoLocked()
+		configMu.Unlock()
+		writeJSON(w, info)
+	})
+	m.HandleFunc("POST /api/relay/config", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Address          string `json:"address"`
+			Route            string `json:"route"`
+			AllowLocal       bool   `json:"allowLocal"`
+			CertPEM          string `json:"certPem"`
+			KeyPEM           string `json:"keyPem"`
+			CAPEM            string `json:"caPem"`
+			ClearCertificate bool   `json:"clearCertificate"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid body")
+			return
+		}
+		address := strings.TrimSpace(body.Address)
+		if address == "" {
+			writeAPIError(w, http.StatusBadRequest, "relay address is required")
+			return
+		}
+		if strings.Contains(address, ":") {
+			if _, _, err := net.SplitHostPort(address); err != nil {
+				writeAPIError(w, http.StatusBadRequest, "relay address must be host:port")
+				return
+			}
+		}
+		route := strings.TrimSpace(body.Route)
+		if route != "" {
+			found := false
+			for _, rt := range getRoutes() {
+				if rt.name == route {
+					found = true
+					break
+				}
+			}
+			if !found {
+				writeAPIError(w, http.StatusBadRequest, "route does not exist")
+				return
+			}
+		}
+		if (body.CertPEM == "") != (body.KeyPEM == "") {
+			writeAPIError(w, http.StatusBadRequest, "both certificate and private key are required")
+			return
+		}
+		if body.CertPEM != "" {
+			if _, err := tls.X509KeyPair([]byte(body.CertPEM), []byte(body.KeyPEM)); err != nil {
+				writeAPIError(w, http.StatusBadRequest, "invalid certificate/key pair: "+err.Error())
+				return
+			}
+		}
+		if strings.TrimSpace(body.CAPEM) != "" {
+			pool := x509.NewCertPool()
+			if !pool.AppendCertsFromPEM([]byte(body.CAPEM)) {
+				writeAPIError(w, http.StatusBadRequest, "invalid CA PEM")
+				return
+			}
+		}
+
+		configMu.Lock()
+		if configuration.Relay == nil {
+			configuration.Relay = &RelayConfig{}
+		}
+		cfg := configuration.Relay
+		cfg.Address = address
+		cfg.Route = route
+		cfg.AllowLocal = body.AllowLocal
+		if cfg.Device == "" {
+			cfg.Device = randomDeviceID()
+		}
+		if body.ClearCertificate {
+			cfg.CertPEM, cfg.KeyPEM, cfg.CAPEM = "", "", ""
+			cfg.Cert, cfg.Key, cfg.CA = "", "", ""
+		} else {
+			if body.CertPEM != "" {
+				cfg.CertPEM, cfg.KeyPEM = body.CertPEM, body.KeyPEM
+				cfg.Cert, cfg.Key = "", ""
+			}
+			if strings.TrimSpace(body.CAPEM) != "" {
+				cfg.CAPEM = body.CAPEM
+				cfg.CA = ""
+			}
+		}
+		err := persistConfigurationLocked()
+		info := relayConfigInfoLocked()
+		configMu.Unlock()
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		relayMgr.start(cfg)
+		writeJSON(w, info)
 	})
 	m.HandleFunc("POST /api/relay/contacts", func(w http.ResponseWriter, r *http.Request) {
 		relayCommand(w, r, relay.TContactRequest)

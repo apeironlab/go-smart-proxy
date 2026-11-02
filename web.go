@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,6 +50,7 @@ func newAPIMux() *http.ServeMux {
 	m.HandleFunc("GET /api/state", apiState)
 	m.HandleFunc("GET /api/routes", apiListRoutes)
 	m.HandleFunc("POST /api/routes", apiSaveRoute)
+	m.HandleFunc("POST /api/routes/order", apiReorderRoutes)
 	m.HandleFunc("DELETE /api/routes/{name}", apiDeleteRoute)
 	m.HandleFunc("GET /api/credentials", apiListCredentials)
 	m.HandleFunc("POST /api/credentials", apiSaveCredential)
@@ -124,22 +126,23 @@ type dnsEntryJSON struct {
 }
 
 type stateJSON struct {
-	Address            string          `json:"address"`
-	SocksAddress       string          `json:"socksAddress"`
-	Onboarding         bool            `json:"onboarding"`
-	Iface              string          `json:"iface"`
-	Gateway            string          `json:"gateway"`
-	Network            string          `json:"network"`
-	ForceRoute         string          `json:"forceRoute"`
-	SystemProxy        bool            `json:"systemProxy"`
-	SystemProxyExclude []string        `json:"systemProxyExclude"`
-	PacHijack          bool            `json:"pacHijack"`
-	PacHijackHost      string          `json:"pacHijackHost"`
-	ForceChrome        bool            `json:"forceChrome"`
-	UptimeSeconds      int64           `json:"uptimeSeconds"`
-	ActiveConns        int             `json:"activeConns"`
-	Routes             []routeInfoJSON `json:"routes"`
-	DNS                []dnsEntryJSON  `json:"dns"`
+	Address            string            `json:"address"`
+	SocksAddress       string            `json:"socksAddress"`
+	Onboarding         bool              `json:"onboarding"`
+	Iface              string            `json:"iface"`
+	Gateway            string            `json:"gateway"`
+	Network            string            `json:"network"`
+	ForceRoute         string            `json:"forceRoute"`
+	SystemProxy        bool              `json:"systemProxy"`
+	SystemProxyExclude []string          `json:"systemProxyExclude"`
+	PacHijack          bool              `json:"pacHijack"`
+	PacHijackHost      string            `json:"pacHijackHost"`
+	ForceChrome        bool              `json:"forceChrome"`
+	Hosts              map[string]string `json:"hosts"`
+	UptimeSeconds      int64             `json:"uptimeSeconds"`
+	ActiveConns        int               `json:"activeConns"`
+	Routes             []routeInfoJSON   `json:"routes"`
+	DNS                []dnsEntryJSON    `json:"dns"`
 }
 
 func apiState(w http.ResponseWriter, r *http.Request) {
@@ -156,6 +159,13 @@ func apiState(w http.ResponseWriter, r *http.Request) {
 	onboarding := configuration.OnboardingDone != nil && !*configuration.OnboardingDone
 	configMu.Unlock()
 
+	hosts := map[string]string{}
+	hostsMu.RLock()
+	for host, address := range configuration.Hosts {
+		hosts[host] = address
+	}
+	hostsMu.RUnlock()
+
 	state := stateJSON{
 		Address:            address,
 		SocksAddress:       socksAddress,
@@ -168,6 +178,7 @@ func apiState(w http.ResponseWriter, r *http.Request) {
 		PacHijack:          pacHijack,
 		PacHijackHost:      pacHijackHost,
 		ForceChrome:        forceChrome,
+		Hosts:              hosts,
 		UptimeSeconds:      int64(time.Since(startedAt).Seconds()),
 		ActiveConns:        connReg.activeCount(),
 		Routes:             make([]routeInfoJSON, 0),
@@ -287,6 +298,51 @@ func apiSaveRoute(w http.ResponseWriter, r *http.Request) {
 	reapplyRoutesLocked()
 	configMu.Unlock()
 
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func apiReorderRoutes(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Names []string `json:"names"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	configMu.Lock()
+	if len(body.Names) != len(configuration.Routes) {
+		configMu.Unlock()
+		writeAPIError(w, http.StatusBadRequest, "the order must contain every route exactly once")
+		return
+	}
+	byName := make(map[string]ConfigRoute, len(configuration.Routes))
+	for _, rt := range configuration.Routes {
+		byName[rt.Name] = rt
+	}
+	ordered := make([]ConfigRoute, 0, len(body.Names))
+	for _, name := range body.Names {
+		rt, ok := byName[name]
+		if !ok {
+			configMu.Unlock()
+			writeAPIError(w, http.StatusBadRequest, "unknown route "+name)
+			return
+		}
+		delete(byName, name)
+		ordered = append(ordered, rt)
+	}
+	if len(byName) != 0 {
+		configMu.Unlock()
+		writeAPIError(w, http.StatusBadRequest, "the order must contain every route exactly once")
+		return
+	}
+	configuration.Routes = ordered
+	if err := persistConfigurationLocked(); err != nil {
+		configMu.Unlock()
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	reapplyRoutesLocked()
+	configMu.Unlock()
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
@@ -470,9 +526,16 @@ func apiGetConfig(w http.ResponseWriter, r *http.Request) {
 	pacHijackHost := configuration.PacHijackHost
 	forceChrome := configuration.ForceChrome
 	configMu.Unlock()
+	hosts := map[string]string{}
+	hostsMu.RLock()
+	for host, address := range configuration.Hosts {
+		hosts[host] = address
+	}
+	hostsMu.RUnlock()
 	writeJSON(w, map[string]interface{}{
 		"address":            address,
 		"socksAddress":       socksAddress,
+		"hosts":              hosts,
 		"systemProxy":        systemProxy,
 		"systemProxyExclude": systemProxyExclude,
 		"pacHijack":          pacHijack,
@@ -482,13 +545,14 @@ func apiGetConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 type configFormJSON struct {
-	Address            string    `json:"address"`
-	SocksAddress       *string   `json:"socksAddress"`
-	SystemProxy        *bool     `json:"systemProxy"`
-	SystemProxyExclude *[]string `json:"systemProxyExclude"`
-	PacHijack          *bool     `json:"pacHijack"`
-	PacHijackHost      string    `json:"pacHijackHost"`
-	ForceChrome        *bool     `json:"forceChrome"`
+	Address            string             `json:"address"`
+	SocksAddress       *string            `json:"socksAddress"`
+	Hosts              *map[string]string `json:"hosts"`
+	SystemProxy        *bool              `json:"systemProxy"`
+	SystemProxyExclude *[]string          `json:"systemProxyExclude"`
+	PacHijack          *bool              `json:"pacHijack"`
+	PacHijackHost      string             `json:"pacHijackHost"`
+	ForceChrome        *bool              `json:"forceChrome"`
 }
 
 func apiSaveConfig(w http.ResponseWriter, r *http.Request) {
@@ -508,6 +572,28 @@ func apiSaveConfig(w http.ResponseWriter, r *http.Request) {
 	if form.SocksAddress != nil && *form.SocksAddress != configuration.SocksAddress {
 		socksRestart = true
 		configuration.SocksAddress = *form.SocksAddress
+	}
+	if form.Hosts != nil {
+		hosts := map[string]string{}
+		for host, address := range *form.Hosts {
+			host = strings.ToLower(strings.TrimSpace(host))
+			address = strings.TrimSpace(address)
+			if host == "" && address == "" {
+				continue
+			}
+			if host == "" || net.ParseIP(address) == nil {
+				configMu.Unlock()
+				writeAPIError(w, http.StatusBadRequest, fmt.Sprintf("invalid Hosts entry %q: %q is not an IP address", host, address))
+				return
+			}
+			hosts[host] = address
+		}
+		hostsMu.Lock()
+		configuration.Hosts = hosts
+		hostsMu.Unlock()
+		if dnsCache != nil {
+			dnsCache.Purge()
+		}
 	}
 	if form.SystemProxy != nil {
 		configuration.SystemProxy = *form.SystemProxy

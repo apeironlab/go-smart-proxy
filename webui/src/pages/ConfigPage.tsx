@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ActionIcon, Alert, Autocomplete, Badge, Button, Card, Checkbox, Code, Divider, Group, Modal, Select, SimpleGrid, Stack, Switch, Table,
-  TagsInput, Text, TextInput, Title, Tooltip, Accordion,
+  TagsInput, Text, Textarea, TextInput, Title, Tooltip, Accordion,
 } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
 import { IconArrowDown, IconArrowUp, IconPencil, IconPlus, IconRefresh, IconTrash } from '@tabler/icons-react'
 import { api } from '../api'
-import type { Credential, Hop, RelayStatus, RouteInfo, StateInfo, SystemProxyState } from '../api'
+import type { Credential, Hop, RelayConfigInfo, RelayStatus, RouteInfo, StateInfo, SystemProxyState } from '../api'
 
 const pacColors: Record<string, string> = {
   none: 'gray',
@@ -40,6 +40,14 @@ export default function ConfigPage() {
   const [error, setError] = useState<string | null>(null)
   const [address, setAddress] = useState('')
   const [socksAddress, setSocksAddress] = useState('')
+  const [hosts, setHosts] = useState<{ host: string; ip: string }[]>([])
+  const [relayCfg, setRelayCfg] = useState<RelayConfigInfo | null>(null)
+  const [relayAddress, setRelayAddress] = useState('')
+  const [relayRoute, setRelayRoute] = useState('')
+  const [relayAllowLocal, setRelayAllowLocal] = useState(false)
+  const [relayCert, setRelayCert] = useState('')
+  const [relayKey, setRelayKey] = useState('')
+  const [relayCA, setRelayCA] = useState('')
   const [sysProxy, setSysProxy] = useState(false)
   const [exclude, setExclude] = useState<string[]>([])
   const [pacHijack, setPacHijack] = useState(false)
@@ -62,6 +70,7 @@ export default function ConfigPage() {
       if (!configLoaded) {
         setAddress(s.address)
         setSocksAddress(s.socksAddress ?? '')
+        setHosts(Object.entries(s.hosts ?? {}).map(([host, ip]) => ({ host, ip })))
         setSysProxy(s.systemProxy)
         setExclude(s.systemProxyExclude ?? [])
         setPacHijack(s.pacHijack)
@@ -74,6 +83,14 @@ export default function ConfigPage() {
     api.credentials().then(setCreds).catch(() => {})
     api.systemProxy().then(setSysProxyState).catch(() => {})
     api.relay().then(setRelaySt).catch(() => {})
+    api.relayConfig().then((rc) => {
+      setRelayCfg(rc)
+      if (!configLoaded) {
+        setRelayAddress(rc.address)
+        setRelayRoute(rc.route)
+        setRelayAllowLocal(rc.allowLocal)
+      }
+    }).catch(() => {})
   }, [configLoaded])
 
   useEffect(() => {
@@ -82,9 +99,50 @@ export default function ConfigPage() {
     return () => clearInterval(t)
   }, [load])
 
+  const hostsObject = () =>
+    Object.fromEntries(
+      hosts
+        .filter((h) => h.host.trim() && h.ip.trim())
+        .map((h) => [h.host.trim().toLowerCase(), h.ip.trim()]),
+    )
+
+  const setHostRow = (i: number, patch: Partial<{ host: string; ip: string }>) =>
+    setHosts(hosts.map((h, j) => (j === i ? { ...h, ...patch } : h)))
+
   const saveConfig = async () => {
     try {
-      await api.saveConfig({ address, socksAddress, systemProxy: sysProxy, systemProxyExclude: exclude, pacHijack, pacHijackHost, forceChrome })
+      await api.saveConfig({
+        address,
+        socksAddress,
+        hosts: hostsObject(),
+        systemProxy: sysProxy,
+        systemProxyExclude: exclude,
+        pacHijack,
+        pacHijackHost,
+        forceChrome,
+      })
+      load()
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  const saveRelay = async (clearCertificate = false) => {
+    try {
+      setError(null)
+      const info = await api.saveRelayConfig({
+        address: relayAddress.trim(),
+        route: relayRoute,
+        allowLocal: relayAllowLocal,
+        certPem: relayCert,
+        keyPem: relayKey,
+        caPem: relayCA,
+        clearCertificate,
+      })
+      setRelayCfg(info)
+      setRelayCert('')
+      setRelayKey('')
+      setRelayCA('')
       load()
     } catch (e) {
       setError(String(e))
@@ -151,6 +209,22 @@ export default function ConfigPage() {
 
   const routes = state?.routes ?? []
   const credOptions = creds.map((c) => ({ value: c.name, label: c.name }))
+  const configRouteNames = routes.filter((r) => r.name !== 'Direct').map((r) => r.name)
+  const routePos = (name: string) => configRouteNames.indexOf(name)
+
+  const moveRoute = async (name: string, delta: number) => {
+    const pos = routePos(name)
+    const target = pos + delta
+    if (pos < 0 || target < 0 || target >= configRouteNames.length) return
+    const names = [...configRouteNames]
+    ;[names[pos], names[target]] = [names[target], names[pos]]
+    try {
+      await api.reorderRoutes(names)
+      load()
+    } catch (e) {
+      setError(String(e))
+    }
+  }
 
   // Suggestions for the hop editor: relay contacts/devices plus every hop
   // already used by another route.
@@ -223,7 +297,7 @@ export default function ConfigPage() {
           onChange={(e) => {
             const v = e.currentTarget.checked
             setPacHijack(v)
-            api.saveConfig({ address, socksAddress, systemProxy: sysProxy, systemProxyExclude: exclude, pacHijack: v, pacHijackHost, forceChrome })
+            api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: exclude, pacHijack: v, pacHijackHost, forceChrome })
               .then(load)
               .catch((err) => setError(String(err)))
           }}
@@ -247,7 +321,7 @@ export default function ConfigPage() {
           onChange={(e) => {
             const v = e.currentTarget.checked
             setSysProxy(v)
-            api.saveConfig({ address, socksAddress, systemProxy: v, systemProxyExclude: exclude, pacHijack, pacHijackHost, forceChrome })
+            api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: v, systemProxyExclude: exclude, pacHijack, pacHijackHost, forceChrome })
               .then(load)
               .catch((err) => setError(String(err)))
           }}
@@ -260,7 +334,7 @@ export default function ConfigPage() {
           value={exclude}
           onChange={(v) => {
             setExclude(v)
-            api.saveConfig({ address, socksAddress, systemProxy: sysProxy, systemProxyExclude: v, pacHijack, pacHijackHost, forceChrome })
+            api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: v, pacHijack, pacHijackHost, forceChrome })
               .then(load)
               .catch((err) => setError(String(err)))
           }}
@@ -318,6 +392,108 @@ export default function ConfigPage() {
         </Text>
       </Card>
 
+      <Card withBorder mb="lg">
+        <Group justify="space-between" mb="xs">
+          <div>
+            <Text fw={700}>Host fissi</Text>
+            <Text size="xs" c="dimmed">
+              Risolvi un hostname a un IP fisso, ignorando il DNS (utile per nomi interni non
+              risolvibili dalla VPN). Lascia vuoto per usare il DNS normale.
+            </Text>
+          </div>
+          <Button size="xs" leftSection={<IconPlus size={14} />}
+            onClick={() => setHosts([...hosts, { host: '', ip: '' }])}>
+            Aggiungi
+          </Button>
+        </Group>
+        <Stack gap="xs">
+          {hosts.map((h, i) => (
+            <Group key={i} gap="xs" align="flex-end">
+              <TextInput style={{ flex: 2 }} label={i === 0 ? 'Host' : undefined}
+                placeholder="repo.intra.example.com" value={h.host}
+                onChange={(e) => setHostRow(i, { host: e.currentTarget.value })} />
+              <TextInput style={{ flex: 1 }} label={i === 0 ? 'IP' : undefined}
+                placeholder="192.0.2.40" value={h.ip}
+                onChange={(e) => setHostRow(i, { ip: e.currentTarget.value })} />
+              <ActionIcon variant="subtle" color="red" title="Rimuovi"
+                onClick={() => setHosts(hosts.filter((_, j) => j !== i))}>
+                <IconTrash size={16} />
+              </ActionIcon>
+            </Group>
+          ))}
+          {!hosts.length && <Text size="sm" c="dimmed">Nessun host fisso.</Text>}
+        </Stack>
+        <Group justify="flex-end" mt="sm">
+          <Button variant="light" onClick={saveConfig}>Salva host</Button>
+        </Group>
+      </Card>
+
+      <Card withBorder mb="lg">
+        <Group justify="space-between" mb="xs">
+          <div>
+            <Text fw={700}>Relay</Text>
+            <Text size="xs" c="dimmed">
+              Configurazione della connessione mTLS al relay. Per ottenere il certificato via
+              e-mail usa la pagina Relay; qui puoi anche incollare un certificato manuale.
+            </Text>
+          </div>
+          <Badge color={relayCfg?.hasCertificate ? 'green' : 'gray'} variant="light">
+            certificato {relayCfg?.hasCertificate ? 'presente' : 'assente'}
+          </Badge>
+        </Group>
+        <SimpleGrid cols={{ base: 1, sm: 2 }} mb="sm">
+          <TextInput label="Indirizzo mTLS" placeholder="relay.example.com:8443"
+            value={relayAddress} onChange={(e) => setRelayAddress(e.currentTarget.value)} />
+          <Select label="Route per raggiungere il relay" clearable placeholder="Automatica"
+            data={routes.map((r) => ({ value: r.name, label: r.name }))}
+            value={relayRoute || null} onChange={(v) => setRelayRoute(v ?? '')} />
+        </SimpleGrid>
+        <Switch label="Consenti ai contatti di raggiungere servizi su questa macchina"
+          description="AllowLocal: sconsigliato se non strettamente necessario."
+          checked={relayAllowLocal} onChange={(e) => setRelayAllowLocal(e.currentTarget.checked)} />
+        <Group justify="space-between" mt="sm">
+          <Text size="xs" c="dimmed">
+            {relayCfg?.device ? <>Device: <Code>{relayCfg.device}</Code> (modificabile dalla pagina Relay)</> : 'Device non ancora assegnato'}
+          </Text>
+          <Button variant="light" onClick={() => saveRelay(false)} disabled={!relayAddress.trim()}>
+            Salva relay
+          </Button>
+        </Group>
+
+        <Accordion mt="sm" variant="contained">
+          <Accordion.Item value="cert">
+            <Accordion.Control>
+              <Text size="sm" fw={600}>Certificato manuale</Text>
+            </Accordion.Control>
+            <Accordion.Panel>
+              <Stack gap="xs">
+                <Text size="xs" c="dimmed">
+                  Lascia vuoto per mantenere il certificato attuale. Il contenuto viene salvato
+                  solo nel config cifrato e non viene più restituito dall'API.
+                </Text>
+                <Textarea label="Certificato client (PEM)" minRows={3} value={relayCert}
+                  onChange={(e) => setRelayCert(e.currentTarget.value)} autosize />
+                <Textarea label="Chiave privata client (PEM)" minRows={3} value={relayKey}
+                  onChange={(e) => setRelayKey(e.currentTarget.value)} autosize />
+                <Textarea label="CA del relay (PEM, opzionale)" minRows={2} value={relayCA}
+                  onChange={(e) => setRelayCA(e.currentTarget.value)} autosize />
+                <Group justify="space-between">
+                  <Button variant="subtle" color="red"
+                    onClick={() => window.confirm('Rimuovere il certificato e la chiave del relay?') && saveRelay(true)}
+                    disabled={!relayCfg?.hasCertificate}>
+                    Rimuovi certificato
+                  </Button>
+                  <Button onClick={() => saveRelay(false)}
+                    disabled={(!relayCert && !relayKey && !relayCA) || !relayAddress.trim()}>
+                    Salva certificato
+                  </Button>
+                </Group>
+              </Stack>
+            </Accordion.Panel>
+          </Accordion.Item>
+        </Accordion>
+      </Card>
+
       <Group justify="space-between" mb="sm">
         <Title order={4}>Route</Title>
         <Button leftSection={<IconPlus size={16} />} onClick={openNew}>Aggiungi</Button>
@@ -369,6 +545,15 @@ export default function ConfigPage() {
               </Table.Td>
               <Table.Td>
                 <Group gap="xs" justify="flex-end">
+                  <ActionIcon variant="subtle" color="gray" title="Sposta su"
+                    disabled={routePos(r.name) <= 0} onClick={() => moveRoute(r.name, -1)}>
+                    <IconArrowUp size={16} />
+                  </ActionIcon>
+                  <ActionIcon variant="subtle" color="gray" title="Sposta giù"
+                    disabled={routePos(r.name) < 0 || routePos(r.name) >= configRouteNames.length - 1}
+                    onClick={() => moveRoute(r.name, 1)}>
+                    <IconArrowDown size={16} />
+                  </ActionIcon>
                   {r.pacUrl && (
                     <ActionIcon variant="subtle" color="blue" title="Ricaricare il PAC"
                       onClick={() => api.refreshPac(r.name).then(load).catch((e) => setError(String(e)))}>

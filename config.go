@@ -10,6 +10,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -93,6 +94,16 @@ type Configuration struct {
 }
 
 var configuration Configuration
+
+var hostsMu sync.RWMutex
+
+// hostOverride returns the configured fixed IP for a hostname.
+func hostOverride(host string) (string, bool) {
+	hostsMu.RLock()
+	defer hostsMu.RUnlock()
+	address, ok := configuration.Hosts[strings.ToLower(host)]
+	return address, ok
+}
 
 func boolPtr(v bool) *bool { return &v }
 

@@ -789,7 +789,7 @@ func resolveHost(host string) string {
 	if net.ParseIP(host) != nil {
 		return host
 	}
-	if address, ok := configuration.Hosts[strings.ToLower(host)]; ok {
+	if address, ok := hostOverride(host); ok {
 		return address
 	}
 	if v, ok := dnsCache.Get(host); ok {
