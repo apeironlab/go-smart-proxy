@@ -215,6 +215,37 @@ export default function RelayPage() {
       {st.notice && <Alert color="yellow">{st.notice}</Alert>}
       {!st.connected && st.error && <Alert color="red" title="Connessione al relay">{st.error}</Alert>}
 
+      {st.incoming.length > 0 && (
+        <Card withBorder style={{ borderColor: 'var(--mantine-color-yellow-6)' }}>
+          <Group justify="space-between" mb="xs">
+            <Text fw={700}>Richieste di contatto</Text>
+            <Badge color="yellow">{st.incoming.length}</Badge>
+          </Group>
+          <Text size="xs" c="dimmed" mb="xs">
+            Un utente vuole aggiungerti alla propria rubrica. Accetta o rifiuta per liberare la richiesta.
+          </Text>
+          <Table>
+            <Table.Tbody>
+              {st.incoming.map((e) => (
+                <Table.Tr key={e}>
+                  <Table.Td>{e}</Table.Td>
+                  <Table.Td>
+                    <Group gap="xs" justify="flex-end">
+                      <Button size="xs" leftSection={<IconCheck size={14} />} onClick={() => run(() => api.relayRespond(e, true))}>
+                        Accetta
+                      </Button>
+                      <Button size="xs" color="red" variant="light" leftSection={<IconX size={14} />} onClick={() => run(() => api.relayRespond(e, false))}>
+                        Rifiuta
+                      </Button>
+                    </Group>
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+        </Card>
+      )}
+
       <Card withBorder>
         <Text fw={700} mb="xs">I miei dispositivi</Text>
         <Text size="xs" c="dimmed" mb="xs">
@@ -269,31 +300,6 @@ export default function RelayPage() {
                       </Button>
                       <Button size="xs" color="red" variant="light" onClick={() => run(() => api.relayDecide(a.id, { allow: false }))}>
                         Nega
-                      </Button>
-                    </Group>
-                  </Table.Td>
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
-        </Card>
-      )}
-
-      {st.incoming.length > 0 && (
-        <Card withBorder>
-          <Text fw={700} mb="xs">Richieste di contatto</Text>
-          <Table>
-            <Table.Tbody>
-              {st.incoming.map((e) => (
-                <Table.Tr key={e}>
-                  <Table.Td>{e}</Table.Td>
-                  <Table.Td>
-                    <Group gap="xs" justify="flex-end">
-                      <Button size="xs" leftSection={<IconCheck size={14} />} onClick={() => run(() => api.relayRespond(e, true))}>
-                        Accetta
-                      </Button>
-                      <Button size="xs" color="red" variant="light" leftSection={<IconX size={14} />} onClick={() => run(() => api.relayRespond(e, false))}>
-                        Rifiuta
                       </Button>
                     </Group>
                   </Table.Td>

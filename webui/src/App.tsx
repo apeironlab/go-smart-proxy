@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AppShell, Badge, Burger, Code, Group, NavLink, ScrollArea, Title, Tooltip } from '@mantine/core'
+import { AppShell, Alert, Anchor, Badge, Burger, Code, Group, NavLink, ScrollArea, Title, Tooltip } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
 import { IconKey, IconNetwork, IconRoute, IconRouteAltRight, IconPlugConnected, IconSettings } from '@tabler/icons-react'
 import ConnectionsPage from './pages/ConnectionsPage'
@@ -88,7 +88,17 @@ export default function App() {
           ))}
         </AppShell.Section>
       </AppShell.Navbar>
-      <AppShell.Main>{pages.find((p) => p.id === page)?.comp}</AppShell.Main>
+      <AppShell.Main>
+        {pending > 0 && page !== 'relay' && (
+          <Alert color="yellow" title="Richieste in attesa" mb="md">
+            Hai {pending} richieste in attesa.{' '}
+            <Anchor component="button" type="button" onClick={() => setPage('relay')} fw={600}>
+              Apri Relay
+            </Anchor>
+          </Alert>
+        )}
+        {pages.find((p) => p.id === page)?.comp}
+      </AppShell.Main>
     </AppShell>
   )
 }

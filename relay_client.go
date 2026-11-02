@@ -26,6 +26,7 @@ const (
 	relayApprovalWait  = 60 * time.Second
 	relayDialReplyWait = 100 * time.Second
 	relayNoticeTTL     = 15 * time.Second
+	contactNotifyEvery = 6 * time.Hour
 )
 
 // relayRule remembers a route (contact + device + destination) that was approved.
@@ -55,9 +56,10 @@ type relayApproval struct {
 }
 
 type relayPersisted struct {
-	Rules  []relayRule `json:"rules"`
-	NextID int64       `json:"nextId"`
-	State  relay.State `json:"state"` // last known address book, shown while offline
+	Rules    []relayRule          `json:"rules"`
+	NextID   int64                `json:"nextId"`
+	State    relay.State          `json:"state"`              // last known address book, shown while offline
+	Notified map[string]time.Time `json:"notified,omitempty"` // contact request notification cooldown
 }
 
 // relayClient keeps the connection to the relay, the address book and the
@@ -76,6 +78,7 @@ type relayClient struct {
 	state     relay.State
 	notice    string
 	noticeAt  time.Time
+	notified  map[string]time.Time
 	approvals map[int64]*relayApproval
 	rules     []relayRule
 	nextID    int64
@@ -128,6 +131,7 @@ func (r *relayClient) loadFile() {
 	}
 	r.mu.Lock()
 	r.rules, r.nextID, r.state = p.Rules, p.NextID, p.State
+	r.notified = p.Notified
 	for i := range r.state.Contacts {
 		r.state.Contacts[i].Online = false
 		r.state.Contacts[i].Devices = nil
@@ -146,7 +150,9 @@ func (r *relayClient) loadFile() {
 }
 
 func (r *relayClient) saveLocked() {
-	b, _ := json.MarshalIndent(relayPersisted{Rules: r.rules, NextID: r.nextID, State: r.state}, "", "  ")
+	b, _ := json.MarshalIndent(relayPersisted{
+		Rules: r.rules, NextID: r.nextID, State: r.state, Notified: r.notified,
+	}, "", "  ")
 	tmp := r.stateFile() + ".tmp"
 	if os.WriteFile(tmp, b, 0o600) == nil {
 		os.Rename(tmp, r.stateFile())
@@ -353,6 +359,7 @@ func (r *relayClient) readState(ctrl net.Conn, sess *yamux.Session) {
 		if st.Notice != "" {
 			r.notice, r.noticeAt = st.Notice, time.Now()
 		}
+		now := time.Now()
 		for _, e := range st.Incoming {
 			seen := false
 			for _, old := range r.state.Incoming {
@@ -361,8 +368,14 @@ func (r *relayClient) readState(ctrl net.Conn, sess *yamux.Session) {
 					break
 				}
 			}
-			if !seen {
+			if !seen && r.shouldNotifyContactLocked(e, now) {
 				freshIncoming = append(freshIncoming, e)
+			}
+		}
+		// Keep the cooldown map bounded even with long-lived installations.
+		for e, at := range r.notified {
+			if now.Sub(at) > 30*24*time.Hour {
+				delete(r.notified, e)
 			}
 		}
 		r.state = st
@@ -371,9 +384,25 @@ func (r *relayClient) readState(ctrl net.Conn, sess *yamux.Session) {
 		r.mu.Unlock()
 
 		if len(freshIncoming) > 0 {
-			notifyDesktop("Richiesta di contatto", strings.Join(freshIncoming, ", "))
+			log.Printf("relay: contact request from %s", strings.Join(freshIncoming, ", "))
+			notifyDesktop("Go Smart Proxy: richiesta di contatto",
+				strings.Join(freshIncoming, ", ")+" — apri la pagina Relay per accettare o rifiutare")
 		}
 	}
+}
+
+// shouldNotifyContactLocked reports whether a contact request notification
+// should be shown for email. The cooldown avoids repeated notifications when a
+// relay re-sends the same pending request across reconnects or restarts.
+func (r *relayClient) shouldNotifyContactLocked(email string, now time.Time) bool {
+	if r.notified == nil {
+		r.notified = map[string]time.Time{}
+	}
+	if last, ok := r.notified[email]; ok && now.Sub(last) < contactNotifyEvery {
+		return false
+	}
+	r.notified[email] = now
+	return true
 }
 
 func (r *relayClient) dropRulesOfRemovedContactsLocked() {
