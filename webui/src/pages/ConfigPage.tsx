@@ -41,7 +41,7 @@ export default function ConfigPage() {
   const [editing, setEditing] = useState<RouteInfo | null>(null)
   const [form, setForm] = useState({
     name: '', gateway: '', iface: '', net: '', pacUrl: '', proxyUrl: '', credential: '',
-    hops: [] as Hop[],
+    hops: [] as Hop[], rulesOnly: false,
   })
   const [busy, setBusy] = useState(false)
 
@@ -90,7 +90,7 @@ export default function ConfigPage() {
 
   const openNew = () => {
     setEditing(null)
-    setForm({ name: '', gateway: '', iface: '', net: '', pacUrl: '', proxyUrl: '', credential: '', hops: [] })
+    setForm({ name: '', gateway: '', iface: '', net: '', pacUrl: '', proxyUrl: '', credential: '', hops: [], rulesOnly: false })
     open()
   }
 
@@ -100,6 +100,7 @@ export default function ConfigPage() {
       name: r.name, gateway: r.gateway, iface: r.iface, net: r.net,
       pacUrl: r.pacUrl, proxyUrl: r.proxyUrl, credential: r.credential,
       hops: (r.hops ?? []).map((h) => ({ ...h })),
+      rulesOnly: r.rulesOnly ?? false,
     })
     open()
   }
@@ -292,7 +293,12 @@ export default function ConfigPage() {
         <Table.Tbody>
           {routes.map((r) => (
             <Table.Tr key={r.name}>
-              <Table.Td><Text fw={600}>{r.name}</Text></Table.Td>
+              <Table.Td>
+                <Group gap={6} wrap="nowrap">
+                  <Text fw={600}>{r.name}</Text>
+                  {r.rulesOnly && <Badge size="xs" variant="light">regole</Badge>}
+                </Group>
+              </Table.Td>
               <Table.Td>{r.iface || '-'}</Table.Td>
               <Table.Td>{r.gateway || '-'}</Table.Td>
               <Table.Td>{r.net || '-'}</Table.Td>
@@ -383,6 +389,12 @@ export default function ConfigPage() {
           <TextInput label="PAC URL (opzionale)" placeholder="http://host/pac.pac"
             disabled={form.hops.length > 0}
             value={form.pacUrl} onChange={(e) => setForm({ ...form, pacUrl: e.currentTarget.value })} />
+          <Switch
+            label="Solo per regole"
+            description="La route è usata solo quando una regola di destinazione la indica: non viene scelta automaticamente e non viene usata per collegarsi al relay."
+            checked={form.rulesOnly}
+            onChange={(e) => setForm({ ...form, rulesOnly: e.currentTarget.checked })}
+          />
           <Divider label="Catena di proxy (opzionale)" labelPosition="left" mt="xs" />
           <Text size="xs" c="dimmed">
             Il traffico passa dal primo proxy, poi dal secondo attraverso il primo, e così via fino all'uscita.

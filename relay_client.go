@@ -154,26 +154,28 @@ func (r *relayClient) loop() {
 }
 
 // relayRoute picks the route used to reach the relay: the one named in the
-// configuration, or the one currently applicable (direct, proxy, chain...).
+// configuration, or the first applicable one that does not go through a relay
+// itself. A relay route needs the relay connection to be already up, so using
+// it to reach the relay can never work.
 func (r *relayClient) relayRoute() (*ProxyRoute, error) {
-	var route *ProxyRoute
 	if r.cfg.Route != "" {
 		for _, rt := range getRoutes() {
-			if rt.name == r.cfg.Route {
-				route = rt
+			if rt.name != r.cfg.Route {
+				continue
 			}
+			if rt.usesRelay() {
+				return nil, fmt.Errorf("route %q goes through a relay: it cannot be used to reach the relay itself", rt.name)
+			}
+			return rt, nil
 		}
-		if route == nil {
-			return nil, fmt.Errorf("Relay.Route %q does not exist", r.cfg.Route)
-		}
-	} else {
-		route = GetApplicableRoute()
+		return nil, fmt.Errorf("Relay.Route %q does not exist", r.cfg.Route)
 	}
+	// A relay route needs the relay connection to be already up, and a
+	// rules-only route is not meant for generic traffic: neither can be used
+	// to establish the relay connection.
+	route := getApplicableRoute(func(rt *ProxyRoute) bool { return rt.usesRelay() || rt.rulesOnly })
 	if route == nil {
 		return nil, errors.New("no route available")
-	}
-	if route.usesRelay() {
-		return nil, fmt.Errorf("route %q goes through a relay: it cannot be used to reach the relay itself", route.name)
 	}
 	return route, nil
 }

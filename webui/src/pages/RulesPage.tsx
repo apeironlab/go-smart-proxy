@@ -9,6 +9,15 @@ import type { RoutingRule, RuleTest } from '../api'
 
 const empty: RoutingRule = { name: '', domains: [], hosts: [], networks: [], route: '' }
 
+// The backend may send null for empty lists (older versions, or hand-edited
+// config.yml): normalize them so the page can always use .length and .map.
+const normalize = (r: RoutingRule): RoutingRule => ({
+  ...r,
+  domains: r.domains ?? [],
+  hosts: r.hosts ?? [],
+  networks: r.networks ?? [],
+})
+
 export default function RulesPage() {
   const [rules, setRules] = useState<RoutingRule[]>([])
   const [routeNames, setRouteNames] = useState<string[]>([])
@@ -20,7 +29,7 @@ export default function RulesPage() {
   const [testRes, setTestRes] = useState<RuleTest | null>(null)
 
   const load = useCallback(() => {
-    api.rules().then((r) => setRules(r ?? [])).catch((e) => setError(String(e)))
+    api.rules().then((r) => setRules((r ?? []).map(normalize))).catch((e) => setError(String(e)))
     api.routes().then((r) => setRouteNames(r.map((x) => x.name))).catch(() => {})
   }, [])
   useEffect(load, [load])

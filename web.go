@@ -109,6 +109,7 @@ type routeInfoJSON struct {
 	Credential string      `json:"credential"`
 	Chain      []string    `json:"chain"`
 	Hops       []ConfigHop `json:"hops"`
+	RulesOnly  bool        `json:"rulesOnly"`
 	Applicable bool        `json:"applicable"`
 	WhyNot     string      `json:"whyNot,omitempty"`
 	PacStatus  string      `json:"pacStatus"`
@@ -210,6 +211,7 @@ type routeFormJSON struct {
 	ProxyUrl   string      `json:"proxyUrl"`
 	Credential string      `json:"credential"`
 	Hops       []ConfigHop `json:"hops"`
+	RulesOnly  bool        `json:"rulesOnly"`
 }
 
 // validateHops checks a chain before it is saved; credentials are looked up under the lock.
@@ -249,6 +251,7 @@ func apiSaveRoute(w http.ResponseWriter, r *http.Request) {
 				PacUrl:     form.PacUrl,
 				ProxyUrl:   form.ProxyUrl,
 				Credential: form.Credential,
+				RulesOnly:  form.RulesOnly,
 			}
 			found = true
 			break
@@ -264,6 +267,7 @@ func apiSaveRoute(w http.ResponseWriter, r *http.Request) {
 			PacUrl:     form.PacUrl,
 			ProxyUrl:   form.ProxyUrl,
 			Credential: form.Credential,
+			RulesOnly:  form.RulesOnly,
 		})
 	}
 	if err := persistConfigurationLocked(); err != nil {

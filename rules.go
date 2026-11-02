@@ -159,12 +159,30 @@ func (c ConfigRule) validate() error {
 	return err
 }
 
+// normalized replaces the nil lists with empty ones, so that JSON clients
+// always receive arrays instead of null.
+func (c ConfigRule) normalized() ConfigRule {
+	if c.Domains == nil {
+		c.Domains = []string{}
+	}
+	if c.Hosts == nil {
+		c.Hosts = []string{}
+	}
+	if c.Networks == nil {
+		c.Networks = []string{}
+	}
+	return c
+}
+
 // --- web API ---
 
 func registerRuleRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/rules", func(w http.ResponseWriter, r *http.Request) {
 		configMu.Lock()
-		rules := append([]ConfigRule{}, configuration.Rules...)
+		rules := make([]ConfigRule, 0, len(configuration.Rules))
+		for _, rl := range configuration.Rules {
+			rules = append(rules, rl.normalized())
+		}
 		configMu.Unlock()
 		writeJSON(w, rules)
 	})
@@ -177,6 +195,9 @@ func registerRuleRoutes(m *http.ServeMux) {
 		if _, err := compileRules(rules); err != nil {
 			writeAPIError(w, http.StatusBadRequest, err.Error())
 			return
+		}
+		for i := range rules {
+			rules[i] = rules[i].normalized()
 		}
 		configMu.Lock()
 		known := map[string]bool{}

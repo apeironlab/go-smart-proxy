@@ -20,6 +20,9 @@ Routes:
   # - ProxyUrl: http://corporate-proxy:8080
   #   Credential: CredentialName
   # - ProxyUrl: socks5://other-proxy:1080
+  # Optional: use this route only when a destination rule names it. It is never
+  # picked as the automatic (default) route, nor to reach the relay.
+  # RulesOnly: true
 # Optional: connection to a relay (see cmd/proxyrelay) to exit through the network of your contacts.
 # The relay is reached through the currently applicable route (direct, proxy, chain...).
 # Use "relay://their@email" as the first hop of a route's Chain.

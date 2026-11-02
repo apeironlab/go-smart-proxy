@@ -13,6 +13,7 @@ export interface RouteInfo {
   credential: string
   chain?: string[] | null
   hops?: Hop[] | null
+  rulesOnly: boolean
   applicable: boolean
   whyNot: string
   pacStatus: string
@@ -107,6 +108,7 @@ export interface RouteForm {
   proxyUrl: string
   credential: string
   hops: Hop[]
+  rulesOnly: boolean
 }
 
 export interface CredentialForm {

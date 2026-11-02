@@ -22,6 +22,42 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Fatalf("timeout waiting for %s", what)
 }
 
+func TestRelayRouteSkipsRelayRoutes(t *testing.T) {
+	resetEnv(t, nil, []ConfigRoute{
+		{Name: "via bob", Chain: []ConfigHop{{ProxyUrl: "relay://bob@example.com"}}},
+		{Name: "corp only", ProxyUrl: "http://127.0.0.1:1", RulesOnly: true},
+	})
+	t.Cleanup(func() { setForceRoute(nil) })
+
+	r := &relayClient{cfg: &RelayConfig{}}
+
+	// Auto (no forced route): the relay route is applicable but must be
+	// ignored, because it can only work once the relay connection is up.
+	route, err := r.relayRoute()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.name != "Direct" {
+		t.Fatalf("auto selected %q, want Direct", route.name)
+	}
+
+	// Same when the relay route is explicitly forced (e.g. from the tray menu).
+	setForceRoute(getRoutes()[0])
+	route, err = r.relayRoute()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.name != "Direct" {
+		t.Fatalf("forced relay route selected %q, want Direct", route.name)
+	}
+
+	// Naming a relay route in Relay.Route is a configuration error.
+	r.cfg.Route = "via bob"
+	if _, err := r.relayRoute(); err == nil {
+		t.Fatal("an explicitly configured relay route must be rejected")
+	}
+}
+
 func TestRelayRouteEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	ca := filepath.Join(dir, "ca")

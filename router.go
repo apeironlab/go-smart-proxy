@@ -25,17 +25,18 @@ const (
 )
 
 type ProxyRoute struct {
-	name     string
-	gateway  string
-	iface    string
-	net      string
-	pacUrl   string
-	proxyUrl string
-	user     string
-	password string
-	cred     string
-	chain    []*chainHop
-	hops     []ConfigHop // chain as configured, for editing
+	name      string
+	gateway   string
+	iface     string
+	net       string
+	pacUrl    string
+	proxyUrl  string
+	user      string
+	password  string
+	cred      string
+	chain     []*chainHop
+	hops      []ConfigHop // chain as configured, for editing
+	rulesOnly bool        // usable only by destination rules, not as default route
 
 	mu             sync.Mutex
 	pac            *gpac.Parser
@@ -120,17 +121,18 @@ func loadRoutes() {
 			continue
 		}
 		newRoutes = append(newRoutes, &ProxyRoute{
-			chain:    chain,
-			hops:     r.Chain,
-			name:     r.Name,
-			gateway:  r.Gateway,
-			iface:    r.IFace,
-			net:      r.Net,
-			pacUrl:   r.PacUrl,
-			proxyUrl: r.ProxyUrl,
-			user:     user,
-			password: password,
-			cred:     r.Credential,
+			chain:     chain,
+			hops:      r.Chain,
+			name:      r.Name,
+			gateway:   r.Gateway,
+			iface:     r.IFace,
+			net:       r.Net,
+			pacUrl:    r.PacUrl,
+			proxyUrl:  r.ProxyUrl,
+			user:      user,
+			password:  password,
+			cred:      r.Credential,
+			rulesOnly: r.RulesOnly,
 		})
 		log.Printf("Loaded route %q (iface=%q gateway=%q net=%q pac=%q proxy=%q)",
 			r.Name, r.IFace, r.Gateway, r.Net, r.PacUrl, r.ProxyUrl)
@@ -533,6 +535,7 @@ func (p *ProxyRoute) info(st netState) routeInfoJSON {
 		Credential: p.cred,
 		Chain:      chainStrings(p.chain),
 		Hops:       append([]ConfigHop{}, p.hops...),
+		RulesOnly:  p.rulesOnly,
 		Applicable: applicable,
 		WhyNot:     why,
 		PacStatus:  pacStatus,
@@ -682,11 +685,20 @@ func proxyURLString(u *url.URL) string {
 
 // GetApplicableRoute returns the first route whose configured criteria
 // (gateway, interface, network) match the current network state, with the
-// forced route taking precedence when set. Direct is always last and always
+// forced route taking precedence when set. Routes marked RulesOnly are skipped
+// (only destination rules can select them). Direct is always last and always
 // applicable.
 func GetApplicableRoute() *ProxyRoute {
+	return getApplicableRoute(nil)
+}
+
+// getApplicableRoute is GetApplicableRoute with a filter: the routes for which
+// skip returns true are ignored. For instance the relay connection skips the
+// routes that exit through a relay, since they can only work once the relay
+// connection itself is up.
+func getApplicableRoute(skip func(*ProxyRoute) bool) *ProxyRoute {
 	st := getNetState()
-	if fr := getForceRoute(); fr != nil {
+	if fr := getForceRoute(); fr != nil && (skip == nil || !skip(fr)) {
 		err := fr.Check()
 		if err == nil {
 			return fr
@@ -694,6 +706,12 @@ func GetApplicableRoute() *ProxyRoute {
 		log.Printf("Error checking route %s: %+v", fr.name, err)
 	}
 	for _, r := range getRoutes() {
+		if skip != nil && skip(r) {
+			continue
+		}
+		if r.rulesOnly {
+			continue
+		}
 		if r.isApplicable(st) {
 			return r
 		}

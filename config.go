@@ -26,6 +26,9 @@ type ConfigRoute struct {
 	// Chain is an ordered list of upstream proxies (first = the one dialed directly).
 	// When present it takes precedence over PacUrl and ProxyUrl.
 	Chain []ConfigHop `yaml:"Chain,omitempty"`
+	// RulesOnly restricts the route to the destination rules: it is never
+	// picked as the automatic (default) route, nor to reach the relay.
+	RulesOnly bool `yaml:"RulesOnly,omitempty"`
 }
 
 // ConfigHop is one proxy of a chain. ProxyUrl accepts http://host:port and socks5://host:port.
