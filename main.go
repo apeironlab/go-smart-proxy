@@ -611,7 +611,7 @@ func dialTarget(kind, clientAddr, host, port, method, url string) (net.Conn, *bu
 			upstreamBr = bufio.NewReader(upstream)
 		}
 	} else {
-		upstream, upstreamBr, err = dialProxyAndConnect(route, proxy, target, rec)
+		upstream, upstreamBr, err = dialProxyAndConnect(route, proxy, target, host, rec)
 	}
 	if err != nil {
 		rec.setError(err.Error())
@@ -627,9 +627,9 @@ func dialTarget(kind, clientAddr, host, port, method, url string) (net.Conn, *bu
 	return upstream, upstreamBr, rec, nil
 }
 
-func dialProxyAndConnect(route *ProxyRoute, proxy *gpac.Proxy, target string, rec *ConnInfo) (net.Conn, *bufio.Reader, error) {
+func dialProxyAndConnect(route *ProxyRoute, proxy *gpac.Proxy, target, host string, rec *ConnInfo) (net.Conn, *bufio.Reader, error) {
 	if len(route.chain) > 0 {
-		return dialChain(route, target, rec)
+		return dialChain(route, target, host, rec)
 	}
 	upstream, err := net.DialTimeout("tcp", proxy.Address, dialTimeout)
 	if err != nil {
@@ -903,6 +903,11 @@ func refreshTrayMenu() {
 	routes := getRoutes()
 	visible := make(map[string]bool, len(routes))
 	for _, r := range routes {
+		if r.rulesOnly {
+			// Rules-only routes cannot be forced from the tray: they are
+			// reachable only through destination rules.
+			continue
+		}
 		visible[r.name] = true
 		item := trayByName[r.name]
 		if item == nil {
@@ -924,7 +929,13 @@ func refreshTrayMenu() {
 
 	fr := getForceRoute()
 	for _, r := range routes {
+		if r.rulesOnly {
+			continue
+		}
 		item := trayByName[r.name]
+		if item == nil {
+			continue
+		}
 		if fr != nil && fr.name == r.name {
 			item.Check()
 		} else {
@@ -950,6 +961,9 @@ func trayRouteClicked(item *systray.MenuItem) {
 		}
 		for _, r := range getRoutes() {
 			if r.name == name {
+				if r.rulesOnly {
+					break
+				}
 				log.Printf("Forcing route %s", name)
 				setForceRoute(r)
 				break

@@ -109,44 +109,95 @@ func init() {
 	}()
 }
 
-func loadRoutes() {
-	newRoutes := make([]*ProxyRoute, 0, len(configuration.Routes)+1)
-	for _, r := range configuration.Routes {
-		var cfgCred *ConfigCredential
-		var user string
-		var password string
-		if r.Credential != "" {
-			cfgCred = GetCredential(r.Credential)
-			if cfgCred != nil {
-				user = cfgCred.User
-				password = cfgCred.Password
+// migrateRouteUpstreams converts the legacy route-level upstream fields into a
+// single hop in Chain. The change is in memory: the startup path persists it,
+// while tests and reconfigurations simply use the migrated route.
+func migrateRouteUpstreams() bool {
+	changed := false
+	for i := range configuration.Routes {
+		r := &configuration.Routes[i]
+		if len(r.Chain) == 0 && (r.PacUrl != "" || r.ProxyUrl != "") {
+			cred := r.Credential
+			if cred != "" && GetCredential(cred) == nil {
+				log.Printf("Route %q: legacy credential %q not found; migrating without credentials", r.Name, cred)
+				cred = ""
 			}
+			hop := ConfigHop{Credential: cred}
+			if r.PacUrl != "" {
+				if r.ProxyUrl != "" {
+					log.Printf("Route %q: both PacUrl and ProxyUrl set; migrating PacUrl (it took precedence)", r.Name)
+				}
+				hop.PacUrl = r.PacUrl
+			} else {
+				hop.ProxyUrl = r.ProxyUrl
+			}
+			r.Chain = []ConfigHop{hop}
+			changed = true
 		}
-		chain, err := buildChain(r.Chain)
+		if r.PacUrl != "" || r.ProxyUrl != "" || r.Credential != "" {
+			r.PacUrl, r.ProxyUrl, r.Credential = "", "", ""
+			changed = true
+		}
+	}
+	return changed
+}
+
+// newProxyRoute validates a configured route and builds its runtime form.
+func newProxyRoute(r *ConfigRoute) (*ProxyRoute, error) {
+	p := &ProxyRoute{
+		name:      r.Name,
+		gateway:   r.Gateway,
+		iface:     r.IFace,
+		net:       r.Net,
+		rulesOnly: r.RulesOnly,
+		hops:      append([]ConfigHop(nil), r.Chain...),
+	}
+	chain, err := buildChain(r.Chain)
+	if err != nil {
+		return nil, fmt.Errorf("invalid Chain: %w", err)
+	}
+
+	// A PAC hop is not a proxy: the route evaluates the PAC file per request.
+	if len(chain) == 1 && chain[0].scheme == "pac" {
+		p.pacUrl = chain[0].addr
+		p.cred = chain[0].cred
+		p.user, p.password = chain[0].user, chain[0].password
+		if chain[0].rulesOnly {
+			// A PAC cannot be cut: only-rules means the whole route is.
+			p.rulesOnly = true
+		}
+		return p, nil
+	}
+
+	// A single unflagged HTTP proxy keeps the legacy request path: plain HTTP
+	// is forwarded in absolute form and NTLM uses the connection-based
+	// negotiator, exactly as before chains were introduced.
+	if len(chain) == 1 && chain[0].scheme == "http" && !chain[0].rulesOnly {
+		p.proxyUrl = chain[0].addr
+		p.cred = chain[0].cred
+		p.user, p.password = chain[0].user, chain[0].password
+		return p, nil
+	}
+
+	p.chain = chain
+	p.autoChain, p.autoHops, p.autoCut = automaticChain(chain, r.Chain)
+	return p, nil
+}
+
+func loadRoutes() {
+	migrateRouteUpstreams()
+
+	newRoutes := make([]*ProxyRoute, 0, len(configuration.Routes)+1)
+	for i := range configuration.Routes {
+		r := &configuration.Routes[i]
+		route, err := newProxyRoute(r)
 		if err != nil {
-			log.Printf("Route %q: invalid Chain: %v (route skipped)", r.Name, err)
+			log.Printf("Route %q: %v (route skipped)", r.Name, err)
 			continue
 		}
-		autoChain, autoHops, autoCut := automaticChain(chain, r.Chain)
-		newRoutes = append(newRoutes, &ProxyRoute{
-			chain:     chain,
-			hops:      r.Chain,
-			autoChain: autoChain,
-			autoHops:  autoHops,
-			autoCut:   autoCut,
-			name:      r.Name,
-			gateway:   r.Gateway,
-			iface:     r.IFace,
-			net:       r.Net,
-			pacUrl:    r.PacUrl,
-			proxyUrl:  r.ProxyUrl,
-			user:      user,
-			password:  password,
-			cred:      r.Credential,
-			rulesOnly: r.RulesOnly,
-		})
-		log.Printf("Loaded route %q (iface=%q gateway=%q net=%q pac=%q proxy=%q)",
-			r.Name, r.IFace, r.Gateway, r.Net, r.PacUrl, r.ProxyUrl)
+		newRoutes = append(newRoutes, route)
+		log.Printf("Loaded route %q (iface=%q gateway=%q net=%q upstream=%q)",
+			r.Name, route.iface, route.gateway, route.net, configHopsLabel(route.hops))
 	}
 	newRoutes = append(newRoutes, &ProxyRoute{
 		name: "Direct",
@@ -193,6 +244,11 @@ func getNetState() netState {
 }
 
 func setForceRoute(r *ProxyRoute) {
+	if r != nil && r.rulesOnly {
+		// Rules-only routes are never forced: destination rules are their only
+		// entry point.
+		r = nil
+	}
 	stateMu.Lock()
 	forceRoute = r
 	stateMu.Unlock()
@@ -544,9 +600,6 @@ func (p *ProxyRoute) info(st netState) routeInfoJSON {
 		Gateway:    p.gateway,
 		IFace:      p.iface,
 		Net:        p.net,
-		PacUrl:     p.pacUrl,
-		ProxyUrl:   p.proxyUrl,
-		Credential: p.cred,
 		Chain:      chainStrings(p.chain),
 		Hops:       append([]ConfigHop{}, p.hops...),
 		RulesOnly:  p.rulesOnly,
@@ -559,7 +612,7 @@ func (p *ProxyRoute) info(st netState) routeInfoJSON {
 
 func (p *ProxyRoute) FindProxy(urlStr string) *gpac.Proxy {
 	if len(p.chain) > 0 {
-		return &gpac.Proxy{Type: "PROXY", Address: p.chain[0].addr}
+		return &gpac.Proxy{Type: "PROXY", Address: firstChainAddr(p.chain)}
 	}
 	p.mu.Lock()
 	pac := p.pac

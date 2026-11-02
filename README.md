@@ -61,10 +61,10 @@ are in English.
 - **Network-aware routes**: choose a route based on the current default gateway,
   network interface, local network, or a PAC file.
 - **Proxy chains**: HTTP, HTTPS (via `CONNECT`) and SOCKS5 hops, with NTLM/Basic
-  authentication support for HTTP proxies.
+  authentication support for HTTP proxies; PAC and dynamic rule-evaluation hops.
 - **Destination rules** by domain, exact host, IP address, or CIDR block.
 - **Rules-only routes and hops**: keep corporate/VPN/relay routes out of the
-  automatic selection.
+  automatic selection and out of the manual route selectors.
 - **Relay**: mTLS-authenticated rendezvous relay, contact address book, explicit
   route approvals scoped per device, multiple devices per user (your own devices
   are listed and usable without an invitation), and desktop notifications.
@@ -258,16 +258,22 @@ Routes:
     Gateway: ''                # optional: default gateway IP
     IFace: utun4               # optional: default interface name
     Net: 10.0.0.0/8            # optional: local network/address
-    PacUrl: ''                 # optional: PAC URL
-    ProxyUrl: ''               # optional: upstream HTTP proxy
-    Credential: corp           # optional: credential for ProxyUrl/PAC
-    RulesOnly: false           # never select automatically
-    Chain:                     # optional; takes precedence over PAC/ProxyUrl
+    RulesOnly: false           # never selected or forced manually
+    Chain:                     # ordered upstream hops
       - ProxyUrl: http://proxy.corp:8080
         Credential: corp
-        RulesOnly: false
+        RulesOnly: false       # barrier for automatic/forced traffic
       - ProxyUrl: socks5://other:1080
         Credential: ''
+    # A PAC route is a single-hop chain:
+    # Chain:
+    #   - PacUrl: http://config.corp/proxy.pac
+    #     Credential: corp
+    # A dynamic hop must be the last one: at connection time it evaluates the
+    # destination rules and applies the selected route (or goes direct).
+    # Chain:
+    #   - ProxyUrl: http://proxy.corp:8080
+    #   - Dynamic: true
 
 Rules:
   - Name: intranet
@@ -314,13 +320,12 @@ Hosts:
 | `Routes[].Gateway` | Match when the system default gateway is this IP. |
 | `Routes[].IFace` | Match when the default interface has this name. |
 | `Routes[].Net` | Match when the local network/address matches this IP or CIDR. |
-| `Routes[].PacUrl` | PAC file used to choose an upstream proxy. Fetched directly over HTTP and cached. |
-| `Routes[].ProxyUrl` | Upstream HTTP proxy (`host:port` or `http://host:port`). |
-| `Routes[].Credential` | Credential used for `ProxyUrl`/PAC proxy authentication. |
-| `Routes[].Chain` | Ordered proxy hops. Takes precedence over `PacUrl`/`ProxyUrl`. |
-| `Routes[].RulesOnly` | Route is never selected automatically; only a destination rule can use it. |
+| `Routes[].Chain` | Ordered upstream hops. An empty chain means a direct connection. |
+| `Routes[].RulesOnly` | Route is never selected or forced manually; only a destination rule can use it. |
 | `Chain[].ProxyUrl` | `http://`, `https://` (CONNECT), `socks5://`, or `relay://email[/device]`. |
-| `Chain[].Credential` | Credential for this hop. |
+| `Chain[].PacUrl` | PAC file evaluated for each request. A PAC hop must be the only hop of the chain. |
+| `Chain[].Dynamic` | Routing point: evaluates the destination rules and applies the selected route. Must be the last hop. |
+| `Chain[].Credential` | Credential for this proxy/PAC hop. |
 | `Chain[].RulesOnly` | Chain barrier: unless a rule selects the route, the chain stops before this hop. |
 | `Rules[].Domains` | Domain and subdomain matches (`example.com` matches `a.example.com`). |
 | `Rules[].Hosts` | Exact hostname matches. |
@@ -331,20 +336,27 @@ Hosts:
 `Address` is required. Credentials and relay material are never written in
 plaintext once the configuration is encrypted.
 
+Configurations written before upstreams became hops may still contain the
+legacy route-level `PacUrl`, `ProxyUrl` and `Credential`: on startup they are
+migrated into a single `Chain` hop and the legacy keys are removed. If both
+`PacUrl` and `ProxyUrl` were present, the PAC wins (it already took precedence
+at runtime).
+
 ### Routes and route selection
 
 For each destination, the route is chosen in this order:
 
 1. **Forced route**, if selected from the tray or the Config page.
-2. **Destination rules**, in order. The first matching rule whose route is
-   applicable on the current network wins.
+2. **Destination rules**, in order, only while the selection is **Auto**. The
+   first matching rule whose route is applicable on the current network wins.
 3. **Automatic selection**: the first route in configuration order whose
    `Gateway`, `IFace`, `Net` and PAC (if any) are available.
 4. **`Direct`** (always last, always applicable).
 
-Routes marked `RulesOnly: true` are skipped by automatic selection and can only
-be used by a matching destination rule. A route can still be used by more than
-one rule.
+Routes marked `RulesOnly: true` are skipped by automatic selection and cannot be
+forced: they can only be used by a matching destination rule, and do not appear
+in the route selectors of the web UI or tray menu. A route can still be used by
+more than one rule.
 
 **Per-hop `RulesOnly`** is a barrier rather than a skip: when a route is used
 without a matching rule (automatic or forced), the chain stops *before* the first
@@ -352,10 +364,21 @@ hop marked `RulesOnly`; only a rule-selected route traverses the whole chain.
 This lets an expensive corporate proxy or a relay exit be reserved for specific
 rules.
 
-PAC routes are evaluated per request. The PAC file is fetched directly (never
-through the proxy), cached under `cache/pac-<md5>`, and refreshed in the
-background; request handling uses the cached copy when the network is
-unavailable.
+A **PAC hop** is not a proxy: the route evaluates the PAC file per request and
+uses the returned upstream. The PAC file is fetched directly (never through the
+proxy), cached under `cache/pac-<md5>`, and refreshed in the background; request
+handling uses the cached copy when the network is unavailable. A PAC hop must be
+the only hop of its chain.
+
+A **dynamic hop** is a routing decision point inside a chain. It cannot be
+combined with a proxy or a PAC, and it must be the last hop. When the connection
+reaches it, the destination rules are evaluated: if one matches, the route it
+points to is applied; if none matches, the connection continues directly to the
+target from the hops already traversed. The dynamic hop is especially useful on
+a forced route, where the outer selection intentionally ignores the rules.
+Recursive expansions keep a set of visited routes and a maximum depth, so a
+rule that points back to a route already in use stops with a direct connection
+instead of looping.
 
 Network changes (interface/gateway/address changes) invalidate PACs, reset
 transports, and close active connections so clients reconnect through the new
@@ -369,6 +392,8 @@ A chain is dialed left to right. Supported schemes:
 - `https://host:port` — HTTP `CONNECT` over TLS
 - `socks5://host:port` — SOCKS5
 - `relay://email@example.com[/device]` — exit through a relay contact
+- `PacUrl: http://host/pac` — evaluate a PAC (the only hop of the chain)
+- `Dynamic: true` — evaluate the destination rules at this point (the last hop)
 
 Only one relay hop is allowed per chain, and it may appear anywhere:
 
@@ -470,7 +495,7 @@ and device renaming remain on the Relay page.
 | PAC hijack and host name | Configurazione → Rete |
 | Chrome policy | Configurazione → Rete |
 | Static host → IP mappings | Configurazione → Host fissi |
-| Routes, chains, per-hop `RulesOnly`, route priority | Configurazione → Route |
+| Routes, chains, PAC/dynamic hops, per-hop `RulesOnly`, route priority | Configurazione → Route |
 | Destination rules, rule order, destination test | Regole |
 | Credentials | Credenziali |
 | Forced route | Configurazione or tray |
@@ -946,7 +971,7 @@ The Go module is named `proxy`; internal packages are imported as
 
 | Symptom | What to check |
 |---|---|
-| `PAC not available` | PAC URL reachable directly, cache in `cache/`, route `PacUrl`. |
+| `PAC not available` | PAC URL reachable directly, cache in `cache/`, route's `Chain[].PacUrl`. |
 | Route never selected | `Gateway`/`IFace`/`Net` values against the Config page network state; `RulesOnly` flags. |
 | Relay does not connect | `Relay.Address`, certificate/CA, `Relay.Route`, proxy logs; re-enroll from the Relay page. |
 | `has multiple devices online: select one` | Use `relay://email/device`; see the device list on the Relay page. |

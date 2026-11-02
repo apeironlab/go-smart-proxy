@@ -80,8 +80,9 @@ export default function RulesPage() {
         </Button>
       </Group>
       <Text size="sm" c="dimmed">
-        Le regole sono valutate in ordine: vince la prima che corrisponde e la cui route è applicabile sulla rete
-        corrente. Se nessuna corrisponde si usa la selezione normale. Una route forzata ha la precedenza.
+        Le regole sono valutate solo con selezione <b>Auto</b> (o esplicitamente da un salto <b>Dinamico</b>), in
+        ordine: vince la prima che corrisponde e la cui route è applicabile sulla rete corrente. Se nessuna
+        corrisponde si usa la selezione normale. Una route forzata ha la precedenza e disattiva le regole.
       </Text>
       {error && <Alert color="red" withCloseButton onClose={() => setError(null)}>{error}</Alert>}
 

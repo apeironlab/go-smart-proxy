@@ -25,12 +25,19 @@ function Info({ label, value }: { label: string; value: string }) {
 }
 
 function chainText(r: RouteInfo) {
-  if (r.chain?.length) {
-    return r.chain
-      .map((hop, i) => (r.hops?.[i]?.rulesOnly ? `${hop} (regole)` : hop))
+  if (r.hops?.length) {
+    return r.hops
+      .map((h, i) => {
+        const text = h.dynamic
+          ? 'dinamico'
+          : h.pacUrl
+            ? `pac ${h.pacUrl}`
+            : (r.chain?.[i] ?? h.proxyUrl ?? '')
+        return h.rulesOnly ? `${text} (regole)` : text
+      })
       .join(' → ')
   }
-  return r.pacUrl || r.proxyUrl || '-'
+  return r.chain?.length ? r.chain.join(' → ') : '-'
 }
 
 export default function ConfigPage() {
@@ -59,7 +66,7 @@ export default function ConfigPage() {
   const [opened, { open, close }] = useDisclosure(false)
   const [editing, setEditing] = useState<RouteInfo | null>(null)
   const [form, setForm] = useState({
-    name: '', gateway: '', iface: '', net: '', pacUrl: '', proxyUrl: '', credential: '',
+    name: '', gateway: '', iface: '', net: '',
     hops: [] as Hop[], rulesOnly: false,
   })
   const [busy, setBusy] = useState(false)
@@ -161,7 +168,7 @@ export default function ConfigPage() {
 
   const openNew = () => {
     setEditing(null)
-    setForm({ name: '', gateway: '', iface: '', net: '', pacUrl: '', proxyUrl: '', credential: '', hops: [], rulesOnly: false })
+    setForm({ name: '', gateway: '', iface: '', net: '', hops: [], rulesOnly: false })
     open()
   }
 
@@ -169,8 +176,13 @@ export default function ConfigPage() {
     setEditing(r)
     setForm({
       name: r.name, gateway: r.gateway, iface: r.iface, net: r.net,
-      pacUrl: r.pacUrl, proxyUrl: r.proxyUrl, credential: r.credential,
-      hops: (r.hops ?? []).map((h) => ({ ...h, rulesOnly: h.rulesOnly ?? false })),
+      hops: (r.hops ?? []).map((h) => ({
+        proxyUrl: h.proxyUrl ?? '',
+        pacUrl: h.pacUrl ?? '',
+        dynamic: h.dynamic ?? false,
+        credential: h.credential ?? '',
+        rulesOnly: h.rulesOnly ?? false,
+      })),
       rulesOnly: r.rulesOnly ?? false,
     })
     open()
@@ -178,6 +190,27 @@ export default function ConfigPage() {
 
   const setHop = (i: number, patch: Partial<Hop>) =>
     setForm({ ...form, hops: form.hops.map((h, j) => (j === i ? { ...h, ...patch } : h)) })
+  const setHopKind = (i: number, kind: string) => {
+    const hop = form.hops[i]
+    if (kind === 'pac') {
+      // A PAC is not a proxy: it must be the only hop of the chain.
+      setForm({
+        ...form,
+        hops: [{ proxyUrl: '', pacUrl: hop.pacUrl ?? '', dynamic: false, credential: hop.credential, rulesOnly: hop.rulesOnly }],
+      })
+    } else if (kind === 'dynamic') {
+      // A dynamic hop is terminal: keep the prefix and drop what came after.
+      setForm({
+        ...form,
+        hops: [
+          ...form.hops.slice(0, i),
+          { proxyUrl: '', pacUrl: '', dynamic: true, credential: '', rulesOnly: hop.rulesOnly },
+        ],
+      })
+    } else {
+      setHop(i, { pacUrl: '', dynamic: false })
+    }
+  }
   const moveHop = (i: number, d: number) => {
     const hops = [...form.hops]
     ;[hops[i], hops[i + d]] = [hops[i + d], hops[i]]
@@ -208,6 +241,9 @@ export default function ConfigPage() {
   }
 
   const routes = state?.routes ?? []
+  // Rules-only routes are selected exclusively by destination rules: they
+  // cannot be forced manually, so they are not offered by the selectors.
+  const selectableRoutes = routes.filter((r) => !r.rulesOnly)
   const credOptions = creds.map((c) => ({ value: c.name, label: c.name }))
   const configRouteNames = routes.filter((r) => r.name !== 'Direct').map((r) => r.name)
   const routePos = (name: string) => configRouteNames.indexOf(name)
@@ -238,7 +274,9 @@ export default function ConfigPage() {
       }
     }
     for (const r of state?.routes ?? []) {
-      for (const h of r.hops ?? []) add(h.proxyUrl)
+      for (const h of r.hops ?? []) {
+        if (h.proxyUrl) add(h.proxyUrl)
+      }
     }
     for (const c of relaySt?.contacts ?? []) {
       add(`relay://${c.email}`)
@@ -283,11 +321,11 @@ export default function ConfigPage() {
           <Button onClick={saveConfig} disabled={!address}>Salva</Button>
           <Select
             label="Route forzata"
-            description="Vuota = automatica"
+            description="Vuota = automatica. Le regole di destinazione sono valutate solo in Auto."
             style={{ minWidth: 220 }}
             clearable
             placeholder="Auto"
-            data={routes.map((r) => ({ value: r.name, label: r.name }))}
+            data={selectableRoutes.map((r) => ({ value: r.name, label: r.name }))}
             value={forceRoute || null}
             onChange={(v) => applyForceRoute(v)}
           />
@@ -448,7 +486,7 @@ export default function ConfigPage() {
           <TextInput label="Indirizzo mTLS" placeholder="relay.example.com:8443"
             value={relayAddress} onChange={(e) => setRelayAddress(e.currentTarget.value)} />
           <Select label="Route per raggiungere il relay" clearable placeholder="Automatica"
-            data={routes.map((r) => ({ value: r.name, label: r.name }))}
+            data={selectableRoutes.map((r) => ({ value: r.name, label: r.name }))}
             value={relayRoute || null} onChange={(v) => setRelayRoute(v ?? '')} />
         </SimpleGrid>
         <Switch label="Consenti ai contatti di raggiungere servizi su questa macchina"
@@ -510,7 +548,6 @@ export default function ConfigPage() {
             <Table.Th>Gateway</Table.Th>
             <Table.Th>Net</Table.Th>
             <Table.Th>PAC / Proxy</Table.Th>
-            <Table.Th>Credential</Table.Th>
             <Table.Th>Applicabile</Table.Th>
             <Table.Th>PAC</Table.Th>
             <Table.Th />
@@ -531,7 +568,6 @@ export default function ConfigPage() {
               <Table.Td>
                 <Text size="sm" truncate="end" maw={220}>{chainText(r)}</Text>
               </Table.Td>
-              <Table.Td>{r.credential || '-'}</Table.Td>
               <Table.Td>
                 <Tooltip label={r.whyNot || 'OK'} disabled={!r.whyNot}>
                   <Badge size="sm" color={r.applicable ? 'green' : 'red'} variant="light">
@@ -557,7 +593,7 @@ export default function ConfigPage() {
                     onClick={() => moveRoute(r.name, 1)}>
                     <IconArrowDown size={16} />
                   </ActionIcon>
-                  {r.pacUrl && (
+                  {r.pacStatus !== 'none' && (
                     <ActionIcon variant="subtle" color="blue" title="Ricaricare il PAC"
                       onClick={() => api.refreshPac(r.name).then(load).catch((e) => setError(String(e)))}>
                       <IconRefresh size={16} />
@@ -608,68 +644,95 @@ export default function ConfigPage() {
           <SimpleGrid cols={2}>
             <TextInput label="Nome" value={form.name}
               onChange={(e) => setForm({ ...form, name: e.currentTarget.value })} />
-            <Select label="Credential (opzionale)" clearable searchable
-              data={credOptions} value={form.credential || null}
-              onChange={(v) => setForm({ ...form, credential: v ?? '' })} />
             <TextInput label="Interfaccia (opzionale)" placeholder="es. utun4"
               value={form.iface} onChange={(e) => setForm({ ...form, iface: e.currentTarget.value })} />
             <TextInput label="Gateway (opzionale)" value={form.gateway}
               onChange={(e) => setForm({ ...form, gateway: e.currentTarget.value })} />
             <TextInput label="Network (opzionale)" placeholder="es. 192.168.1.0/24"
               value={form.net} onChange={(e) => setForm({ ...form, net: e.currentTarget.value })} />
-            <TextInput label="Proxy upstream (opzionale)" placeholder="host:porta"
-              disabled={form.hops.length > 0}
-              value={form.proxyUrl} onChange={(e) => setForm({ ...form, proxyUrl: e.currentTarget.value })} />
           </SimpleGrid>
-          <TextInput label="PAC URL (opzionale)" placeholder="http://host/pac.pac"
-            disabled={form.hops.length > 0}
-            value={form.pacUrl} onChange={(e) => setForm({ ...form, pacUrl: e.currentTarget.value })} />
           <Switch
             label="Solo per regole"
-            description="La route è usata solo quando una regola di destinazione la indica: non viene scelta automaticamente per il traffico. Per collegarsi al relay viene usata solo la parte della catena che precede l'hop relay."
+            description="La route è usata solo quando una regola di destinazione la indica: non viene scelta automaticamente né appare tra le route forzabili. Per collegarsi al relay viene usata solo la parte della catena che precede l'hop relay."
             checked={form.rulesOnly}
             onChange={(e) => setForm({ ...form, rulesOnly: e.currentTarget.checked })}
           />
-          <Divider label="Catena di proxy (opzionale)" labelPosition="left" mt="xs" />
+          <Divider label="Upstream (salti)" labelPosition="left" mt="xs" />
           <Text size="xs" c="dimmed">
-            Il traffico passa dal primo proxy, poi dal secondo attraverso il primo, e così via fino all'uscita.
-            Con una catena, PAC e proxy upstream sono ignorati. Schemi: http://host:porta, socks5://host:porta, oppure relay://email del contatto: la catena si ferma all'hop relay (i salti precedenti servono a raggiungere il relay, quelli successivi passano dal contatto). Un salto marcato "Solo regole" ferma la catena se nessuna regola seleziona la route. Scrivendo relay:// compaiono i contatti e i loro device; sono suggeriti anche i salti già usati.
+            Il traffico passa dal primo salto, poi dal secondo attraverso il primo, e così via fino all'uscita.
+            Schemi: http://host:porta, socks5://host:porta, oppure relay://email del contatto: la catena si ferma all'hop relay (i salti precedenti servono a raggiungere il relay, quelli successivi passano dal contatto). Un salto marcato "Solo regole" ferma la catena se nessuna regola seleziona la route. Un salto PAC valuta un file PAC e deve essere l'unico salto della catena. Un salto Dinamico valuta le regole per la destinazione e applica la route scelta; se nessuna corrisponde prosegue diretto, e deve essere l'ultimo salto. Scrivendo relay:// compaiono i contatti e i loro device; sono suggeriti anche i salti già usati.
           </Text>
-          {form.hops.map((h, i) => (
-            <Group key={i} gap="xs" wrap="nowrap" align="flex-end">
-              <Badge variant="light" size="lg" w={36} px={0}>{i + 1}</Badge>
-              <Autocomplete style={{ flex: 1 }} label={i === 0 ? 'Proxy' : undefined}
-                placeholder="http://host:8080, socks5://host:1080 o relay://contatto/device"
-                data={h.proxyUrl.trim() ? hopSuggestions : []} limit={12}
-                value={h.proxyUrl} onChange={(v) => setHop(i, { proxyUrl: v })} />
-              <Select w={170} label={i === 0 ? 'Credential' : undefined} placeholder="nessuna" clearable
-                data={credOptions} value={h.credential || null}
-                onChange={(v) => setHop(i, { credential: v ?? '' })} />
-              <Tooltip label="La catena si ferma prima di questo salto se nessuna regola seleziona la route">
-                <Checkbox label="Solo regole" size="xs" mb={6}
-                  checked={h.rulesOnly ?? false}
-                  onChange={(e) => setHop(i, { rulesOnly: e.currentTarget.checked })} />
-              </Tooltip>
-              <ActionIcon variant="subtle" color="gray" disabled={i === 0} title="Sposta su" onClick={() => moveHop(i, -1)}>
-                <IconArrowUp size={16} />
-              </ActionIcon>
-              <ActionIcon variant="subtle" color="gray" disabled={i === form.hops.length - 1} title="Sposta giù" onClick={() => moveHop(i, 1)}>
-                <IconArrowDown size={16} />
-              </ActionIcon>
-              <ActionIcon variant="subtle" color="red" title="Rimuovi" onClick={() => setForm({ ...form, hops: form.hops.filter((_, j) => j !== i) })}>
-                <IconTrash size={16} />
-              </ActionIcon>
-            </Group>
-          ))}
+          {form.hops.map((h, i) => {
+            const isDynamic = Boolean(h.dynamic)
+            const isPac = Boolean(h.pacUrl)
+            return (
+              <Group key={i} gap="xs" wrap="nowrap" align="flex-end">
+                <Badge variant="light" size="lg" w={36} px={0}>{i + 1}</Badge>
+                <Select w={150} label={i === 0 ? 'Tipo' : undefined}
+                  data={[
+                    { value: 'proxy', label: 'Proxy / Relay' },
+                    { value: 'pac', label: 'PAC' },
+                    { value: 'dynamic', label: 'Dinamico' },
+                  ]}
+                  value={isDynamic ? 'dynamic' : isPac ? 'pac' : 'proxy'} allowDeselect={false}
+                  onChange={(v) => v && setHopKind(i, v)} />
+                {isDynamic ? (
+                  <Text size="xs" c="dimmed" style={{ flex: 1 }} mb={8}>
+                    Valuta le regole per la destinazione e applica la route scelta; se nessuna corrisponde prosegue diretto.
+                  </Text>
+                ) : isPac ? (
+                  <TextInput style={{ flex: 1 }} label={i === 0 ? 'PAC URL' : undefined}
+                    placeholder="http://host/pac.pac"
+                    value={h.pacUrl ?? ''} onChange={(e) => setHop(i, { pacUrl: e.currentTarget.value })} />
+                ) : (
+                  <Autocomplete style={{ flex: 1 }} label={i === 0 ? 'Proxy' : undefined}
+                    placeholder="http://host:8080, socks5://host:1080 o relay://contatto/device"
+                    data={(h.proxyUrl ?? '').trim() ? hopSuggestions : []} limit={12}
+                    value={h.proxyUrl ?? ''} onChange={(v) => setHop(i, { proxyUrl: v })} />
+                )}
+                {isDynamic ? (
+                  <Text size="xs" c="dimmed" w={170} mb={8}>solo regole</Text>
+                ) : (
+                  <Select w={170} label={i === 0 ? 'Credential' : undefined} placeholder="nessuna" clearable
+                    data={credOptions} value={h.credential || null}
+                    onChange={(v) => setHop(i, { credential: v ?? '' })} />
+                )}
+                <Tooltip label={isPac
+                  ? 'Con questa opzione la route PAC è usata solo quando una regola la seleziona'
+                  : isDynamic
+                    ? 'La route si ferma prima del salto dinamico se nessuna regola seleziona la route'
+                    : 'La catena si ferma prima di questo salto se nessuna regola seleziona la route'}>
+                  <Checkbox label="Solo regole" size="xs" mb={6}
+                    checked={h.rulesOnly ?? false}
+                    onChange={(e) => setHop(i, { rulesOnly: e.currentTarget.checked })} />
+                </Tooltip>
+                <ActionIcon variant="subtle" color="gray" disabled={i === 0 || isDynamic} title="Sposta su" onClick={() => moveHop(i, -1)}>
+                  <IconArrowUp size={16} />
+                </ActionIcon>
+                <ActionIcon variant="subtle" color="gray" disabled={i === form.hops.length - 1 || isDynamic} title="Sposta giù" onClick={() => moveHop(i, 1)}>
+                  <IconArrowDown size={16} />
+                </ActionIcon>
+                <ActionIcon variant="subtle" color="red" title="Rimuovi" onClick={() => setForm({ ...form, hops: form.hops.filter((_, j) => j !== i) })}>
+                  <IconTrash size={16} />
+                </ActionIcon>
+              </Group>
+            )
+          })}
           <Group>
             <Button variant="light" size="xs" leftSection={<IconPlus size={14} />}
+              disabled={form.hops.some((h) => h.pacUrl || h.dynamic)}
               onClick={() => setForm({ ...form, hops: [...form.hops, { proxyUrl: '', credential: '', rulesOnly: false }] })}>
-              Aggiungi proxy
+              Aggiungi salto
             </Button>
           </Group>
           <Group justify="flex-end">
             <Button variant="default" onClick={close}>Annulla</Button>
-            <Button onClick={save} loading={busy} disabled={!form.name || form.hops.some((h) => !h.proxyUrl.trim())}>Salva</Button>
+            <Button onClick={save} loading={busy}
+              disabled={!form.name
+                || form.hops.some((h) => h.dynamic ? false : h.pacUrl ? !h.pacUrl.trim() : !(h.proxyUrl ?? '').trim())
+                || (form.hops.some((h) => h.pacUrl) && form.hops.length > 1)}>
+              Salva
+            </Button>
           </Group>
         </Stack>
       </Modal>

@@ -674,7 +674,11 @@ func dialViaRoute(route *ProxyRoute, addr string, rec *ConnInfo) (net.Conn, erro
 		}
 		return &countingConn{Conn: c, in: &rec.bytesUpIn, out: &rec.bytesUpOut}, nil
 	}
-	conn, br, err := dialProxyAndConnect(route, proxy, addr, rec)
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	conn, br, err := dialProxyAndConnect(route, proxy, addr, host, rec)
 	if err != nil {
 		return nil, err
 	}

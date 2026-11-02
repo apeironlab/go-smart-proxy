@@ -216,7 +216,7 @@ func TestRelayRouteEndToEnd(t *testing.T) {
 		bob.Decide(a.ID, relayDecision{Allow: true, Always: true})
 	}()
 	rec := connReg.newConn("tunnel", "", "", target, "", "t", "", "", "")
-	conn, br, err := dialChain(route, target, rec)
+	conn, br, err := dialChain(route, target, "127.0.0.1", rec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestRelayRouteEndToEnd(t *testing.T) {
 	conn.Close()
 
 	// the approval was remembered: no prompt this time
-	conn, _, err = dialChain(route, target, connReg.newConn("tunnel", "", "", target, "", "t", "", "", ""))
+	conn, _, err = dialChain(route, target, "127.0.0.1", connReg.newConn("tunnel", "", "", target, "", "t", "", "", ""))
 	if err != nil {
 		t.Fatalf("approved route should not ask again: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestRelayRouteEndToEnd(t *testing.T) {
 		waitFor(t, "pending approval", func() bool { return len(bob.Status().Approvals) == 1 })
 		bob.Decide(bob.Status().Approvals[0].ID, relayDecision{Allow: false})
 	}()
-	if _, _, err := dialChain(route, "10.9.9.9:80", connReg.newConn("tunnel", "", "", "10.9.9.9:80", "", "t", "", "", "")); err == nil {
+	if _, _, err := dialChain(route, "10.9.9.9:80", "10.9.9.9", connReg.newConn("tunnel", "", "", "10.9.9.9:80", "", "t", "", "", "")); err == nil {
 		t.Fatal("a denied route must fail")
 	}
 }

@@ -115,42 +115,53 @@ func (r *routingRule) matches(host string, ip func() net.IP) bool {
 	return false
 }
 
+// firstRuleRoute returns the route selected by the first destination rule that
+// matches host and whose route is applicable on the current network. It ignores
+// the forced route and the automatic selection.
+func firstRuleRoute(host string) (*ProxyRoute, string) {
+	rulesMu.RLock()
+	rules := routeRules
+	rulesMu.RUnlock()
+	if len(rules) == 0 {
+		return nil, ""
+	}
+	host = normHost(host)
+	var resolved net.IP
+	done := false
+	ip := func() net.IP {
+		if !done {
+			done = true
+			if p := net.ParseIP(host); p != nil {
+				resolved = p
+			} else if s := resolveHost(host); s != "" {
+				resolved = net.ParseIP(s)
+			}
+		}
+		return resolved
+	}
+	st := getNetState()
+	for _, rule := range rules {
+		if !rule.matches(host, ip) {
+			continue
+		}
+		for _, rt := range getRoutes() {
+			if rt.name == rule.route && rt.isApplicable(st) {
+				return rt, rule.name
+			}
+		}
+	}
+	return nil, ""
+}
+
 // routeFor picks the route for a destination: the forced route first, then the
 // destination rules, then the default selection. The second value is the name
 // of the matching rule, if any.
 func routeFor(host string) (*ProxyRoute, string) {
 	if getForceRoute() == nil {
-		rulesMu.RLock()
-		rules := routeRules
-		rulesMu.RUnlock()
-		if len(rules) > 0 {
-			host = normHost(host)
-			var resolved net.IP
-			done := false
-			ip := func() net.IP {
-				if !done {
-					done = true
-					if p := net.ParseIP(host); p != nil {
-						resolved = p
-					} else if s := resolveHost(host); s != "" {
-						resolved = net.ParseIP(s)
-					}
-				}
-				return resolved
-			}
-			st := getNetState()
-			for _, rule := range rules {
-				if !rule.matches(host, ip) {
-					continue
-				}
-				for _, rt := range getRoutes() {
-					if rt.name == rule.route && rt.isApplicable(st) {
-						// A rule selects the route explicitly: use the whole
-						// chain, including the RulesOnly hops.
-						return rt, rule.name
-					}
-				}
-			}
+		if rt, rule := firstRuleRoute(host); rt != nil {
+			// A rule selects the route explicitly: use the whole chain,
+			// including the RulesOnly hops.
+			return rt, rule
 		}
 	}
 	route := GetApplicableRoute()

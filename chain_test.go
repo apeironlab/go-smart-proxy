@@ -114,6 +114,34 @@ func TestRelayHopDevice(t *testing.T) {
 	}
 }
 
+func TestDynamicHopWithoutRuleConnectsDirectly(t *testing.T) {
+	resetEnv(t, nil, nil)
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "dynamic direct")
+	}))
+	defer origin.Close()
+
+	route := &ProxyRoute{name: "dyn", chain: []*chainHop{{scheme: "dynamic"}}}
+	target := origin.Listener.Addr().String()
+	rec := connReg.newConn("tunnel", "", "", target, "", "dyn", "", "", "")
+	conn, br, err := dialChain(route, target, "unmatched.local", rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	io.WriteString(conn, "GET / HTTP/1.1\r\nHost: unmatched.local\r\nConnection: close\r\n\r\n")
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	if string(b) != "dynamic direct" {
+		t.Fatalf("got %q", b)
+	}
+}
+
 func TestChainHTTPThenSocks5(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "hello via chain")
@@ -130,7 +158,7 @@ func TestChainHTTPThenSocks5(t *testing.T) {
 
 	// CONNECT-style tunnel
 	rec := connReg.newConn("tunnel", "", "", origin.Listener.Addr().String(), "", "t", "", "", "")
-	conn, br, err := dialChain(route, origin.Listener.Addr().String(), rec)
+	conn, br, err := dialChain(route, origin.Listener.Addr().String(), "127.0.0.1", rec)
 	if err != nil {
 		t.Fatal(err)
 	}

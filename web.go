@@ -108,9 +108,6 @@ type routeInfoJSON struct {
 	Gateway    string      `json:"gateway"`
 	IFace      string      `json:"iface"`
 	Net        string      `json:"net"`
-	PacUrl     string      `json:"pacUrl"`
-	ProxyUrl   string      `json:"proxyUrl"`
-	Credential string      `json:"credential"`
 	Chain      []string    `json:"chain"`
 	Hops       []ConfigHop `json:"hops"`
 	RulesOnly  bool        `json:"rulesOnly"`
@@ -222,15 +219,12 @@ func apiListRoutes(w http.ResponseWriter, r *http.Request) {
 }
 
 type routeFormJSON struct {
-	Name       string      `json:"name"`
-	Gateway    string      `json:"gateway"`
-	IFace      string      `json:"iface"`
-	Net        string      `json:"net"`
-	PacUrl     string      `json:"pacUrl"`
-	ProxyUrl   string      `json:"proxyUrl"`
-	Credential string      `json:"credential"`
-	Hops       []ConfigHop `json:"hops"`
-	RulesOnly  bool        `json:"rulesOnly"`
+	Name      string      `json:"name"`
+	Gateway   string      `json:"gateway"`
+	IFace     string      `json:"iface"`
+	Net       string      `json:"net"`
+	Hops      []ConfigHop `json:"hops"`
+	RulesOnly bool        `json:"rulesOnly"`
 }
 
 // validateHops checks a chain before it is saved; credentials are looked up under the lock.
@@ -258,36 +252,24 @@ func apiSaveRoute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	configMu.Lock()
+	route := ConfigRoute{
+		Chain:     form.Hops,
+		Name:      form.Name,
+		Gateway:   form.Gateway,
+		IFace:     form.IFace,
+		Net:       form.Net,
+		RulesOnly: form.RulesOnly,
+	}
 	found := false
 	for i := range configuration.Routes {
 		if configuration.Routes[i].Name == form.Name {
-			configuration.Routes[i] = ConfigRoute{
-				Chain:      form.Hops,
-				Name:       form.Name,
-				Gateway:    form.Gateway,
-				IFace:      form.IFace,
-				Net:        form.Net,
-				PacUrl:     form.PacUrl,
-				ProxyUrl:   form.ProxyUrl,
-				Credential: form.Credential,
-				RulesOnly:  form.RulesOnly,
-			}
+			configuration.Routes[i] = route
 			found = true
 			break
 		}
 	}
 	if !found {
-		configuration.Routes = append(configuration.Routes, ConfigRoute{
-			Chain:      form.Hops,
-			Name:       form.Name,
-			Gateway:    form.Gateway,
-			IFace:      form.IFace,
-			Net:        form.Net,
-			PacUrl:     form.PacUrl,
-			ProxyUrl:   form.ProxyUrl,
-			Credential: form.Credential,
-			RulesOnly:  form.RulesOnly,
-		})
+		configuration.Routes = append(configuration.Routes, route)
 	}
 	if err := persistConfigurationLocked(); err != nil {
 		configMu.Unlock()
@@ -492,6 +474,10 @@ func apiForceRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, rt := range getRoutes() {
 		if rt.name == form.Name {
+			if rt.rulesOnly {
+				writeAPIError(w, http.StatusBadRequest, "a rules-only route cannot be forced; use a destination rule")
+				return
+			}
 			setForceRoute(rt)
 			writeJSON(w, map[string]string{"status": "ok", "forceRoute": rt.name})
 			return
@@ -704,7 +690,7 @@ func reapplyRoutesLocked() {
 		name := fr.name
 		setForceRoute(nil)
 		for _, rt := range getRoutes() {
-			if rt.name == name {
+			if rt.name == name && !rt.rulesOnly {
 				setForceRoute(rt)
 				break
 			}

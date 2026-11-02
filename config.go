@@ -22,26 +22,32 @@ type ConfigCredential struct {
 }
 
 type ConfigRoute struct {
-	Name       string `yaml:"Name"`
-	Gateway    string `yaml:"Gateway"`
-	IFace      string `yaml:"IFace"`
-	Net        string `yaml:"Net"`
-	PacUrl     string `yaml:"PacUrl"`
-	ProxyUrl   string `yaml:"ProxyUrl"`
-	Credential string `yaml:"Credential"`
-	// Chain is an ordered list of upstream proxies (first = the one dialed directly).
-	// When present it takes precedence over PacUrl and ProxyUrl.
-	Chain []ConfigHop `yaml:"Chain,omitempty"`
+	Name    string `yaml:"Name"`
+	Gateway string `yaml:"Gateway"`
+	IFace   string `yaml:"IFace"`
+	Net     string `yaml:"Net"`
+	// PacUrl, ProxyUrl and Credential are legacy route-level upstream fields.
+	// They are migrated to a single hop in Chain when the configuration is
+	// loaded, and the current UI no longer writes them.
+	PacUrl     string      `yaml:"PacUrl,omitempty"`
+	ProxyUrl   string      `yaml:"ProxyUrl,omitempty"`
+	Credential string      `yaml:"Credential,omitempty"`
+	Chain      []ConfigHop `yaml:"Chain,omitempty"`
 	// RulesOnly restricts the route to the destination rules: it is never
 	// picked as the automatic (default) route. For the connection to the relay
 	// only the hops before a relay hop are used.
 	RulesOnly bool `yaml:"RulesOnly,omitempty"`
 }
 
-// ConfigHop is one proxy of a chain. ProxyUrl accepts http://host:port and socks5://host:port.
+// ConfigHop is one hop of a chain: a proxy/relay (ProxyUrl), a PAC (PacUrl,
+// which must be the only hop of the chain), or a dynamic routing point
+// (Dynamic, which must be the last hop and applies the route selected by the
+// destination rules).
 type ConfigHop struct {
-	ProxyUrl   string `yaml:"ProxyUrl" json:"proxyUrl"`
-	Credential string `yaml:"Credential" json:"credential"`
+	ProxyUrl   string `yaml:"ProxyUrl,omitempty" json:"proxyUrl,omitempty"`
+	PacUrl     string `yaml:"PacUrl,omitempty" json:"pacUrl,omitempty"`
+	Dynamic    bool   `yaml:"Dynamic,omitempty" json:"dynamic,omitempty"`
+	Credential string `yaml:"Credential,omitempty" json:"credential,omitempty"`
 	// RulesOnly makes this hop a boundary: the chain stops before it unless
 	// the route was selected by a destination rule.
 	RulesOnly bool `yaml:"RulesOnly,omitempty" json:"rulesOnly"`
@@ -184,6 +190,11 @@ func finalizeConfiguration() {
 	configuration.Hosts = hosts
 
 	ensureRelayDevice()
+	if migrateRouteUpstreams() {
+		if err := persistConfigurationLocked(); err != nil {
+			log.Printf("WARNING: cannot persist the route upstream migration: %v", err)
+		}
+	}
 	loadRoutes()
 }
 

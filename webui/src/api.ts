@@ -1,7 +1,9 @@
 export interface Hop {
-  proxyUrl: string
-  credential: string
-  rulesOnly: boolean
+  proxyUrl?: string
+  pacUrl?: string
+  dynamic?: boolean
+  credential?: string
+  rulesOnly?: boolean
 }
 
 export interface RouteInfo {
@@ -9,9 +11,6 @@ export interface RouteInfo {
   gateway: string
   iface: string
   net: string
-  pacUrl: string
-  proxyUrl: string
-  credential: string
   chain?: string[] | null
   hops?: Hop[] | null
   rulesOnly: boolean
@@ -108,9 +107,6 @@ export interface RouteForm {
   gateway: string
   iface: string
   net: string
-  pacUrl: string
-  proxyUrl: string
-  credential: string
   hops: Hop[]
   rulesOnly: boolean
 }
