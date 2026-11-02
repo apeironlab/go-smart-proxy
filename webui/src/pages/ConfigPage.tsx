@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  ActionIcon, Alert, Autocomplete, Badge, Button, Card, Checkbox, Code, Divider, Group, Modal, Select, SimpleGrid, Stack, Switch, Table,
+  ActionIcon, Alert, Autocomplete, Badge, Button, Card, Checkbox, Code, Divider, Group, Modal, Paper, Select, SimpleGrid, Stack, Switch, Table,
   TagsInput, Text, Textarea, TextInput, Title, Tooltip, Accordion,
 } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
@@ -639,7 +639,7 @@ export default function ConfigPage() {
         </Accordion.Item>
       </Accordion>
 
-      <Modal opened={opened} onClose={close} title={editing ? `Modifica ${editing.name}` : 'Nuova route'} centered size="lg">
+      <Modal opened={opened} onClose={close} title={editing ? `Modifica ${editing.name}` : 'Nuova route'} centered size="xl">
         <Stack gap="sm">
           <SimpleGrid cols={2}>
             <TextInput label="Nome" value={form.name}
@@ -666,56 +666,66 @@ export default function ConfigPage() {
             const isDynamic = Boolean(h.dynamic)
             const isPac = Boolean(h.pacUrl)
             return (
-              <Group key={i} gap="xs" wrap="nowrap" align="flex-end">
-                <Badge variant="light" size="lg" w={36} px={0}>{i + 1}</Badge>
-                <Select w={150} label={i === 0 ? 'Tipo' : undefined}
-                  data={[
-                    { value: 'proxy', label: 'Proxy / Relay' },
-                    { value: 'pac', label: 'PAC' },
-                    { value: 'dynamic', label: 'Dinamico' },
-                  ]}
-                  value={isDynamic ? 'dynamic' : isPac ? 'pac' : 'proxy'} allowDeselect={false}
-                  onChange={(v) => v && setHopKind(i, v)} />
-                {isDynamic ? (
-                  <Text size="xs" c="dimmed" style={{ flex: 1 }} mb={8}>
-                    Valuta le regole per la destinazione e applica la route scelta; se nessuna corrisponde prosegue diretto.
-                  </Text>
-                ) : isPac ? (
-                  <TextInput style={{ flex: 1 }} label={i === 0 ? 'PAC URL' : undefined}
-                    placeholder="http://host/pac.pac"
-                    value={h.pacUrl ?? ''} onChange={(e) => setHop(i, { pacUrl: e.currentTarget.value })} />
-                ) : (
-                  <Autocomplete style={{ flex: 1 }} label={i === 0 ? 'Proxy' : undefined}
-                    placeholder="http://host:8080, socks5://host:1080 o relay://contatto/device"
-                    data={(h.proxyUrl ?? '').trim() ? hopSuggestions : []} limit={12}
-                    value={h.proxyUrl ?? ''} onChange={(v) => setHop(i, { proxyUrl: v })} />
-                )}
-                {isDynamic ? (
-                  <Text size="xs" c="dimmed" w={170} mb={8}>solo regole</Text>
-                ) : (
-                  <Select w={170} label={i === 0 ? 'Credential' : undefined} placeholder="nessuna" clearable
-                    data={credOptions} value={h.credential || null}
-                    onChange={(v) => setHop(i, { credential: v ?? '' })} />
-                )}
-                <Tooltip label={isPac
-                  ? 'Con questa opzione la route PAC è usata solo quando una regola la seleziona'
-                  : isDynamic
-                    ? 'La route si ferma prima del salto dinamico se nessuna regola seleziona la route'
-                    : 'La catena si ferma prima di questo salto se nessuna regola seleziona la route'}>
-                  <Checkbox label="Solo regole" size="xs" mb={6}
-                    checked={h.rulesOnly ?? false}
-                    onChange={(e) => setHop(i, { rulesOnly: e.currentTarget.checked })} />
-                </Tooltip>
-                <ActionIcon variant="subtle" color="gray" disabled={i === 0 || isDynamic} title="Sposta su" onClick={() => moveHop(i, -1)}>
-                  <IconArrowUp size={16} />
-                </ActionIcon>
-                <ActionIcon variant="subtle" color="gray" disabled={i === form.hops.length - 1 || isDynamic} title="Sposta giù" onClick={() => moveHop(i, 1)}>
-                  <IconArrowDown size={16} />
-                </ActionIcon>
-                <ActionIcon variant="subtle" color="red" title="Rimuovi" onClick={() => setForm({ ...form, hops: form.hops.filter((_, j) => j !== i) })}>
-                  <IconTrash size={16} />
-                </ActionIcon>
-              </Group>
+              <Paper key={i} withBorder p="xs" radius="sm">
+                <Group gap="xs" wrap="nowrap" align="flex-end">
+                  <Badge variant="light" size="lg" w={36} px={0}>{i + 1}</Badge>
+                  <Select w={145} label={i === 0 ? 'Tipo' : undefined}
+                    data={[
+                      { value: 'proxy', label: 'Proxy / Relay' },
+                      { value: 'pac', label: 'PAC' },
+                      { value: 'dynamic', label: 'Dinamico' },
+                    ]}
+                    value={isDynamic ? 'dynamic' : isPac ? 'pac' : 'proxy'} allowDeselect={false}
+                    onChange={(v) => v && setHopKind(i, v)} />
+                  {isDynamic ? (
+                    <Text size="xs" c="dimmed" style={{ flex: 1, minWidth: 260 }} mb={8}>
+                      Valuta le regole per la destinazione e applica la route scelta; se nessuna corrisponde prosegue
+                      verso il target dai salti già percorsi.
+                    </Text>
+                  ) : isPac ? (
+                    <TextInput style={{ flex: 1, minWidth: 260 }} label={i === 0 ? 'PAC URL' : undefined}
+                      placeholder="http://host/pac.pac"
+                      value={h.pacUrl ?? ''} onChange={(e) => setHop(i, { pacUrl: e.currentTarget.value })} />
+                  ) : (
+                    <Autocomplete style={{ flex: 1, minWidth: 260 }} label={i === 0 ? 'Proxy' : undefined}
+                      placeholder="http://host:8080, socks5://host:1080 o relay://contatto/device"
+                      data={(h.proxyUrl ?? '').trim() ? hopSuggestions : []} limit={12}
+                      value={h.proxyUrl ?? ''} onChange={(v) => setHop(i, { proxyUrl: v })} />
+                  )}
+                  {isDynamic ? (
+                    <Text size="xs" c="dimmed" w={160} mb={8}>solo regole</Text>
+                  ) : (
+                    <Select w={160} label={i === 0 ? 'Credential' : undefined} placeholder="nessuna" clearable
+                      data={credOptions} value={h.credential || null}
+                      onChange={(v) => setHop(i, { credential: v ?? '' })} />
+                  )}
+                  <ActionIcon variant="subtle" color="red" title="Rimuovi"
+                    onClick={() => setForm({ ...form, hops: form.hops.filter((_, j) => j !== i) })}>
+                    <IconTrash size={16} />
+                  </ActionIcon>
+                </Group>
+                <Group gap="md" mt={6} pl={48}>
+                  <Tooltip label={isPac
+                    ? 'Con questa opzione la route PAC è usata solo quando una regola la seleziona'
+                    : isDynamic
+                      ? 'La route si ferma prima del salto dinamico se nessuna regola seleziona la route'
+                      : 'La catena si ferma prima di questo salto se nessuna regola seleziona la route'}>
+                    <Checkbox label="Solo regole" size="xs"
+                      checked={h.rulesOnly ?? false}
+                      onChange={(e) => setHop(i, { rulesOnly: e.currentTarget.checked })} />
+                  </Tooltip>
+                  <Group gap={4}>
+                    <ActionIcon variant="subtle" color="gray" size="sm" disabled={i === 0 || isDynamic}
+                      title="Sposta su" onClick={() => moveHop(i, -1)}>
+                      <IconArrowUp size={16} />
+                    </ActionIcon>
+                    <ActionIcon variant="subtle" color="gray" size="sm" disabled={i === form.hops.length - 1 || isDynamic}
+                      title="Sposta giù" onClick={() => moveHop(i, 1)}>
+                      <IconArrowDown size={16} />
+                    </ActionIcon>
+                  </Group>
+                </Group>
+              </Paper>
             )
           })}
           <Group>

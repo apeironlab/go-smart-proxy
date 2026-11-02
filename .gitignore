@@ -12,6 +12,7 @@ relay-pki
 relay-certs
 cache/
 .modcache/
+dist/
 *.pem
 *.key
 *.crt

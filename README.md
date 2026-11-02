@@ -911,6 +911,28 @@ build.bat
 
 macOS needs Xcode Command Line Tools for the CGO/system-tray/Keychain parts.
 
+### Release packages
+
+```bash
+./package.sh 0.1.0
+```
+
+The script rebuilds the web UI and writes versioned archives plus `SHA256SUMS`
+to `dist/` (ignored by git):
+
+- `go-smart-proxy_<version>_darwin_universal.tar.gz` — universal binary for
+  Apple Silicon and Intel;
+- `go-smart-proxy_<version>_windows_amd64.zip` — GUI binary without a console
+  window;
+- `go-smart-proxy_<version>_linux_amd64.tar.gz` — built in Docker so the GTK 3
+  and Ayatana AppIndicator headers are available.
+
+The Linux binary links GTK/AppIndicator dynamically and needs those libraries at
+runtime; build other architectures with
+`LINUX_ARCHS="amd64 arm64" ./package.sh <version>`. The archives contain the
+binary, `README.md` and `LICENSE`; they do not contain configurations,
+credentials or relay certificates.
+
 ### Tests
 
 ```bash
