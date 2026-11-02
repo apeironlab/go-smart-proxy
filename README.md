@@ -74,8 +74,9 @@ are in English.
 - **Complete web configuration**: listeners, SOCKS5, system integration, static
   hosts, routes and route ordering, rules, credentials, relay settings and
   certificates.
-- **Web first-run setup**: choose the master password in the browser and get
-  working HTTP/SOCKS defaults without editing a file.
+- **Internationalization**: the web UI (and the first-run setup page) support the
+  24 official languages of the European Union, selected from the browser locale or
+  manually from the header menu, with English as fallback.
 - **System tray** with dynamic route selection and a web UI for configuration,
   rules, credentials, connections, and relay management.
 - **macOS integration**: system proxy configuration (including VPN-overridden
@@ -1007,8 +1008,9 @@ and SMTP auth primitives.
 
 ### Web UI
 
-The UI is React + TypeScript + Mantine + Vite (`webui/`). It is embedded at build
-time and served by the Go binary. The UI language is Italian.
+- **Web UI**: React + TypeScript + Mantine + Vite, embedded in the binary. The UI
+  language is selected from the browser locale (or manually) and supports the 24
+  official languages of the European Union, with English as fallback.
 
 If you change the UI, run `npm run build` in `webui/` or `make webui`; then
 rebuild the Go binary so the new assets are embedded.
