@@ -6,6 +6,8 @@ import (
 	"log"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // init listens for Linux netlink route/link/address changes and triggers the
@@ -19,9 +21,9 @@ func init() {
 	}
 	sa := &syscall.SockaddrNetlink{
 		Family: syscall.AF_NETLINK,
-		Groups: syscall.RTMGRP_LINK |
-			syscall.RTMGRP_IPV4_IFADDR | syscall.RTMGRP_IPV6_IFADDR |
-			syscall.RTMGRP_IPV4_ROUTE | syscall.RTMGRP_IPV6_ROUTE,
+		Groups: uint32(unix.RTMGRP_LINK |
+			unix.RTMGRP_IPV4_IFADDR | unix.RTMGRP_IPV6_IFADDR |
+			unix.RTMGRP_IPV4_ROUTE | unix.RTMGRP_IPV6_ROUTE),
 	}
 	if err := syscall.Bind(fd, sa); err != nil {
 		log.Printf("[ERR] Could not bind netlink listener: %v", err)
