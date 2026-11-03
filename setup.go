@@ -124,6 +124,93 @@ func setupToken() string {
 // runSetupWizard serves a minimal, token-protected page on loopback and blocks
 // until the user has chosen the master password.
 func runSetupWizard() error {
+	return runAuthWizard(setupModeCreate, nil)
+}
+
+// runMigrationWizard encrypts a legacy plaintext configuration. On a terminal
+// it keeps the existing interactive prompt; when started from a desktop it uses
+// the web page, because a GUI process has no usable stdin.
+func runMigrationWizard() error {
+	if hasTerminal() || os.Getenv(secretEnv) != "" {
+		if err := migrateToEncrypted(); err != nil {
+			return err
+		}
+		finalizeConfiguration()
+		return nil
+	}
+	return runAuthWizard(setupModeMigrate, nil)
+}
+
+// runUnlockWizard asks for the master password in the browser when no key is
+// available and the process has no terminal.
+func runUnlockWizard(data []byte) error {
+	return runAuthWizard(setupModeUnlock, data)
+}
+
+type setupMode string
+
+const (
+	setupModeCreate  setupMode = "create"
+	setupModeMigrate setupMode = "migrate"
+	setupModeUnlock  setupMode = "unlock"
+)
+
+type setupPageConfig struct {
+	documentTitleKey string
+	titleKey         string
+	introKey         string
+	submitKey        string
+	successTitleKey  string
+	successTextKey   string
+	endpoint         string
+	showConfirm      bool
+	showAddresses    bool
+}
+
+func setupPageConfigFor(mode setupMode) setupPageConfig {
+	switch mode {
+	case setupModeMigrate:
+		return setupPageConfig{
+			documentTitleKey: "migrate_document_title",
+			titleKey:         "migrate_title",
+			introKey:         "migrate_intro",
+			submitKey:        "migrate_submit",
+			successTitleKey:  "migrate_success_title",
+			successTextKey:   "migrate_success_text",
+			endpoint:         "/api/migrate",
+			showConfirm:      true,
+			showAddresses:    false,
+		}
+	case setupModeUnlock:
+		return setupPageConfig{
+			documentTitleKey: "unlock_document_title",
+			titleKey:         "unlock_title",
+			introKey:         "unlock_intro",
+			submitKey:        "unlock_submit",
+			successTitleKey:  "unlock_success_title",
+			successTextKey:   "unlock_success_text",
+			endpoint:         "/api/unlock",
+			showConfirm:      false,
+			showAddresses:    false,
+		}
+	default:
+		return setupPageConfig{
+			documentTitleKey: "document_title",
+			titleKey:         "title",
+			introKey:         "intro",
+			submitKey:        "submit",
+			successTitleKey:  "success_title",
+			successTextKey:   "success_text",
+			endpoint:         "/api/setup",
+			showConfirm:      true,
+			showAddresses:    true,
+		}
+	}
+}
+
+// runAuthWizard starts the token-protected page used for first-run setup,
+// plaintext migration and unlock. It blocks until the page completes.
+func runAuthWizard(mode setupMode, data []byte) error {
 	ln, addr, err := listenSetup()
 	if err != nil {
 		return err
@@ -135,7 +222,7 @@ func runSetupWizard() error {
 	finish := func() { once.Do(func() { close(done) }) }
 
 	srv := &http.Server{
-		Handler:           setupHandler(token, addr, socks, finish),
+		Handler:           authHandler(token, addr, socks, mode, data, finish),
 		ReadHeaderTimeout: setupTimeout,
 		ReadTimeout:       setupTimeout,
 		WriteTimeout:      setupTimeout,
@@ -148,7 +235,14 @@ func runSetupWizard() error {
 	}()
 
 	url := fmt.Sprintf("http://%s/?token=%s", addr, token)
-	log.Printf("FIRST RUN: open %s to choose the master password", url)
+	switch mode {
+	case setupModeUnlock:
+		log.Printf("CONFIGURATION LOCKED: open %s to enter the master password", url)
+	case setupModeMigrate:
+		log.Printf("LEGACY CONFIGURATION: open %s to encrypt it", url)
+	default:
+		log.Printf("FIRST RUN: open %s to choose the master password", url)
+	}
 	if err := openBrowser(url); err != nil {
 		log.Printf("Cannot open the browser automatically: %v", err)
 	}
@@ -160,9 +254,16 @@ func runSetupWizard() error {
 	return nil
 }
 
-// setupHandler serves the first-run page and creates the encrypted config.
+// setupHandler keeps the historical test entry point for the first-run page.
 func setupHandler(token, address, socksAddress string, done func()) http.Handler {
+	return authHandler(token, address, socksAddress, setupModeCreate, nil, done)
+}
+
+// authHandler serves the setup, migration or unlock page and performs the
+// corresponding action.
+func authHandler(token, address, socksAddress string, mode setupMode, data []byte, done func()) http.Handler {
 	mux := http.NewServeMux()
+	pageCfg := setupPageConfigFor(mode)
 
 	validToken := func(r *http.Request) bool {
 		got := r.URL.Query().Get("token")
@@ -175,17 +276,14 @@ func setupHandler(token, address, socksAddress string, done func()) http.Handler
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		page := strings.ReplaceAll(setupPage, "__ADDRESS__", html.EscapeString(address))
-		page = strings.ReplaceAll(page, "__SOCKS__", html.EscapeString(socksAddress))
-		page = strings.ReplaceAll(page, "__SETUP_I18N__", setupI18nJSON)
-		fmt.Fprint(w, page)
+		fmt.Fprint(w, renderAuthPage(pageCfg, mode, address, socksAddress))
 	})
 
 	var mu sync.Mutex
 	created := false
-	mux.HandleFunc("POST /api/setup", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST "+pageCfg.endpoint, func(w http.ResponseWriter, r *http.Request) {
 		if !validToken(r) {
-			writeSetupError(w, http.StatusForbidden, "token di setup non valido")
+			writeSetupError(w, http.StatusForbidden, "invalid_token", "")
 			return
 		}
 		var body struct {
@@ -193,38 +291,64 @@ func setupHandler(token, address, socksAddress string, done func()) http.Handler
 			Confirm  string `json:"confirm"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&body); err != nil {
-			writeSetupError(w, http.StatusBadRequest, "richiesta non valida")
+			writeSetupError(w, http.StatusBadRequest, "invalid_request", "")
 			return
 		}
-		if len(body.Password) < minPasswordLen {
-			writeSetupError(w, http.StatusBadRequest, fmt.Sprintf("la master password deve avere almeno %d caratteri", minPasswordLen))
-			return
-		}
-		if body.Password != body.Confirm {
-			writeSetupError(w, http.StatusBadRequest, "le due password non coincidono")
-			return
+		if mode == setupModeUnlock {
+			if body.Password == "" {
+				writeSetupError(w, http.StatusBadRequest, "invalid_request", "")
+				return
+			}
+		} else {
+			if len(body.Password) < minPasswordLen {
+				writeSetupError(w, http.StatusBadRequest, "too_short", "")
+				return
+			}
+			if body.Password != body.Confirm {
+				writeSetupError(w, http.StatusBadRequest, "mismatch", "")
+				return
+			}
 		}
 
 		mu.Lock()
 		if created {
 			mu.Unlock()
-			writeSetupError(w, http.StatusConflict, "configurazione già creata")
+			writeSetupError(w, http.StatusConflict, "already_completed", "")
 			return
 		}
-		if err := createInitialConfig(body.Password, address, socksAddress); err != nil {
+		var err error
+		switch mode {
+		case setupModeCreate:
+			err = createInitialConfig(body.Password, address, socksAddress)
+		case setupModeMigrate:
+			err = migrateToEncryptedWithPassword(body.Password)
+			if err == nil {
+				finalizeConfiguration()
+			}
+		case setupModeUnlock:
+			err = unlockConfigWithPasswordAndApply(data, body.Password)
+		}
+		if err != nil {
 			mu.Unlock()
-			log.Printf("setup: cannot create the configuration: %v", err)
-			writeSetupError(w, http.StatusInternalServerError, "impossibile creare la configurazione")
+			log.Printf("%s: %v", mode, err)
+			code := "internal"
+			status := http.StatusInternalServerError
+			if errors.Is(err, errWrongPassword) {
+				code = "wrong_password"
+				status = http.StatusUnauthorized
+			}
+			writeSetupError(w, status, code, err.Error())
 			return
 		}
 		created = true
 		mu.Unlock()
 
-		writeSetupJSON(w, http.StatusOK, map[string]string{
-			"status":  "ok",
-			"address": address,
-			"socks":   socksAddress,
-		})
+		resp := map[string]string{"status": "ok"}
+		if mode == setupModeCreate {
+			resp["address"] = address
+			resp["socks"] = socksAddress
+		}
+		writeSetupJSON(w, http.StatusOK, resp)
 		go func() {
 			time.Sleep(700 * time.Millisecond)
 			done()
@@ -234,25 +358,71 @@ func setupHandler(token, address, socksAddress string, done func()) http.Handler
 	return mux
 }
 
+// unlockConfigWithPasswordAndApply decrypts, applies and finalizes an existing
+// encrypted configuration after the user entered the master password.
+func unlockConfigWithPasswordAndApply(data []byte, password string) error {
+	plain, err := unlockConfigWithPassword(data, password)
+	if err != nil {
+		return err
+	}
+	return finishEncryptedConfiguration(plain)
+}
+
+// renderAuthPage fills the page template with the labels and endpoint for the
+// requested mode. All user-visible strings are then resolved by the browser
+// from the embedded translations.
+func renderAuthPage(cfg setupPageConfig, mode setupMode, address, socksAddress string) string {
+	showConfirm := "false"
+	if cfg.showConfirm {
+		showConfirm = "true"
+	}
+	showAddresses := "false"
+	if cfg.showAddresses {
+		showAddresses = "true"
+	}
+	return strings.NewReplacer(
+		"__DOC_TITLE_KEY__", cfg.documentTitleKey,
+		"__TITLE_KEY__", cfg.titleKey,
+		"__INTRO_KEY__", cfg.introKey,
+		"__PASSWORD_LABEL_KEY__", "password_label",
+		"__CONFIRM_LABEL_KEY__", "confirm_label",
+		"__HINT_KEY__", "password_hint",
+		"__SUBMIT_KEY__", cfg.submitKey,
+		"__SUCCESS_TITLE_KEY__", cfg.successTitleKey,
+		"__SUCCESS_TEXT_KEY__", cfg.successTextKey,
+		"__MODE__", string(mode),
+		"__ENDPOINT__", cfg.endpoint,
+		"__SHOW_CONFIRM__", showConfirm,
+		"__SHOW_ADDRESSES__", showAddresses,
+		"__ADDRESS__", html.EscapeString(address),
+		"__SOCKS__", html.EscapeString(socksAddress),
+		"__SETUP_I18N__", setupI18nJSON,
+	).Replace(setupPage)
+}
+
 func writeSetupJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
 }
 
-func writeSetupError(w http.ResponseWriter, status int, msg string) {
-	writeSetupJSON(w, status, map[string]string{"error": msg})
+func writeSetupError(w http.ResponseWriter, status int, code, detail string) {
+	err := map[string]string{"code": code}
+	if detail != "" {
+		err["detail"] = detail
+	}
+	writeSetupJSON(w, status, err)
 }
 
 //go:embed setup_i18n.json
 var setupI18nJSON string
 
 const setupPage = `<!doctype html>
-<html lang="it">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Go Smart Proxy — First run</title>
+<title>Go Smart Proxy</title>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
@@ -294,26 +464,26 @@ const setupPage = `<!doctype html>
   <div class="card">
     <div id="form">
       <div class="logo">Go Smart Proxy</div>
-      <h1 data-i18n="title">Choose the master password</h1>
-      <p data-i18n="intro">
+      <h1 data-i18n="__TITLE_KEY__">Choose the master password</h1>
+      <p data-i18n="__INTRO_KEY__">
         It protects credentials, certificates and relay keys. The configuration will be saved encrypted in
         <span class="code">config.yml.enc</span>. It cannot be recovered.
       </p>
       <form id="setup-form">
-        <label for="password" data-i18n="password_label">Master password</label>
+        <label for="password" data-i18n="__PASSWORD_LABEL_KEY__">Master password</label>
         <input id="password" type="password" autocomplete="new-password" minlength="8" required autofocus>
-        <div class="hint" data-i18n="password_hint">At least 8 characters. Use a long password and keep it safe.</div>
-        <label for="confirm" data-i18n="confirm_label">Repeat the master password</label>
+        <div class="hint" id="hint" data-i18n="__HINT_KEY__">At least 8 characters. Use a long password and keep it safe.</div>
+        <label for="confirm" id="confirm-label" data-i18n="__CONFIRM_LABEL_KEY__">Repeat the master password</label>
         <input id="confirm" type="password" autocomplete="new-password" minlength="8" required>
-        <button id="submit" type="submit" data-i18n="submit">Create configuration</button>
+        <button id="submit" type="submit" data-i18n="__SUBMIT_KEY__">Create configuration</button>
         <div class="error" id="error"></div>
       </form>
     </div>
     <div class="ok" id="ok">
       <div class="check">✓</div>
-      <h1 data-i18n="success_title">All set</h1>
-      <p data-i18n="success_text">The encrypted configuration has been created. Opening the interface…</p>
-      <div class="addresses">
+      <h1 data-i18n="__SUCCESS_TITLE_KEY__">All set</h1>
+      <p data-i18n="__SUCCESS_TEXT_KEY__">The encrypted configuration has been created. Opening the interface…</p>
+      <div class="addresses" id="addresses">
         <span data-i18n="proxy_label">Proxy HTTP / UI:</span> <span class="code">__ADDRESS__</span><br>
         <span data-i18n="socks_label">SOCKS5 proxy:</span> <span class="code">__SOCKS__</span>
       </div>
@@ -321,14 +491,37 @@ const setupPage = `<!doctype html>
   </div>
 <script>
   const setupI18n = __SETUP_I18N__;
+  const mode = '__MODE__';
+  const endpoint = '__ENDPOINT__';
+  const showConfirm = __SHOW_CONFIRM__;
+  const showAddresses = __SHOW_ADDRESSES__;
+  const keys = {
+    documentTitle: '__DOC_TITLE_KEY__',
+    title: '__TITLE_KEY__',
+    intro: '__INTRO_KEY__',
+    passwordLabel: '__PASSWORD_LABEL_KEY__',
+    confirmLabel: '__CONFIRM_LABEL_KEY__',
+    hint: '__HINT_KEY__',
+    submit: '__SUBMIT_KEY__',
+    successTitle: '__SUCCESS_TITLE_KEY__',
+    successText: '__SUCCESS_TEXT_KEY__'
+  };
   const lang = (localStorage.getItem('gsp.language') || navigator.language || 'en').toLowerCase().split('-')[0];
   const t = (key) => (setupI18n[lang] && setupI18n[lang][key]) || setupI18n.en[key] || key;
   function applyI18n() {
     document.documentElement.lang = lang;
-    document.title = t('document_title');
+    document.title = t(keys.documentTitle);
     for (const el of document.querySelectorAll('[data-i18n]')) el.textContent = t(el.getAttribute('data-i18n'));
   }
   applyI18n();
+
+  if (!showConfirm) {
+    document.getElementById('confirm').style.display = 'none';
+    document.getElementById('confirm').required = false;
+    document.getElementById('confirm-label').style.display = 'none';
+    document.getElementById('hint').style.display = 'none';
+  }
+  if (!showAddresses) document.getElementById('addresses').style.display = 'none';
 
   const token = new URLSearchParams(location.search).get('token') || '';
   const form = document.getElementById('setup-form');
@@ -337,19 +530,31 @@ const setupPage = `<!doctype html>
     e.preventDefault();
     err.textContent = '';
     const password = document.getElementById('password').value;
-    const confirm = document.getElementById('confirm').value;
-    if (password.length < 8) { err.textContent = t('error_short'); return; }
-    if (password !== confirm) { err.textContent = t('error_mismatch'); return; }
+    const confirm = showConfirm ? document.getElementById('confirm').value : '';
+    if (showConfirm) {
+      if (password.length < 8) { err.textContent = t('error_short'); return; }
+      if (password !== confirm) { err.textContent = t('error_mismatch'); return; }
+    } else if (!password) {
+      err.textContent = t('error_generic') + '400';
+      return;
+    }
     const btn = document.getElementById('submit');
     btn.disabled = true;
     try {
-      const res = await fetch('/api/setup?token=' + encodeURIComponent(token), {
+      const res = await fetch(endpoint + '?token=' + encodeURIComponent(token), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password, confirm })
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { err.textContent = data.error || (t('error_generic') + res.status); btn.disabled = false; return; }
+      if (!res.ok) {
+        if (data.code === 'too_short') err.textContent = t('error_short');
+        else if (data.code === 'mismatch') err.textContent = t('error_mismatch');
+        else if (data.code === 'wrong_password') err.textContent = t('unlock_error_wrong');
+        else err.textContent = t('error_generic') + (data.detail || data.code || res.status);
+        btn.disabled = false;
+        return;
+      }
       document.getElementById('form').style.display = 'none';
       document.getElementById('ok').style.display = 'block';
       applyI18n();

@@ -71,7 +71,7 @@ English as fallback; code, comments and this README are in English.
   are listed and usable without an invitation), and desktop notifications.
 - **Encrypted configuration** with a master password (PBKDF2 + AES-256-GCM).
   On macOS the derived key can be stored in the Keychain and unlocked with
-  Touch ID.
+  Touch ID; on Windows it is protected with DPAPI.
 - **Complete web configuration**: listeners, SOCKS5, system integration, static
   hosts, routes and route ordering, rules, credentials, relay settings and
   certificates.
@@ -203,9 +203,12 @@ derived from a master password:
 
 At startup:
 
-1. If `config.yml.enc` exists, the proxy unlocks it.
+1. If `config.yml.enc` exists, the proxy unlocks it with the stored key.
+   Without a stored key it asks for the master password in the terminal, or
+   opens the **unlock page** on loopback when started from a desktop.
 2. If only the legacy plaintext `config.yml` exists, the proxy:
-   - asks for a new master password (twice),
+   - asks for a new master password (twice) in a terminal, or opens a
+     **migration page** in the browser,
    - embeds the relay certificate, private key and CA into the configuration,
    - writes and verifies `config.yml.enc`,
    - removes the plaintext configuration and the plaintext relay private key.
@@ -222,32 +225,40 @@ At startup:
 
 1. The process already has the derived key (normal while running).
 2. `PROXY_MASTER_PASSWORD` (useful for launchd/services/automation).
-3. The system Keychain (macOS), with Touch ID when available.
-4. An interactive master password prompt (hidden input in a terminal, or a
-   native dialog when started from Finder/launchd).
+3. The system key store: Keychain on macOS (with Touch ID when available),
+   DPAPI on Windows.
+4. An interactive master password prompt in a terminal, or the token-protected
+   unlock page in the browser when there is no terminal.
 
-The browser setup page is used only for a brand-new installation; after that,
-the sources above unlock the existing configuration.
+The browser setup page is used for a brand-new installation, the migration page
+for a plaintext configuration, and the unlock page when the stored key is not
+available; after that, the sources above unlock the existing configuration.
 
 On macOS the **derived key** (not the password) is stored in the Keychain, under
 the service `go-smart-proxy`, keyed by the configuration salt. The Keychain read
 is gated by a `LocalAuthentication` Touch ID check when biometrics are
-available. Set `PROXY_NO_KEYCHAIN=1` to always ask for the master password.
+available. On Windows the derived key is stored in `config.key.dpapi` and
+protected with `CryptProtectData` for the current user. Set
+`PROXY_NO_KEYCHAIN=1` to disable both stores and always require the master
+password.
 
 > **Backups:** `config.yml.enc` is portable. On another machine the master
-> password is enough; the Keychain entry is local. Keep an encrypted backup and
-> the password in a password manager. **There is no password recovery.**
+> password is enough; the Keychain/DPAPI entry is local. Keep an encrypted
+> backup and the password in a password manager. **There is no password
+> recovery.**
 
-Saving from the web UI keeps the same salt and derived key, so the Keychain
-entry stays valid. The configuration is re-encrypted on every change.
+Saving from the web UI keeps the same salt and derived key, so the stored key
+stays valid. The configuration is re-encrypted on every change.
 
 **Data directory**: a portable run (archive extracted in a writable folder) keeps
-`config.yml.enc`, `relay_state.json` and `cache/` next to the binary. When the
-working directory is not writable — for example an app bundle opened from Finder
-— the proxy uses the user configuration directory instead:
+`config.yml.enc`, `config.key.dpapi`, `relay_state.json` and `cache/` next to the
+binary. When the binary is installed — a macOS app bundle, the Windows installer
+(marked by `installed.marker` next to `proxy.exe`) or a Linux package — the
+proxy uses the user configuration directory instead:
 `~/Library/Application Support/go-smart-proxy` on macOS, `%AppData%\go-smart-proxy`
-on Windows, `~/.config/go-smart-proxy` on Linux. Set `PROXY_HOME` to force a
-specific directory.
+on Windows, `~/.config/go-smart-proxy` on Linux. On the first launch after an
+upgrade, an existing configuration found in the old working directory is moved
+to the new one. Set `PROXY_HOME` to force a specific directory.
 
 ### Configuration reference
 
@@ -840,7 +851,12 @@ rather than keeping the CA key in the cluster.
   with a Touch ID prompt when biometrics are available. This is an app-level
   check via `LocalAuthentication`; the Keychain item uses the login keychain.
   A same-user attacker can still target the running process or the Keychain.
-- `PROXY_NO_KEYCHAIN=1` disables the Keychain and forces a password prompt.
+  On Windows the derived key is stored in `config.key.dpapi`, protected with
+  DPAPI for the current user. Like the Keychain, DPAPI protects the key from
+  other users and offline disk access, not from processes running as the same
+  user.
+- `PROXY_NO_KEYCHAIN=1` disables the macOS Keychain and the Windows DPAPI store,
+  forcing a master password prompt.
 - The web API never returns credential passwords. An empty password on save
   keeps the existing one.
 - The web UI/API are unauthenticated and loopback-only. Do not bind the proxy to
@@ -887,7 +903,7 @@ rather than keeping the CA key in the cluster.
 |---|---|---|
 | `PROXY_MASTER_PASSWORD` | proxy | Master password for unattended startup |
 | `PROXY_HOME` | proxy | Data directory for config, relay state and PAC cache |
-| `PROXY_NO_KEYCHAIN` | proxy (macOS) | Disable the Keychain; always prompt |
+| `PROXY_NO_KEYCHAIN` | proxy (macOS/Windows) | Disable the Keychain/DPAPI store; always prompt |
 | `PROXY_TEST_KEYCHAIN` | tests | Run the opt-in Keychain bridge test |
 | `PROXYRELAY_SMTP_ADDR` | relay | SMTP server `host:port` |
 | `PROXYRELAY_SMTP_USER` | relay | SMTP username |
@@ -1028,7 +1044,7 @@ rebuild the Go binary so the new assets are embedded.
 | `chain.go` | Proxy chains, SOCKS5/HTTP hops, relay hop handling |
 | `relay_client.go` | Relay client, address book, approvals, device identity |
 | `relay_provision.go` | Proxy-side enrollment (CSR, code, certificate storage, TOFU) |
-| `secret.go` | Config encryption, master password, Keychain integration |
+| `secret.go` | Config encryption, master password, Keychain/DPAPI integration |
 | `setup.go` | First-run web setup (master password, defaults, onboarding flag) |
 | `web.go`, `webui.go` | Web API, static UI embedding |
 | `socks.go` | SOCKS5 listener and handler |
@@ -1056,6 +1072,7 @@ The Go module is named `proxy`; internal packages are imported as
 | Enrollment returns `403 dominio non abilitato` | The relay's `-allow-domains` must contain the **exact** domain. |
 | Enrollment disabled / no email | SMTP secret/flags missing or wrong; relay logs `enrollment disabled`; restart after filling. |
 | `x509: certificate signed by unknown authority` | Paste the enrollment CA, or accept the fingerprint prompt after verifying it. |
+| Unlock page keeps asking for the password | `PROXY_NO_KEYCHAIN` set, DPAPI/Keychain entry missing or invalid, or the configuration was copied from another machine. Enter the master password once to store the key again. |
 | Touch ID prompt does not appear | Keychain disabled (`PROXY_NO_KEYCHAIN`), no biometrics, or non-macOS; enter the master password. |
 | `wrong master password or corrupted file` | The password is wrong or the file was modified. There is no recovery without the password. |
 | Web UI returns `403` | UI/API are only available to loopback clients. |

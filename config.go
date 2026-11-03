@@ -139,19 +139,29 @@ func secureConfigFile(path string) {
 func loadConfiguration() {
 	if data, err := os.ReadFile(encryptedConfig); err == nil {
 		secureConfigFile(encryptedConfig)
-		plain, err := unlockConfig(data)
+		plain, err := unlockConfigStored(data)
 		if err != nil {
+			if !errors.Is(err, errConfigLocked) {
+				log.Fatal(err)
+			}
+			// No stored key: use the terminal when available, otherwise open
+			// the unlock page in the browser. A GUI app has no usable stdin,
+			// which is why this must not fail with a silent log.Fatal.
+			if hasTerminal() {
+				plain, err = unlockConfigInteractive(data)
+				if err != nil {
+					log.Fatal(err)
+				}
+			} else {
+				if err := runUnlockWizard(data); err != nil {
+					log.Fatal(err)
+				}
+				return
+			}
+		}
+		if err := finishEncryptedConfiguration(plain); err != nil {
 			log.Fatal(err)
 		}
-		if err := yaml.Unmarshal(plain, &configuration); err != nil {
-			log.Fatalf("%s: %v", encryptedConfig, err)
-		}
-		if configuration.OnboardingDone == nil {
-			// Existing configurations predate onboarding: do not show it.
-			configuration.OnboardingDone = boolPtr(true)
-		}
-		// The encrypted file is valid: any plaintext leftover is a leak.
-		removePlaintextLeftovers()
 	} else if os.IsNotExist(err) {
 		// Legacy plaintext configuration: load it and migrate automatically to
 		// the encrypted format, embedding the relay certificate and key.
@@ -160,21 +170,40 @@ func loadConfiguration() {
 			log.Fatalf("no configuration found (%s or %s)", encryptedConfig, plainConfig)
 		}
 		secureConfigFile(plainConfig)
-		if err := yaml.Unmarshal(data, &configuration); err != nil {
-			log.Fatalf("%s: %v", plainConfig, err)
+		if err := applyConfigurationPlaintext(data, plainConfig); err != nil {
+			log.Fatal(err)
 		}
-		if configuration.OnboardingDone == nil {
-			// Existing configurations predate onboarding: do not show it.
-			configuration.OnboardingDone = boolPtr(true)
-		}
-		if err := migrateToEncrypted(); err != nil {
-			log.Fatalf("cannot migrate %s to %s: %v", plainConfig, encryptedConfig, err)
+		if err := runMigrationWizard(); err != nil {
+			log.Fatal(err)
 		}
 	} else {
 		log.Fatal(err)
 	}
+}
 
+// finishEncryptedConfiguration applies a successfully decrypted configuration,
+// removes plaintext leftovers and initializes the runtime state.
+func finishEncryptedConfiguration(plain []byte) error {
+	if err := applyConfigurationPlaintext(plain, encryptedConfig); err != nil {
+		return err
+	}
+	// The encrypted file is valid: any plaintext leftover is a leak.
+	removePlaintextLeftovers()
 	finalizeConfiguration()
+	return nil
+}
+
+// applyConfigurationPlaintext parses a configuration and marks legacy ones as
+// already onboarded.
+func applyConfigurationPlaintext(plain []byte, source string) error {
+	if err := yaml.Unmarshal(plain, &configuration); err != nil {
+		return fmt.Errorf("%s: %w", source, err)
+	}
+	if configuration.OnboardingDone == nil {
+		// Existing configurations predate onboarding: do not show it.
+		configuration.OnboardingDone = boolPtr(true)
+	}
+	return nil
 }
 
 // finalizeConfiguration validates and applies a configuration that has already
@@ -199,13 +228,22 @@ func finalizeConfiguration() {
 }
 
 // migrateToEncrypted converts the legacy plaintext configuration into the
-// encrypted one, moving the relay certificate and private key inside it and
-// removing the files that would otherwise keep the secrets in clear text.
+// encrypted one, asking for a new master password interactively (or from the
+// environment).
 func migrateToEncrypted() error {
 	log.Printf("Encrypting the configuration: choose a master password and keep it safe, it cannot be recovered")
 	pass, err := newMasterPassword()
 	if err != nil {
 		return err
+	}
+	return migrateToEncryptedWithPassword(pass)
+}
+
+// migrateToEncryptedWithPassword performs the legacy migration with a master
+// password supplied by the web setup page or the environment.
+func migrateToEncryptedWithPassword(pass string) error {
+	if len(pass) < minPasswordLen {
+		return fmt.Errorf("the master password must be at least %d characters", minPasswordLen)
 	}
 	if cfg := configuration.Relay; cfg != nil && cfg.Address != "" {
 		certPEM, keyPEM, err := readRelayPEM(cfg)

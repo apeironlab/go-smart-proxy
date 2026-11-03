@@ -5,6 +5,8 @@ config.yml
 config.yml.tmp
 config.yml.enc
 config.yml.enc.tmp
+config.key.dpapi
+config.key.dpapi.tmp
 webui/node_modules
 proxyrelay
 relay_state.json

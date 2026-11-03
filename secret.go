@@ -30,6 +30,7 @@ const (
 	noKeychainEnv    = "PROXY_NO_KEYCHAIN"
 	encryptedConfig  = "config.yml.enc"
 	plainConfig      = "config.yml"
+	configKeyFile    = "config.key.dpapi"
 	minPasswordLen   = 8
 	keychainService  = "go-smart-proxy"
 )
@@ -190,10 +191,21 @@ func clearConfigCrypto() {
 	secretMu.Unlock()
 }
 
-// unlockConfig decrypts data using, in order: the key stored in the system
-// keychain (with biometric authentication when available), the master password
-// from the environment, or an interactive master password prompt.
-func unlockConfig(data []byte) ([]byte, error) {
+var (
+	errConfigLocked  = errors.New("the configuration is locked: the master password is required")
+	errWrongPassword = errors.New("wrong master password")
+)
+
+// hasTerminal reports whether a password can be read interactively.
+func hasTerminal() bool {
+	return term.IsTerminal(int(os.Stdin.Fd()))
+}
+
+// unlockConfigStored tries to unlock data without asking the user: it uses the
+// master password from the environment or the key stored in the system key
+// store (Keychain on macOS, DPAPI on Windows). It returns errConfigLocked when
+// neither source is available.
+func unlockConfigStored(data []byte) ([]byte, error) {
 	salt, err := secretSalt(data)
 	if err != nil {
 		return nil, err
@@ -209,6 +221,9 @@ func unlockConfig(data []byte) ([]byte, error) {
 			return nil, fmt.Errorf("wrong master password in %s", secretEnv)
 		}
 		setConfigCrypto(key, salt)
+		// The password came from the environment once: remember the derived
+		// key so the next GUI launch does not need it again.
+		saveKeyToKeychain(key, salt)
 		return plain, nil
 	}
 
@@ -224,12 +239,46 @@ func unlockConfig(data []byte) ([]byte, error) {
 						}
 					}
 				}
-				log.Printf("Keychain key is not valid for this configuration, removing it")
+				log.Printf("Key stored in the system keychain is not valid for this configuration, removing it")
 				keychainDelete(keychainService, account)
 			} else {
-				log.Printf("Biometric unlock not available: %v (asking for the master password)", err)
+				log.Printf("Keychain unlock not available: %v (the master password is required)", err)
 			}
 		}
+	}
+
+	return nil, errConfigLocked
+}
+
+// unlockConfigWithPassword decrypts data with an explicitly supplied master
+// password and remembers the derived key in the system key store.
+func unlockConfigWithPassword(data []byte, password string) ([]byte, error) {
+	salt, err := secretSalt(data)
+	if err != nil {
+		return nil, err
+	}
+	key, err := deriveSecretKey(password, salt)
+	if err != nil {
+		return nil, err
+	}
+	plain, err := decryptWithKey(key, data)
+	if err != nil {
+		return nil, errWrongPassword
+	}
+	setConfigCrypto(key, salt)
+	saveKeyToKeychain(key, salt)
+	return plain, nil
+}
+
+// unlockConfigInteractive unlocks data using the stored key or, when that is
+// not available, asks for the master password three times in the terminal.
+func unlockConfigInteractive(data []byte) ([]byte, error) {
+	plain, err := unlockConfigStored(data)
+	if err == nil {
+		return plain, nil
+	}
+	if !errors.Is(err, errConfigLocked) {
+		return nil, err
 	}
 
 	var lastErr error
@@ -238,19 +287,12 @@ func unlockConfig(data []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		key, err := deriveSecretKey(password, salt)
-		if err != nil {
-			return nil, err
+		plain, err := unlockConfigWithPassword(data, password)
+		if err == nil {
+			return plain, nil
 		}
-		plain, err := decryptWithKey(key, data)
-		if err != nil {
-			lastErr = err
-			log.Printf("Master password not valid, retry (%d/3)", attempt+1)
-			continue
-		}
-		setConfigCrypto(key, salt)
-		saveKeyToKeychain(key, salt)
-		return plain, nil
+		lastErr = err
+		log.Printf("Master password not valid, retry (%d/3)", attempt+1)
 	}
 	if lastErr == nil {
 		lastErr = errors.New("no password provided")
