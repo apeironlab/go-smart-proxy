@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"proxy/relay"
+	"github.com/apeironlab/go-smart-proxy/relay"
 )
 
 type pendingEnrollment struct {

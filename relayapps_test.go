@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"proxy/relay"
+	"github.com/apeironlab/go-smart-proxy/relay"
 )
 
 // startAppRelay is a relay server with a catalog and one connected gateway.

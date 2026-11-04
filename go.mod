@@ -1,4 +1,4 @@
-module proxy
+module github.com/apeironlab/go-smart-proxy
 
 go 1.24.0
 

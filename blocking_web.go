@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"proxy/blocklist"
+	"github.com/apeironlab/go-smart-proxy/blocklist"
 )
 
 type presetJSON struct {

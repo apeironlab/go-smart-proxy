@@ -44,6 +44,8 @@ type Gateway struct {
 	apps map[string]GatewayApp
 }
 
+// NewGateway prepares an application gateway: it loads the certificate and the
+// CA but does not connect until Run.
 func NewGateway(cfg GatewayConfig) (*Gateway, error) {
 	if cfg.Address == "" {
 		return nil, errors.New("gateway: the relay address is required")

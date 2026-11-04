@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"proxy/relay"
+	"github.com/apeironlab/go-smart-proxy/relay"
 )
 
 type relayConfigJSON struct {

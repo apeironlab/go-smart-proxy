@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"proxy/relay"
+	"github.com/apeironlab/go-smart-proxy/relay"
 )
 
 func leafSerial(t *testing.T, certPEM string) (serial string, device string, notAfter time.Time) {

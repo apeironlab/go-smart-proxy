@@ -14,8 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"proxy/blocklist"
-	"proxy/relay"
+	"github.com/apeironlab/go-smart-proxy/blocklist"
+	"github.com/apeironlab/go-smart-proxy/relay"
 )
 
 // The proxy can block hosts (ads, trackers, malware) before any connection is

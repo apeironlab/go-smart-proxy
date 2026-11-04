@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"proxy/relay"
+	"github.com/apeironlab/go-smart-proxy/relay"
 )
 
 // localAuthEnv is a configuration that can be saved, in a directory of its own,

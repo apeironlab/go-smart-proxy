@@ -27,3 +27,4 @@ dist/
 secrets/
 deploy/relay-k8s.yaml
 deploy/relay-k8s.local.yaml
+coverage.out

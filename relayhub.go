@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"sync"
 
-	"proxy/relay"
+	"github.com/apeironlab/go-smart-proxy/relay"
 )
 
 // This file holds the set of relay servers the installation is connected to.

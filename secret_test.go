@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"proxy/relay"
+	"github.com/apeironlab/go-smart-proxy/relay"
 
 	"gopkg.in/yaml.v3"
 )

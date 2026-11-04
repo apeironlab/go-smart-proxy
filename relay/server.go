@@ -145,6 +145,8 @@ func (s *Server) Kick(email, serial string) int {
 	return len(hit)
 }
 
+// NewServer returns a relay server that keeps its address book in store. Call
+// Serve with a TLS listener to run it.
 func NewServer(store *Store) *Server {
 	return &Server{Store: store, Log: log.Default(), sessions: map[string]*session{}, gateways: map[string]*session{}}
 }

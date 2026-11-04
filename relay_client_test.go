@@ -14,7 +14,7 @@ import (
 
 	"github.com/hashicorp/yamux"
 
-	"proxy/relay"
+	"github.com/apeironlab/go-smart-proxy/relay"
 )
 
 func waitFor(t *testing.T, what string, cond func() bool) {

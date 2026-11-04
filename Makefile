@@ -1,10 +1,14 @@
-.PHONY: webui build relay gateway test
+.PHONY: webui build relay gateway test cover
 
 webui:
 	cd webui && npm run build
 
 build: webui
 	go build -o proxy .
+
+cover:
+	go test -count=1 -covermode=atomic -coverprofile=coverage.out ./...
+	go tool cover -func=coverage.out | tail -n 1
 
 test:
 	go test -count=1 ./...

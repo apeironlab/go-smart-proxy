@@ -9,7 +9,7 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"proxy/relay"
+	"github.com/apeironlab/go-smart-proxy/relay"
 )
 
 // jsonLog turns the lines the relay writes with the standard logger into JSON
