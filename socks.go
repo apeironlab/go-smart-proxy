@@ -170,7 +170,7 @@ func handleSOCKS(client net.Conn) {
 	}
 
 	cc := &countingConn{Conn: client, in: &rec.bytesClientIn, out: &rec.bytesClientOut}
-	tunnel(cc, br, upstream, upstreamBr)
+	tunnel(cc, &countingReader{Reader: br, counter: &rec.bytesClientIn}, upstream, upstreamBr)
 }
 
 func socksReply(c net.Conn, code byte) {

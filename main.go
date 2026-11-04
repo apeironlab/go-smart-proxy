@@ -558,13 +558,15 @@ func handleConnect(client net.Conn, clientBr *bufio.Reader, hostport string) {
 		upstream.Close()
 	}()
 
+	// Only writes are counted by the wrapper: client data is read through
+	// clientBr (which wraps the raw connection), so it is counted separately.
 	client = &countingConn{Conn: client, in: &rec.bytesClientIn, out: &rec.bytesClientOut}
 
 	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return
 	}
 
-	tunnel(client, clientBr, upstream, upstreamBr)
+	tunnel(client, &countingReader{Reader: clientBr, counter: &rec.bytesClientIn}, upstream, upstreamBr)
 }
 
 // dialTarget opens a tunnel to host:port through the route selected for it and
@@ -822,7 +824,7 @@ type closeWriter interface {
 	CloseWrite() error
 }
 
-func tunnel(client net.Conn, clientReader *bufio.Reader, upstream net.Conn, upstreamReader *bufio.Reader) {
+func tunnel(client net.Conn, clientReader io.Reader, upstream net.Conn, upstreamReader *bufio.Reader) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 

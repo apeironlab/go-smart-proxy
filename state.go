@@ -321,6 +321,22 @@ func (c *countingReadCloser) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// countingReader counts bytes read from an underlying reader. It is used for
+// the client side of tunnels, where data is read through a bufio.Reader that
+// wraps the raw connection and therefore bypasses countingConn.Read.
+type countingReader struct {
+	io.Reader
+	counter *atomic.Int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.Reader.Read(p)
+	if n > 0 {
+		c.counter.Add(int64(n))
+	}
+	return n, err
+}
+
 type countingResponseWriter struct {
 	http.ResponseWriter
 	counter *atomic.Int64
