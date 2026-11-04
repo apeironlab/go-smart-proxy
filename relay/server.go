@@ -40,6 +40,7 @@ type session struct {
 	ys     *yamux.Session
 	mu     sync.Mutex
 	ctrl   net.Conn
+	ctx    *NetContext   // what this device shares about its network, nil = nothing
 	ready  chan struct{} // closed once the control stream has registered the device
 }
 
@@ -173,6 +174,30 @@ func (s *Server) onlineDevices(email string) []string {
 	return out
 }
 
+// deviceContexts returns the network context shared by each online device of
+// email, by device code. Devices that share nothing are left out.
+func (s *Server) deviceContexts(email string) map[string]NetContext {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out map[string]NetContext
+	for _, sess := range s.sessions {
+		if sess.email != email || sess.device == "" {
+			continue
+		}
+		sess.mu.Lock()
+		c := sess.ctx
+		sess.mu.Unlock()
+		if c == nil {
+			continue
+		}
+		if out == nil {
+			out = map[string]NetContext{}
+		}
+		out[sess.device] = *c
+	}
+	return out
+}
+
 // peer returns the online session of a contact. An empty device means "any":
 // it works only when a single device is online, so a multi-device user is never
 // routed by chance.
@@ -225,13 +250,14 @@ func (s *Server) pushStateDevice(email, device, notice string) {
 	st := State{T: TState, Email: email, Incoming: in, Outgoing: out, Notice: notice}
 	for _, c := range contacts {
 		devices := s.onlineDevices(c)
-		ct := Contact{Email: c, Online: len(devices) > 0, Devices: devices}
+		ct := Contact{Email: c, Online: len(devices) > 0, Devices: devices, Context: s.deviceContexts(c)}
 		if !ct.Online {
 			ct.LastSeen = s.Store.LastSeen(c)
 		}
 		st.Contacts = append(st.Contacts, ct)
 	}
 	ownOnline := map[string]bool{}
+	ownCtx := s.deviceContexts(email)
 	s.mu.Lock()
 	for _, sess := range s.sessions {
 		if sess.email == email {
@@ -240,7 +266,12 @@ func (s *Server) pushStateDevice(email, device, notice string) {
 	}
 	s.mu.Unlock()
 	for _, id := range s.Store.Devices(email) {
-		st.MyDevices = append(st.MyDevices, DeviceInfo{ID: id, Online: ownOnline[id]})
+		di := DeviceInfo{ID: id, Online: ownOnline[id]}
+		if c, ok := ownCtx[id]; ok && ownOnline[id] {
+			c := c
+			di.Context = &c
+		}
+		st.MyDevices = append(st.MyDevices, di)
 	}
 
 	for _, sess := range targets {
@@ -325,6 +356,7 @@ func (s *Server) handleControl(sess *session, st net.Conn, br *bufio.Reader, hel
 	}
 	sess.ctrl = st
 	sess.device = device
+	sess.ctx = SanitizeContext(hello.Context)
 	sess.mu.Unlock()
 
 	key := sessionKey(sess.email, device)
@@ -347,6 +379,16 @@ func (s *Server) handleControl(sess *session, st net.Conn, br *bufio.Reader, hel
 		var m ClientMsg
 		if err := ReadLine(br, &m); err != nil {
 			return
+		}
+		if m.T == TContext {
+			// The device changed networks (or what it wants to share): tell
+			// it and its contacts.
+			sess.mu.Lock()
+			sess.ctx = SanitizeContext(m.Context)
+			sess.mu.Unlock()
+			s.pushState(sess.email, "")
+			s.notifyPresence(sess.email)
+			continue
 		}
 		other, ok := NormalizeEmail(m.Email)
 		if !ok {

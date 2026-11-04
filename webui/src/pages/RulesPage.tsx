@@ -11,7 +11,7 @@ import { api } from '../api'
 import type { RoutingRule, RuleTest } from '../api'
 import { EmptyState, PageHeader, Section } from '../components/ui'
 
-const empty: RoutingRule = { name: '', domains: [], hosts: [], networks: [], route: '' }
+const empty: RoutingRule = { name: '', domains: [], hosts: [], networks: [], route: '', exitVpn: '', exitLabel: '' }
 
 // The backend may send null for empty lists (older versions, or hand-edited
 // config.yml): normalize them so the page can always use .length and .map.
@@ -147,6 +147,14 @@ export default function RulesPage() {
                         {r.hosts.length > 0 && <>{tags(r.hosts)}</>}
                         {r.networks.length > 0 && <>{tags(r.networks)}</>}
                       </Group>
+                      {(r.exitVpn || r.exitLabel) && (
+                        <Group gap={4} mt={6}>
+                          <Text size="xs" c="dimmed">{t('only if the exit is')}</Text>
+                          {r.exitVpn === 'up' && <Badge size="xs" variant="light" color="grape" tt="none">{t('on a VPN')}</Badge>}
+                          {r.exitVpn === 'down' && <Badge size="xs" variant="light" color="gray" tt="none">{t('not on a VPN')}</Badge>}
+                          {r.exitLabel && <Badge size="xs" variant="outline" color="grape" tt="none">{r.exitLabel}</Badge>}
+                        </Group>
+                      )}
                     </Table.Td>
                     <Table.Td><Badge variant="light" radius="sm" tt="none" size="md">{r.route}</Badge></Table.Td>
                     <Table.Td>
@@ -179,6 +187,17 @@ export default function RulesPage() {
             value={form.networks} onChange={(v) => setForm({ ...form, networks: v })} />
           <Select label={t('Route')} data={routeOptions} value={form.route || null}
             onChange={(v) => setForm({ ...form, route: v ?? '' })} />
+          <Text size="sm" fw={600} mt="xs">{t('Only if the relay exit is...')}</Text>
+          <Text size="xs" c="dimmed" mt={-8}>
+            {t('Optional. Applies to routes with a relay hop: the rule is skipped, and the next one is tried, when the exit does not match what its owner shares (VPN yes/no and a network label).')}
+          </Text>
+          <Group grow align="flex-start">
+            <Select label={t('VPN')} placeholder={t('Any')} clearable
+              data={[{ value: 'up', label: t('Exit on a VPN') }, { value: 'down', label: t('Exit not on a VPN') }]}
+              value={form.exitVpn || null} onChange={(v) => setForm({ ...form, exitVpn: v ?? '' })} />
+            <TextInput label={t('Network label')} placeholder="office*, home"
+              value={form.exitLabel ?? ''} onChange={(e) => setForm({ ...form, exitLabel: e.currentTarget.value })} />
+          </Group>
           <Group justify="flex-end">
             <Button variant="default" onClick={close}>{t('Cancel')}</Button>
             <Button onClick={save}

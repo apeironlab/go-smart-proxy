@@ -21,6 +21,13 @@ type ConfigRule struct {
 	Networks []string `yaml:"Networks,omitempty" json:"networks"`
 	// Route is the name of the route to use ("Direct" for no proxy).
 	Route string `yaml:"Route" json:"route"`
+	// ExitVPN and ExitLabel are optional conditions on where the exit of the
+	// route's relay hop is: "up" or "down" for whether its device is on a VPN,
+	// and a label (comma-separated names or globs) it shares. The rule only
+	// applies while they hold, so another rule or the automatic selection can
+	// take over otherwise.
+	ExitVPN   string `yaml:"ExitVPN,omitempty" json:"exitVpn"`
+	ExitLabel string `yaml:"ExitLabel,omitempty" json:"exitLabel"`
 }
 
 type routingRule struct {
@@ -29,6 +36,9 @@ type routingRule struct {
 	hosts   map[string]bool
 	nets    []*net.IPNet
 	route   string
+
+	exitVPN   string
+	exitLabel string
 }
 
 var (
@@ -41,9 +51,19 @@ func normHost(h string) string {
 }
 
 func compileRule(c ConfigRule) (*routingRule, error) {
-	r := &routingRule{name: c.Name, hosts: map[string]bool{}, route: strings.TrimSpace(c.Route)}
+	r := &routingRule{
+		name: c.Name, hosts: map[string]bool{}, route: strings.TrimSpace(c.Route),
+		exitVPN:   strings.ToLower(strings.TrimSpace(c.ExitVPN)),
+		exitLabel: strings.TrimSpace(c.ExitLabel),
+	}
 	if r.route == "" {
 		return nil, fmt.Errorf("rule %q: route is required", c.Name)
+	}
+	if !validExitVPN(r.exitVPN) {
+		return nil, fmt.Errorf("rule %q: ExitVPN must be empty, \"up\" or \"down\"", c.Name)
+	}
+	if !validLabelPattern(r.exitLabel) {
+		return nil, fmt.Errorf("rule %q: invalid ExitLabel %q", c.Name, c.ExitLabel)
 	}
 	for _, d := range c.Domains {
 		d = strings.TrimLeft(normHost(d), "*.")
@@ -145,9 +165,13 @@ func firstRuleRoute(host string) (*ProxyRoute, string) {
 			continue
 		}
 		for _, rt := range getRoutes() {
-			if rt.name == rule.route && rt.isApplicable(st) {
-				return rt, rule.name
+			if rt.name != rule.route || !rt.isApplicable(st) {
+				continue
 			}
+			if ok, _ := exitConditionsMet(rt, rule.exitVPN, rule.exitLabel); !ok {
+				continue
+			}
+			return rt, rule.name
 		}
 	}
 	return nil, ""
@@ -190,6 +214,8 @@ func (c ConfigRule) normalized() ConfigRule {
 	if c.Networks == nil {
 		c.Networks = []string{}
 	}
+	c.ExitVPN = strings.ToLower(strings.TrimSpace(c.ExitVPN))
+	c.ExitLabel = strings.TrimSpace(c.ExitLabel)
 	return c
 }
 

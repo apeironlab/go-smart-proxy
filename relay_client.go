@@ -298,7 +298,7 @@ func (r *relayClient) connectOnce() error {
 	r.mu.Lock()
 	device := r.device
 	r.mu.Unlock()
-	if err := relay.WriteLine(ctrl, relay.DialReq{T: relay.TControl, Device: device}); err != nil {
+	if err := relay.WriteLine(ctrl, relay.DialReq{T: relay.TControl, Device: device, Context: r.sharedContext()}); err != nil {
 		return err
 	}
 

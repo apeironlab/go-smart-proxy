@@ -37,6 +37,24 @@ func connectTestClient(t *testing.T, addr string, pool *x509.CertPool, cert tls.
 	return tcl
 }
 
+// connectTestClientWithHello is connectTestClient with a custom control hello.
+func connectTestClientWithHello(t *testing.T, addr string, pool *x509.CertPool, cert tls.Certificate, email string, hello DialReq) *testClient {
+	t.Helper()
+	c, err := tls.Dial("tcp", addr, &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: pool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ys, err := yamux.Client(c, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctrl, _ := ys.OpenStream()
+	WriteLine(ctrl, hello)
+	tcl := &testClient{email: email, ys: ys, ctrl: ctrl, br: NewReader(ctrl)}
+	t.Cleanup(func() { ys.Close() })
+	return tcl
+}
+
 func setup(t *testing.T, emails ...string) (addr string, clients []*testClient) {
 	addr, _, _, clients = setupWithDir(t, emails...)
 	return addr, clients

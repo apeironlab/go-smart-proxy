@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next'
 import { api, ApiError } from '../api'
 import type { CertificatePrompt, RelayStatus } from '../api'
 import { Dot, EmptyState, PageHeader, Section } from '../components/ui'
+import { ContextBadges } from '../components/contextBadges'
 import { ProbeBadge, bestProbe, qualityOf } from '../components/linkQuality'
 import type { Probe } from '../components/linkQuality'
 
@@ -334,7 +335,12 @@ export default function RelayPage() {
                 <Table.Td>
                   {d.id === st.device
                     ? <Text size="xs" c="dimmed">{t('this computer')}</Text>
-                    : d.online && <ProbeBadge probe={probeOf(st.email, d.id)} onTest={() => probe(st.email, d.id)} />}
+                    : d.online && (
+                      <Group gap="xs" wrap="nowrap">
+                        <ContextBadges context={d.context} online />
+                        <ProbeBadge probe={probeOf(st.email, d.id)} onTest={() => probe(st.email, d.id)} />
+                      </Group>
+                    )}
                 </Table.Td>
               </Table.Tr>
             ))}
@@ -440,12 +446,15 @@ export default function RelayPage() {
                   {c.online && !best && !tested && <Text size="xs" c="dimmed">{t('testing...')}</Text>}
                 </Table.Td>
                 <Table.Td>
-                  <Stack gap={4}>
+                  <Stack gap={8}>
                     {c.online && paths.map((d) => (
-                      <Group key={d || 'any'} gap="xs" wrap="nowrap">
+                      <div key={d || 'any'}>
                         <Code>{d ? `relay://${c.email}/${d}` : `relay://${c.email}`}</Code>
-                        <ProbeBadge probe={probeOf(c.email, d)} onTest={() => probe(c.email, d)} />
-                      </Group>
+                        <Group gap="xs" mt={4} wrap="wrap">
+                          <ContextBadges context={c.context?.[d]} online />
+                          <ProbeBadge probe={probeOf(c.email, d)} onTest={() => probe(c.email, d)} />
+                        </Group>
+                      </div>
                     ))}
                     {!c.online && <Text size="sm" c="dimmed">-</Text>}
                   </Stack>

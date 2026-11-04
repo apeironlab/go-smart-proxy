@@ -13,6 +13,8 @@ export interface RouteInfo {
   net: string
   ifaceUp?: string
   vpn?: string
+  exitVpn?: string
+  exitLabel?: string
   chain?: string[] | null
   hops?: Hop[] | null
   rulesOnly: boolean
@@ -129,6 +131,8 @@ export interface RouteForm {
   net: string
   ifaceUp: string
   vpn: string
+  exitVpn: string
+  exitLabel: string
   hops: Hop[]
   rulesOnly: boolean
 }
@@ -230,6 +234,8 @@ export interface RelayContact {
   devices?: string[]
   // Unix seconds of the last time the contact was online (offline contacts only).
   lastSeen?: number
+  // Context shared by each online device, by device code.
+  context?: Record<string, NetContext>
 }
 
 export interface PingResult {
@@ -247,9 +253,17 @@ export interface RelayApproval {
   time: string
 }
 
+// What a device chooses to tell its contacts about its network: a label picked
+// by its user and whether a VPN is active. Nothing else.
+export interface NetContext {
+  label?: string
+  vpn?: boolean
+}
+
 export interface RelayDeviceInfo {
   id: string
   online: boolean
+  context?: NetContext
 }
 
 export interface RelayRule {
@@ -286,12 +300,16 @@ export interface RelayConfigInfo {
   enrollUrl?: string
   hasCertificate: boolean
   hasCA: boolean
+  networkLabel: string
+  shareContext: boolean
 }
 
 export interface RelayConfigForm {
   address: string
   route: string
   allowLocal: boolean
+  networkLabel?: string
+  shareContext?: boolean
   certPem: string
   keyPem: string
   caPem: string
@@ -304,6 +322,9 @@ export interface RoutingRule {
   hosts: string[]
   networks: string[]
   route: string
+  // Conditions on the exit of the route's relay hop.
+  exitVpn?: string
+  exitLabel?: string
 }
 
 export interface RuleTest {

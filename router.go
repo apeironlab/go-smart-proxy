@@ -32,6 +32,8 @@ type ProxyRoute struct {
 	net       string
 	ifaceUp   string
 	vpn       string
+	exitVPN   string
+	exitLabel string
 	pacUrl    string
 	proxyUrl  string
 	user      string
@@ -156,11 +158,19 @@ func newProxyRoute(r *ConfigRoute) (*ProxyRoute, error) {
 		net:       r.Net,
 		ifaceUp:   strings.TrimSpace(r.IFaceUp),
 		vpn:       strings.ToLower(strings.TrimSpace(r.VPN)),
+		exitVPN:   strings.ToLower(strings.TrimSpace(r.ExitVPN)),
+		exitLabel: strings.TrimSpace(r.ExitLabel),
 		rulesOnly: r.RulesOnly,
 		hops:      append([]ConfigHop(nil), r.Chain...),
 	}
 	if p.vpn != "" && p.vpn != "up" && p.vpn != "down" {
 		return nil, fmt.Errorf("invalid VPN %q (use \"up\" or \"down\")", r.VPN)
+	}
+	if !validExitVPN(p.exitVPN) {
+		return nil, fmt.Errorf("invalid ExitVPN %q (use \"up\" or \"down\")", r.ExitVPN)
+	}
+	if !validLabelPattern(p.exitLabel) {
+		return nil, fmt.Errorf("invalid ExitLabel %q", r.ExitLabel)
 	}
 	chain, err := buildChain(r.Chain)
 	if err != nil {
@@ -370,6 +380,8 @@ func discoverNetwork() {
 	if !firstRun {
 		resetConnections()
 		go applySystemProxy()
+		// Contacts see whether this device is on a VPN: tell them it changed.
+		go relayMgr.PublishContext()
 	}
 }
 
@@ -565,6 +577,9 @@ func (p *ProxyRoute) applicable(st netState) (bool, string) {
 			return false, fmt.Sprintf("no active interface matches %q", p.ifaceUp)
 		}
 	}
+	if ok, why := exitConditionsMet(p, p.exitVPN, p.exitLabel); !ok {
+		return false, why
+	}
 	switch p.vpn {
 	case "up":
 		if len(st.analysis.VPN) == 0 {
@@ -652,6 +667,8 @@ func (p *ProxyRoute) info(st netState) routeInfoJSON {
 		Net:        p.net,
 		IFaceUp:    p.ifaceUp,
 		VPN:        p.vpn,
+		ExitVPN:    p.exitVPN,
+		ExitLabel:  p.exitLabel,
 		Chain:      chainStrings(p.chain),
 		Hops:       append([]ConfigHop{}, p.hops...),
 		RulesOnly:  p.rulesOnly,

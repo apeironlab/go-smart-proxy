@@ -322,6 +322,8 @@ Relay:
   Device: quiet-otter-7f3a     # auto-generated per installation
   EnrollURL: https://proxy.intra.example.com
   AllowLocal: false            # let contacts reach services on this machine
+  NetworkLabel: office-vpn     # name of this network, shared with contacts (optional)
+  ShareContext: true           # false = share nothing about the network
 
 SystemProxy: false             # macOS only
 SystemProxyExclude: [utun4]    # macOS network services to leave untouched
@@ -343,6 +345,8 @@ Hosts:
 | `Routes[].IFace` | Match when the default interface has this name (comma-separated names or globs such as `utun*`). |
 | `Routes[].IFaceUp` | Match while an interface with this name (or glob) is **in use**: up, with an IPv4 address and carrying routes. Unlike `IFace` it also sees split-tunnel VPNs that leave the default route alone. |
 | `Routes[].VPN` | `up`: match only while a VPN is active; `down`: only while none is. |
+| `Routes[].ExitVPN` | With a relay hop: match only while the contact's device at the exit is on a VPN (`up`) or not (`down`), as it shares it. |
+| `Routes[].ExitLabel` | With a relay hop: match only while the exit shares a network label that matches (names or globs, comma-separated). |
 | `Routes[].Net` | Match when the local network/address matches this IP or CIDR. |
 | `Routes[].Chain` | Ordered upstream hops. An empty chain means a direct connection. |
 | `Routes[].RulesOnly` | Route is never selected or forced manually; only a destination rule can use it. |
@@ -355,6 +359,7 @@ Hosts:
 | `Rules[].Hosts` | Exact hostname matches. |
 | `Rules[].Networks` | IP/CIDR matches; hostnames are resolved for this check. |
 | `Rules[].Route` | Route name to use. |
+| `Rules[].ExitVPN`, `Rules[].ExitLabel` | Optional conditions on the exit of the route's relay hop, as for routes. When they do not hold the rule is skipped and the next one is tried. |
 | `Hosts` | Fixed IP per hostname, bypassing DNS. |
 
 `Address` is required. Credentials and relay material are never written in
@@ -711,6 +716,34 @@ devices sharing one certificate all authenticate as the same user.
 5. Remembered rules are bound to the requesting device: another device of the
    same user must ask for approval again. Rules can be revoked from the Relay
    page.
+
+### Network context of contacts
+
+A contact device can tell its approved contacts where it is, so you can choose
+an exit by its network and not only by whether it is online:
+
+- **What is shared** (and nothing else): a **label** you choose for the network
+  (`NetworkLabel`, at most 40 characters, for instance `office-vpn`) and
+  whether a **VPN is active** on that device, detected as described above. No
+  addresses, host names or domains leave the machine. `ShareContext: false`
+  shares nothing at all. Both are set in Configuration → Relay.
+- **Who sees it**: only your approved contacts and your own devices, never
+  strangers. It is pushed again whenever the device's network changes, for
+  instance when it connects to a VPN.
+- **It is self-declared**: a contact can write any label. Use it to choose a
+  route you trust, not as a security boundary. The exit still has to approve
+  the connections it carries.
+- **In routes and rules**: `ExitVPN` and `ExitLabel` (see the reference tables)
+  restrict a route or a destination rule to exits that are on a VPN or not, or
+  that carry a matching label. For example, a rule for `*.corp.example` can use
+  the route through a colleague only while that colleague is on the office VPN,
+  and fall through to the next rule otherwise. An exit that is offline or does
+  not share its context never matches a condition: unknown is not treated as
+  "no VPN". When the route has no device chosen and several are online, every
+  one of them must satisfy the condition.
+- Contacts running an older version share nothing and show as "network
+  unknown". The relay (the `relay` package) must be updated for the context to
+  be distributed.
 
 ### Contact status and link quality
 

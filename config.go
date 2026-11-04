@@ -34,6 +34,11 @@ type ConfigRoute struct {
 	IFaceUp string `yaml:"IFaceUp,omitempty"`
 	// VPN restricts the route to "up" (a VPN is active) or "down" (none is).
 	VPN string `yaml:"VPN,omitempty"`
+	// ExitVPN and ExitLabel are conditions on the exit of the route's relay hop:
+	// whether the contact's device is on a VPN, and the label it shares
+	// (comma-separated names or globs).
+	ExitVPN   string `yaml:"ExitVPN,omitempty"`
+	ExitLabel string `yaml:"ExitLabel,omitempty"`
 	// PacUrl, ProxyUrl and Credential are legacy route-level upstream fields.
 	// They are migrated to a single hop in Chain when the configuration is
 	// loaded, and the current UI no longer writes them.
@@ -84,6 +89,13 @@ type RelayConfig struct {
 	EnrollURL string `yaml:"EnrollURL,omitempty"`
 	// AllowLocal lets contacts reach services bound to this machine (off by default).
 	AllowLocal bool `yaml:"AllowLocal"`
+	// NetworkLabel is a name you choose for the network this device is on (for
+	// instance "office-vpn"). It is shared with your approved contacts, together
+	// with whether a VPN is active, so routes and rules can pick an exit by
+	// where it is. Nothing else about your network is shared.
+	NetworkLabel string `yaml:"NetworkLabel,omitempty"`
+	// ShareContext turns that sharing off when false. Unset means on.
+	ShareContext *bool `yaml:"ShareContext,omitempty"`
 }
 
 type Configuration struct {

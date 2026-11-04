@@ -112,6 +112,8 @@ type routeInfoJSON struct {
 	Net        string      `json:"net"`
 	IFaceUp    string      `json:"ifaceUp,omitempty"`
 	VPN        string      `json:"vpn,omitempty"`
+	ExitVPN    string      `json:"exitVpn,omitempty"`
+	ExitLabel  string      `json:"exitLabel,omitempty"`
 	Chain      []string    `json:"chain"`
 	Hops       []ConfigHop `json:"hops"`
 	RulesOnly  bool        `json:"rulesOnly"`
@@ -242,6 +244,8 @@ type routeFormJSON struct {
 	Net       string      `json:"net"`
 	IFaceUp   string      `json:"ifaceUp"`
 	VPN       string      `json:"vpn"`
+	ExitVPN   string      `json:"exitVpn"`
+	ExitLabel string      `json:"exitLabel"`
 	Hops      []ConfigHop `json:"hops"`
 	RulesOnly bool        `json:"rulesOnly"`
 }
@@ -273,6 +277,14 @@ func apiSaveRoute(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, `vpn must be empty, "up" or "down"`)
 		return
 	}
+	if !validExitVPN(strings.ToLower(strings.TrimSpace(form.ExitVPN))) {
+		writeAPIError(w, http.StatusBadRequest, `exitVpn must be empty, "up" or "down"`)
+		return
+	}
+	if !validLabelPattern(form.ExitLabel) {
+		writeAPIError(w, http.StatusBadRequest, "invalid exit label pattern")
+		return
+	}
 	for _, pat := range strings.Split(form.IFaceUp+","+form.IFace, ",") {
 		if _, err := path.Match(strings.ToLower(strings.TrimSpace(pat)), ""); err != nil {
 			writeAPIError(w, http.StatusBadRequest, "invalid interface pattern "+strconv.Quote(strings.TrimSpace(pat)))
@@ -289,6 +301,8 @@ func apiSaveRoute(w http.ResponseWriter, r *http.Request) {
 		Net:       form.Net,
 		IFaceUp:   strings.TrimSpace(form.IFaceUp),
 		VPN:       strings.ToLower(strings.TrimSpace(form.VPN)),
+		ExitVPN:   strings.ToLower(strings.TrimSpace(form.ExitVPN)),
+		ExitLabel: strings.TrimSpace(form.ExitLabel),
 		RulesOnly: form.RulesOnly,
 	}
 	found := false

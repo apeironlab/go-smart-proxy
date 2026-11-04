@@ -20,17 +20,23 @@ type relayConfigJSON struct {
 	EnrollURL      string `json:"enrollUrl,omitempty"`
 	HasCertificate bool   `json:"hasCertificate"`
 	HasCA          bool   `json:"hasCA"`
+	// NetworkLabel and ShareContext control what contacts learn about the
+	// network this device is on (a label you choose and whether a VPN is up).
+	NetworkLabel string `json:"networkLabel"`
+	ShareContext bool   `json:"shareContext"`
 }
 
 func relayConfigInfoLocked() relayConfigJSON {
 	if configuration.Relay == nil {
-		return relayConfigJSON{}
+		return relayConfigJSON{ShareContext: true}
 	}
 	cfg := configuration.Relay
 	return relayConfigJSON{
 		Address:        cfg.Address,
 		Route:          cfg.Route,
 		AllowLocal:     cfg.AllowLocal,
+		NetworkLabel:   cfg.NetworkLabel,
+		ShareContext:   cfg.ShareContext == nil || *cfg.ShareContext,
 		Device:         cfg.Device,
 		EnrollURL:      cfg.EnrollURL,
 		HasCertificate: cfg.CertPEM != "" || (cfg.Cert != "" && cfg.Key != ""),
@@ -50,13 +56,15 @@ func registerRelayRoutes(m *http.ServeMux) {
 	})
 	m.HandleFunc("POST /api/relay/config", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Address          string `json:"address"`
-			Route            string `json:"route"`
-			AllowLocal       bool   `json:"allowLocal"`
-			CertPEM          string `json:"certPem"`
-			KeyPEM           string `json:"keyPem"`
-			CAPEM            string `json:"caPem"`
-			ClearCertificate bool   `json:"clearCertificate"`
+			Address          string  `json:"address"`
+			Route            string  `json:"route"`
+			AllowLocal       bool    `json:"allowLocal"`
+			CertPEM          string  `json:"certPem"`
+			KeyPEM           string  `json:"keyPem"`
+			CAPEM            string  `json:"caPem"`
+			ClearCertificate bool    `json:"clearCertificate"`
+			NetworkLabel     *string `json:"networkLabel"`
+			ShareContext     *bool   `json:"shareContext"`
 		}
 		if err := readJSON(r, &body); err != nil {
 			writeAPIError(w, http.StatusBadRequest, "invalid body")
@@ -113,6 +121,15 @@ func registerRelayRoutes(m *http.ServeMux) {
 		cfg.Address = address
 		cfg.Route = route
 		cfg.AllowLocal = body.AllowLocal
+		if body.NetworkLabel != nil {
+			if sc := relay.SanitizeContext(&relay.NetContext{Label: *body.NetworkLabel}); sc != nil {
+				cfg.NetworkLabel = sc.Label
+			}
+		}
+		if body.ShareContext != nil {
+			share := *body.ShareContext
+			cfg.ShareContext = &share
+		}
 		if cfg.Device == "" {
 			cfg.Device = randomDeviceID()
 		}

@@ -79,6 +79,8 @@ export default function ConfigPage() {
   const [relayAddress, setRelayAddress] = useState('')
   const [relayRoute, setRelayRoute] = useState('')
   const [relayAllowLocal, setRelayAllowLocal] = useState(false)
+  const [relayLabel, setRelayLabel] = useState('')
+  const [relayShare, setRelayShare] = useState(true)
   const [relayCert, setRelayCert] = useState('')
   const [relayKey, setRelayKey] = useState('')
   const [relayCA, setRelayCA] = useState('')
@@ -101,7 +103,7 @@ export default function ConfigPage() {
   const [opened, { open, close }] = useDisclosure(false)
   const [editing, setEditing] = useState<RouteInfo | null>(null)
   const [form, setForm] = useState({
-    name: '', gateway: '', iface: '', net: '', ifaceUp: '', vpn: '',
+    name: '', gateway: '', iface: '', net: '', ifaceUp: '', vpn: '', exitVpn: '', exitLabel: '',
     hops: [] as HopForm[], rulesOnly: false,
   })
   const [busy, setBusy] = useState(false)
@@ -130,6 +132,8 @@ export default function ConfigPage() {
         setRelayAddress(rc.address)
         setRelayRoute(rc.route)
         setRelayAllowLocal(rc.allowLocal)
+        setRelayLabel(rc.networkLabel ?? '')
+        setRelayShare(rc.shareContext ?? true)
       }
     }).catch(() => {})
   }, [configLoaded])
@@ -173,6 +177,8 @@ export default function ConfigPage() {
         address: relayAddress.trim(),
         route: relayRoute,
         allowLocal: relayAllowLocal,
+        networkLabel: relayLabel,
+        shareContext: relayShare,
         certPem: relayCert,
         keyPem: relayKey,
         caPem: relayCA,
@@ -200,7 +206,7 @@ export default function ConfigPage() {
 
   const openNew = () => {
     setEditing(null)
-    setForm({ name: '', gateway: '', iface: '', net: '', ifaceUp: '', vpn: '', hops: [], rulesOnly: false })
+    setForm({ name: '', gateway: '', iface: '', net: '', ifaceUp: '', vpn: '', exitVpn: '', exitLabel: '', hops: [], rulesOnly: false })
     open()
   }
 
@@ -208,7 +214,7 @@ export default function ConfigPage() {
     setEditing(r)
     setForm({
       name: r.name, gateway: r.gateway, iface: r.iface, net: r.net,
-      ifaceUp: r.ifaceUp ?? '', vpn: r.vpn ?? '',
+      ifaceUp: r.ifaceUp ?? '', vpn: r.vpn ?? '', exitVpn: r.exitVpn ?? '', exitLabel: r.exitLabel ?? '',
       hops: (r.hops ?? []).map((h) => ({
         proxyUrl: h.proxyUrl ?? '',
         pacUrl: h.pacUrl ?? '',
@@ -576,6 +582,9 @@ export default function ConfigPage() {
                   {r.rulesOnly && <Badge size="xs" variant="light">{t('rules')}</Badge>}
                   {r.vpn === 'up' && <Badge size="xs" variant="light" color="grape" tt="none">{t('VPN connected')}</Badge>}
                   {r.vpn === 'down' && <Badge size="xs" variant="light" color="gray" tt="none">{t('No VPN')}</Badge>}
+                  {r.exitVpn === 'up' && <Badge size="xs" variant="light" color="grape" tt="none">{t('Exit on a VPN')}</Badge>}
+                  {r.exitVpn === 'down' && <Badge size="xs" variant="light" color="gray" tt="none">{t('Exit not on a VPN')}</Badge>}
+                  {r.exitLabel && <Badge size="xs" variant="outline" color="grape" tt="none">{t('exit')}: {r.exitLabel}</Badge>}
                 </Group>
               </Table.Td>
               <Table.Td>
@@ -705,6 +714,19 @@ export default function ConfigPage() {
             data={selectableRoutes.map((r) => ({ value: r.name, label: r.name }))}
             value={relayRoute || null} onChange={(v) => setRelayRoute(v ?? '')} />
         </SimpleGrid>
+        <Divider my="md" label={t('Network context shared with your contacts')} labelPosition="left" />
+        <Text size="xs" c="dimmed" mb="sm">
+          {t('Your approved contacts can see a name you choose for the network this computer is on and whether a VPN is active, so they and their rules can pick the right exit. Addresses, host names and domains are never shared.')}
+        </Text>
+        <SimpleGrid cols={{ base: 1, sm: 2 }} mb="md">
+          <TextInput label={t('Network label')} placeholder="office-vpn"
+            description={t('A name of your choice, at most 40 characters. Empty = only the VPN yes/no is shared.')}
+            maxLength={40} disabled={!relayShare}
+            value={relayLabel} onChange={(e) => setRelayLabel(e.currentTarget.value)} />
+          <Switch mt={{ base: 0, sm: 28 }} label={t('Share the network context')}
+            description={t('Turn off to share nothing at all.')}
+            checked={relayShare} onChange={(e) => setRelayShare(e.currentTarget.checked)} />
+        </SimpleGrid>
         <Switch label={t('Allow contacts to reach services on this machine')}
           description={t('AllowLocal: not recommended unless strictly necessary.')}
           checked={relayAllowLocal} onChange={(e) => setRelayAllowLocal(e.currentTarget.checked)} />
@@ -772,6 +794,15 @@ export default function ConfigPage() {
               description={t('Applies while a matching interface is up and carrying traffic, even if it is not the default route. Names or wildcards, comma-separated.')}
               placeholder="utun4, tun*, Pulse*"
               value={form.ifaceUp} onChange={(e) => setForm({ ...form, ifaceUp: e.currentTarget.value })} />
+            <Select label={t('Relay exit on a VPN (optional)')}
+              description={t('Only if the relay hop of this route leads to a computer that is (or is not) on a VPN, as shared by its owner.')}
+              placeholder={t('Any')} clearable
+              data={[{ value: 'up', label: t('Exit on a VPN') }, { value: 'down', label: t('Exit not on a VPN') }]}
+              value={form.exitVpn || null} onChange={(v) => setForm({ ...form, exitVpn: v ?? '' })} />
+            <TextInput label={t('Relay exit label (optional)')}
+              description={t('Only if the exit shares a matching network label. Names or wildcards, comma-separated.')}
+              placeholder="office*, home"
+              value={form.exitLabel} onChange={(e) => setForm({ ...form, exitLabel: e.currentTarget.value })} />
           </SimpleGrid>
           <Switch
             label={t('Rules only')}

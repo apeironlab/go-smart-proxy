@@ -24,13 +24,48 @@ const (
 	TContactRequest = "contact_request" // client -> relay
 	TContactRespond = "contact_respond" // client -> relay
 	TContactRemove  = "contact_remove"  // client -> relay
+	TContext        = "context"         // client -> relay: the network context this device shares
 )
+
+// NetContext is what a device chooses to tell its contacts about the network
+// it is on: a label picked by the user (for instance "office-vpn") and whether
+// a VPN is active. It is self-declared and informational: it helps a contact
+// decide whether a device is the right exit, it is not a security boundary.
+// No addresses, host names or domains are part of it.
+type NetContext struct {
+	Label string `json:"label,omitempty"`
+	VPN   bool   `json:"vpn,omitempty"`
+}
+
+// MaxLabelLen bounds a context label.
+const MaxLabelLen = 40
+
+// SanitizeContext normalizes a context received from a client: control
+// characters are removed, the label is trimmed and shortened. A nil context
+// (the device shares nothing) stays nil.
+func SanitizeContext(c *NetContext) *NetContext {
+	if c == nil {
+		return nil
+	}
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(c.Label) {
+		if r < 0x20 || r == 0x7f {
+			continue
+		}
+		b.WriteRune(r)
+		if b.Len() >= MaxLabelLen {
+			break
+		}
+	}
+	return &NetContext{Label: strings.TrimSpace(b.String()), VPN: c.VPN}
+}
 
 // ClientMsg is a command sent by a client on the control stream.
 type ClientMsg struct {
-	T      string `json:"t"`
-	Email  string `json:"email,omitempty"`
-	Accept bool   `json:"accept,omitempty"`
+	T       string      `json:"t"`
+	Email   string      `json:"email,omitempty"`
+	Accept  bool        `json:"accept,omitempty"`
+	Context *NetContext `json:"context,omitempty"` // TContext
 }
 
 // Contact is an entry of the address book.
@@ -41,12 +76,16 @@ type Contact struct {
 	// LastSeen is when the contact was last online (Unix seconds), set only
 	// while it is offline and was seen at least once.
 	LastSeen int64 `json:"lastSeen,omitempty"`
+	// Context holds what each online device shares about its network, by
+	// device code. A device missing from the map shares nothing.
+	Context map[string]NetContext `json:"context,omitempty"`
 }
 
 // DeviceInfo describes one of the user's own devices.
 type DeviceInfo struct {
-	ID     string `json:"id"`
-	Online bool   `json:"online"`
+	ID      string      `json:"id"`
+	Online  bool        `json:"online"`
+	Context *NetContext `json:"context,omitempty"`
 }
 
 // State is the snapshot of a client's address book pushed by the relay.
@@ -70,6 +109,9 @@ type DialReq struct {
 	FromDevice string `json:"fromDevice,omitempty"` // device of the requester
 	Device     string `json:"device,omitempty"`     // control stream: this client's device
 	Target     string `json:"target"`
+	// Context, on the control stream hello, is the network context the device
+	// shares from the start (nil: nothing).
+	Context *NetContext `json:"context,omitempty"`
 }
 
 // DialResp is the answer to a DialReq.
