@@ -12,7 +12,7 @@ require (
 	github.com/go-ldap/ldap/v3 v3.4.13
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/hashicorp/yamux v0.1.2
-	github.com/jackc/pgx/v5 v5.7.2
+	github.com/jackc/pgx/v5 v5.9.2
 	github.com/nmcclain/ldap v0.0.0-20210720162743-7f8d1e44eeba
 	github.com/projectdiscovery/expirablelru v1.0.0
 	golang.org/x/crypto v0.52.0
@@ -24,7 +24,7 @@ require (
 )
 
 require (
-	filippo.io/edwards25519 v1.1.0 // indirect
+	filippo.io/edwards25519 v1.1.1 // indirect
 	github.com/beevik/etree v1.6.0 // indirect
 	github.com/dlclark/regexp2 v1.4.1-0.20201116162257-a2a8dda75c91 // indirect
 	github.com/dop251/goja v0.0.0-20210427212725-462d53687b0d // indirect
