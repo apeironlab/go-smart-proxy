@@ -190,6 +190,9 @@ func runServe(args []string) error {
 	smtp := addSMTPFlags(fs)
 	fs.Parse(args)
 
+	if *certFile == "" || *keyFile == "" || *caFile == "" {
+		return errors.New("serve needs -cert, -key and -ca")
+	}
 	ttl, err := parseTTL(*certTTL)
 	if err != nil {
 		return err
@@ -282,7 +285,11 @@ func runServe(args []string) error {
 				log.Printf("the management interface is served by the enrollment listener and is disabled too")
 			}
 		} else {
-			enrollSrv = &http.Server{Addr: *enrollListen, Handler: es.Handler(), ReadHeaderTimeout: 15 * time.Second}
+			enrollSrv = &http.Server{
+				Addr: *enrollListen, Handler: es.Handler(),
+				ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
+				WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second,
+			}
 			go func() {
 				var err error
 				if *enrollPlain {
