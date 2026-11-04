@@ -424,46 +424,80 @@ const setupPage = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Go Smart Proxy</title>
 <style>
-  :root { color-scheme: light dark; }
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7fb; --card: #ffffff; --border: #e3e6ee; --text: #14161f; --muted: #666d80;
+    --input: #ffffff; --accent: #4562e3; --accent-h: #3b57cc; --ring: #4562e333; --err: #d1334a;
+    --glow1: #627dff26; --glow2: #20c99716; --code: #eef0f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101116; --card: #1a1b22; --border: #2c2e39; --text: #eceef5; --muted: #9096a8;
+      --input: #14151b; --accent: #627dff; --accent-h: #788fff; --ring: #627dff44; --err: #ff7a8c;
+      --glow1: #627dff30; --glow2: #20c99718; --code: #23252f;
+    }
+  }
   * { box-sizing: border-box; }
   body {
     margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: radial-gradient(1200px 600px at 20% -10%, #1f6feb33, transparent),
-                radial-gradient(900px 500px at 100% 100%, #2ea04333, transparent), #0d1117;
-    color: #e6edf3;
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased; letter-spacing: -0.003em;
+    background: radial-gradient(900px 480px at 10% -8%, var(--glow1), transparent),
+                radial-gradient(800px 420px at 100% 100%, var(--glow2), transparent), var(--bg);
+    color: var(--text);
   }
   .card {
-    width: 100%; max-width: 520px; background: #161b22; border: 1px solid #30363d;
-    border-radius: 16px; padding: 32px; box-shadow: 0 24px 80px #0008;
+    width: 100%; max-width: 480px; background: var(--card); border: 1px solid var(--border);
+    border-radius: 20px; padding: 36px; box-shadow: 0 1px 2px #1018280d, 0 24px 60px -20px #10182833;
   }
-  .logo { font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: #8b949e; }
-  h1 { font-size: 26px; margin: 8px 0 6px; }
-  p { color: #8b949e; line-height: 1.5; }
-  label { display: block; margin: 18px 0 6px; font-weight: 600; font-size: 14px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .mark {
+    width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; color: #fff;
+    background: linear-gradient(135deg, #627dff, #15aabf);
+  }
+  .mark svg { width: 20px; height: 20px; }
+  .logo { font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+  h1 { font-size: 24px; line-height: 1.25; letter-spacing: -.02em; margin: 26px 0 8px; font-weight: 650; }
+  p { color: var(--muted); line-height: 1.6; font-size: 14.5px; margin: 0; }
+  label { display: block; margin: 20px 0 7px; font-weight: 600; font-size: 13.5px; }
   input {
-    width: 100%; padding: 12px 14px; border-radius: 10px; border: 1px solid #30363d;
-    background: #0d1117; color: #e6edf3; font-size: 16px; outline: none;
+    width: 100%; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border);
+    background: var(--input); color: var(--text); font-size: 15px; outline: none; font-family: inherit;
+    transition: border-color .15s, box-shadow .15s;
   }
-  input:focus { border-color: #1f6feb; box-shadow: 0 0 0 3px #1f6feb33; }
-  .hint { font-size: 12px; color: #8b949e; margin-top: 6px; }
+  input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--ring); }
+  .hint { font-size: 12.5px; color: var(--muted); margin-top: 7px; }
   button {
-    width: 100%; margin-top: 24px; padding: 13px 16px; border: 0; border-radius: 10px;
-    background: #238636; color: white; font-size: 16px; font-weight: 700; cursor: pointer;
+    width: 100%; margin-top: 26px; padding: 13px 16px; border: 0; border-radius: 12px; font-family: inherit;
+    background: var(--accent); color: #fff; font-size: 15px; font-weight: 650; cursor: pointer;
+    box-shadow: 0 1px 2px #1018281f; transition: background .15s, transform .08s;
   }
-  button:hover { background: #2ea043; }
+  button:hover { background: var(--accent-h); }
+  button:active { transform: translateY(1px); }
+  button:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--ring); }
   button:disabled { opacity: .6; cursor: wait; }
-  .error { margin-top: 16px; color: #ff7b72; font-size: 14px; min-height: 20px; }
+  .error { margin-top: 14px; color: var(--err); font-size: 13.5px; min-height: 20px; }
   .ok { display: none; text-align: center; }
-  .ok .check { font-size: 42px; color: #3fb950; }
-  .code { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 2px 6px; }
-  .addresses { margin-top: 14px; line-height: 1.9; }
+  .ok .check {
+    width: 56px; height: 56px; margin: 0 auto; border-radius: 50%; display: grid; place-items: center;
+    font-size: 28px; color: #12b886; background: #12b88620;
+  }
+  .ok h1 { margin-top: 20px; }
+  .code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px;
+    background: var(--code); border-radius: 6px; padding: 2px 7px;
+  }
+  .addresses { margin-top: 20px; line-height: 2.1; font-size: 14px; color: var(--muted); }
+  @media (max-width: 480px) { .card { padding: 26px 22px; border-radius: 16px; } }
 </style>
 </head>
 <body>
   <div class="card">
     <div id="form">
-      <div class="logo">Go Smart Proxy</div>
+      <div class="brand">
+        <div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"/></svg></div>
+        <div class="logo">Go Smart Proxy</div>
+      </div>
       <h1 data-i18n="__TITLE_KEY__">Choose the master password</h1>
       <p data-i18n="__INTRO_KEY__">
         It protects credentials, certificates and relay keys. The configuration will be saved encrypted in

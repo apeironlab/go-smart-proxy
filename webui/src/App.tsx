@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { AppShell, Alert, Anchor, Badge, Burger, Code, Group, Menu, NavLink, ScrollArea, Title, Tooltip, ActionIcon } from '@mantine/core'
+import { AppShell, Alert, Anchor, Badge, Burger, Code, Group, Menu, NavLink, ScrollArea, ThemeIcon, Title, Tooltip, ActionIcon, useMantineColorScheme } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
-import { IconKey, IconLanguage, IconNetwork, IconRoute, IconRouteAltRight, IconPlugConnected, IconSettings } from '@tabler/icons-react'
+import { IconKey, IconLanguage, IconMoon, IconSun, IconNetwork, IconRoute, IconRouteAltRight, IconPlugConnected, IconSettings } from '@tabler/icons-react'
 import ConnectionsPage from './pages/ConnectionsPage'
 import CredentialsPage from './pages/CredentialsPage'
 import ConfigPage from './pages/ConfigPage'
@@ -15,6 +15,7 @@ import type { StateInfo } from './api'
 
 export default function App() {
   const { t, i18n } = useTranslation()
+  const { colorScheme, toggleColorScheme } = useMantineColorScheme()
   const [page, setPage] = useState('connections')
   const [opened, { toggle }] = useDisclosure()
   const [state, setState] = useState<StateInfo | null>(null)
@@ -63,9 +64,11 @@ export default function App() {
       <AppShell.Header>
         <Group h="100%" px="md" gap="sm" wrap="nowrap">
           <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
-          <IconNetwork size={22} />
-          <Title order={4} visibleFrom="sm">Go Smart Proxy</Title>
-          <Code visibleFrom="md">{state?.address ?? '...'}</Code>
+          <ThemeIcon variant="gradient" gradient={{ from: 'brand.5', to: 'cyan.5', deg: 135 }} size={34} radius="md">
+            <IconNetwork size={20} />
+          </ThemeIcon>
+          <Title order={4} visibleFrom="sm" fw={700}>Go Smart Proxy</Title>
+          <Code visibleFrom="md" px="sm">{state?.address ?? '...'}</Code>
           <Tooltip label={t('Current network interface')}>
             <Badge color="blue" variant="light" visibleFrom="md">{state?.iface || '...'}</Badge>
           </Tooltip>
@@ -75,9 +78,12 @@ export default function App() {
           <Tooltip label={t('Forced route')}>
             <Badge variant="outline" color="gray" visibleFrom="sm">{state?.forceRoute || t('Auto')}</Badge>
           </Tooltip>
+          <ActionIcon variant="subtle" color="gray" ml="auto" aria-label={t('Theme')} onClick={toggleColorScheme}>
+            {colorScheme === 'dark' ? <IconSun size={18} /> : <IconMoon size={18} />}
+          </ActionIcon>
           <Menu position="bottom-end" withArrow>
             <Menu.Target>
-              <ActionIcon variant="subtle" color="gray" aria-label={t('Language')} ml="auto">
+              <ActionIcon variant="subtle" color="gray" aria-label={t('Language')}>
                 <IconLanguage size={18} />
               </ActionIcon>
             </Menu.Target>
