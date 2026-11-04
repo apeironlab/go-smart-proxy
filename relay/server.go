@@ -35,6 +35,9 @@ type Server struct {
 	// Catalog lists the applications users can open through gateways. nil
 	// means the relay serves no applications.
 	Catalog *Catalog
+	// Policy lists what the relay refuses to connect to and tells proxies to
+	// block. nil means nothing is blocked.
+	Policy *Policy
 
 	mu       sync.Mutex
 	sessions map[string]*session
@@ -54,9 +57,19 @@ type session struct {
 	since  time.Time
 }
 
+// SetAudit sets Audit while the server may already be running.
+func (s *Server) SetAudit(fn func(kind, actor, subject, detail string)) {
+	s.mu.Lock()
+	s.Audit = fn
+	s.mu.Unlock()
+}
+
 func (s *Server) audit(kind, actor, subject, detail string) {
-	if s.Audit != nil {
-		s.Audit(kind, actor, subject, detail)
+	s.mu.Lock()
+	fn := s.Audit
+	s.mu.Unlock()
+	if fn != nil {
+		fn(kind, actor, subject, detail)
 	}
 }
 
@@ -318,7 +331,7 @@ func (s *Server) pushStateDevice(email, device, notice string) {
 	}
 
 	contacts, in, out := s.Store.Snapshot(email)
-	st := State{T: TState, Email: email, Incoming: in, Outgoing: out, Notice: notice, Apps: s.appsFor(email)}
+	st := State{T: TState, Email: email, Incoming: in, Outgoing: out, Notice: notice, Apps: s.appsFor(email), Policy: s.Policy.Push()}
 	for _, c := range contacts {
 		devices := s.onlineDevices(c)
 		ct := Contact{Email: c, Online: len(devices) > 0, Devices: devices, Context: s.deviceContexts(c)}
@@ -595,6 +608,15 @@ func (s *Server) handleDial(sess *session, st net.Conn, br *bufio.Reader, req Di
 	if via != sess.email && !s.Store.IsContact(sess.email, via) {
 		fail(via + " is not in your contacts")
 		return
+	}
+	if host, _, err := net.SplitHostPort(req.Target); err == nil {
+		if hit, blocked := s.Policy.Check(host); blocked {
+			if s.Policy.record(sess.email, host, hit.Source) {
+				s.audit("policy.block", sess.email, host, hit.Source+" ("+hit.Rule+")")
+			}
+			fail("blocked by the organization's policy")
+			return
+		}
 	}
 	peer, err := s.peer(via, viaDevice)
 	if err != nil {

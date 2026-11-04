@@ -3,6 +3,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY relay ./relay
+COPY blocklist ./blocklist
 COPY cmd ./cmd
 RUN CGO_ENABLED=0 go build -o /proxyrelay ./cmd/proxyrelay
 

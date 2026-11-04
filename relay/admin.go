@@ -64,6 +64,7 @@ type Admin struct {
 	enroll   *EnrollServer
 	server   *Server
 	catalog  *Catalog
+	policy   *Policy
 	sessions map[string]*adminSession // by hash of the cookie
 	started  time.Time
 	events   int
@@ -114,7 +115,7 @@ func (a *Admin) SetServer(s *Server) {
 	a.mu.Lock()
 	a.server = s
 	a.mu.Unlock()
-	s.Audit = a.Record
+	s.SetAudit(a.Record)
 }
 
 const appsSetting = "apps"
@@ -140,6 +141,36 @@ func (a *Admin) SetCatalog(c *Catalog) error {
 		return c.Set(apps)
 	}
 	return nil
+}
+
+const policySetting = "policy"
+
+// SetPolicy makes the interface the owner of the blocking policy, kept in its
+// database. A policy read from a file stays read-only.
+func (a *Admin) SetPolicy(p *Policy) error {
+	a.mu.Lock()
+	a.policy = p
+	a.mu.Unlock()
+	if p.ReadOnly() {
+		return nil
+	}
+	var cfg PolicyConfig
+	if _, err := a.db.getSetting(policySetting, &cfg); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	p.persist = func(c PolicyConfig) error { return a.db.setSetting(policySetting, c) }
+	p.mu.Unlock()
+	if len(cfg.Rules)+len(cfg.Lists) > 0 || len(cfg.Allow) > 0 {
+		return p.Set(cfg)
+	}
+	return nil
+}
+
+func (a *Admin) pol() *Policy {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.policy
 }
 
 func (a *Admin) cat() *Catalog {
@@ -251,6 +282,9 @@ func (a *Admin) mount(m *http.ServeMux) {
 
 	m.HandleFunc("GET /admin/api/apps", a.protect(a.handleApps))
 	m.HandleFunc("PUT /admin/api/apps", a.protect(a.handleAppsPut))
+	m.HandleFunc("GET /admin/api/policy", a.protect(a.handlePolicy))
+	m.HandleFunc("PUT /admin/api/policy", a.protect(a.handlePolicyPut))
+	m.HandleFunc("POST /admin/api/policy/refresh", a.protect(a.handlePolicyRefresh))
 	m.HandleFunc("GET /admin/api/gateways", a.protect(a.handleGateways))
 	m.HandleFunc("POST /admin/api/gateways", a.protect(a.handleGatewayIssue))
 	m.HandleFunc("POST /admin/api/gateways/{id}/revoke", a.protect(a.handleGatewayRevoke))

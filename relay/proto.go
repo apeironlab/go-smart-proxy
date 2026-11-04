@@ -97,10 +97,12 @@ type State struct {
 	Contacts  []Contact    `json:"contacts"`
 	MyDevices []DeviceInfo `json:"myDevices,omitempty"`
 	// Apps is the catalog of applications this user may open.
-	Apps     []AppInfo `json:"apps,omitempty"`
-	Incoming []string  `json:"incoming"` // requests waiting for our answer
-	Outgoing []string  `json:"outgoing"` // requests we sent, not answered yet
-	Notice   string    `json:"notice,omitempty"`
+	Apps []AppInfo `json:"apps,omitempty"`
+	// Policy is what the relay blocks (see Policy); nil when it blocks nothing.
+	Policy   *PolicyPush `json:"policy,omitempty"`
+	Incoming []string    `json:"incoming"` // requests waiting for our answer
+	Outgoing []string    `json:"outgoing"` // requests we sent, not answered yet
+	Notice   string      `json:"notice,omitempty"`
 }
 
 // DialReq opens a stream to Target through contact Via (client -> relay) or

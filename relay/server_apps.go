@@ -48,7 +48,14 @@ func (s *Server) AttachCatalog(c *Catalog) {
 	c.OnChange(s.pushCatalog)
 }
 
-// pushCatalog tells every connected user and gateway about the catalog.
+// AttachPolicy makes the server enforce the policy and tell proxies about it.
+func (s *Server) AttachPolicy(p *Policy) {
+	s.Policy = p
+	p.OnChange(s.pushCatalog)
+}
+
+// pushCatalog tells every connected user and gateway about the catalog (and
+// the policy: both ride on the state each user receives).
 func (s *Server) pushCatalog() {
 	s.mu.Lock()
 	people := map[string]bool{}

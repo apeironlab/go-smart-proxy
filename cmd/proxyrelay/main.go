@@ -189,6 +189,8 @@ func runServe(args []string) error {
 	authConfig := fs.String("auth-config", "", "YAML file with the sign-in methods (password, ldap, oidc, saml)")
 	trustXFF := fs.Bool("trust-forwarded-for", false, "take the client address from X-Forwarded-For (only behind a trusted proxy)")
 	appsFile := fs.String("apps", "", "YAML file with the applications catalog (read-only); without it the interface edits the catalog")
+	policyFile := fs.String("policy", "", "YAML file with the blocking policy (read-only); without it the interface edits the policy")
+	policyDir := fs.String("policy-dir", "", "where downloaded block lists are kept (default: policy-lists next to -state)")
 	adminDB := fs.String("admin-db", "", "enable the management interface (/admin/) with this SQLite database")
 	adminGroups := fs.String("admin-groups", "", "groups whose members are administrators")
 	adminEmails := fs.String("admin-emails", "", "e-mail addresses that are administrators")
@@ -236,6 +238,26 @@ func runServe(args []string) error {
 		srv.AttachCatalog(catalog)
 	}
 
+	// Blocking policy: a file, or the management interface's.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	var policy *relay.Policy
+	if *policyDir == "" {
+		*policyDir = filepath.Join(filepath.Dir(*statePath), "policy-lists")
+	}
+	switch {
+	case *policyFile != "":
+		if policy, err = relay.LoadPolicyFile(*policyFile, *policyDir); err != nil {
+			return err
+		}
+	case *adminDB != "":
+		policy = relay.NewPolicy(*policyDir)
+	}
+	if policy != nil {
+		srv.AttachPolicy(policy)
+		go policy.Run(ctx)
+	}
+
 	// Management interface.
 	var admin *relay.Admin
 	if *adminDB != "" {
@@ -254,6 +276,9 @@ func runServe(args []string) error {
 		if err := admin.SetCatalog(catalog); err != nil {
 			return err
 		}
+		if err := admin.SetPolicy(policy); err != nil {
+			return err
+		}
 	}
 
 	ln, err := tls.Listen("tcp", *listen, tlsCfg)
@@ -261,8 +286,6 @@ func runServe(args []string) error {
 		return err
 	}
 	log.Printf("relay listening on %s", ln.Addr())
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	go func() {
 		if err := srv.Serve(ln); err != nil && ctx.Err() == nil {
 			log.Fatalf("relay: %v", err)
