@@ -88,6 +88,10 @@ type Configuration struct {
 	SystemProxy        bool               `yaml:"SystemProxy"`
 	SystemProxyExclude []string           `yaml:"SystemProxyExclude"`
 	ForceChrome        bool               `yaml:"ForceChrome"`
+	// AllowRemoteClients lets machines other than this one use the HTTP and
+	// SOCKS5 listeners. The proxy has no client authentication and forwards with
+	// your upstream credentials, so it is off unless you explicitly enable it.
+	AllowRemoteClients bool `yaml:"AllowRemoteClients"`
 	// OnboardingDone is nil for legacy configurations (treated as done) and
 	// false for a freshly bootstrapped configuration until the web onboarding
 	// is completed.
@@ -217,6 +221,7 @@ func finalizeConfiguration() {
 	configuration.Hosts = hosts
 
 	ensureRelayDevice()
+	enforceRemotePolicy()
 	if migrateRouteUpstreams() {
 		if err := persistConfigurationLocked(); err != nil {
 			log.Printf("WARNING: cannot persist the route upstream migration: %v", err)

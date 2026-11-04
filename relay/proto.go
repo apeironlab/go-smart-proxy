@@ -102,9 +102,17 @@ func NewReader(r io.Reader) *bufio.Reader { return bufio.NewReaderSize(r, 8192) 
 // NormalizeEmail lowercases and validates an e-mail address.
 func NormalizeEmail(s string) (string, bool) {
 	s = strings.ToLower(strings.TrimSpace(s))
+	// Exactly one '@': addresses such as "a@evil.com@allowed.com" are parsed
+	// differently by different components (domain filter, SMTP server), which
+	// would let a request slip past the allowed-domain list.
 	at := strings.IndexByte(s, '@')
-	if at <= 0 || at == len(s)-1 || len(s) > 254 || strings.ContainsAny(s, " \t\r\n,;<>\"") {
+	if at <= 0 || at != strings.LastIndexByte(s, '@') || at == len(s)-1 || len(s) > 254 {
 		return "", false
+	}
+	for _, r := range s {
+		if r <= 0x20 || r == 0x7f || strings.ContainsRune(",;:<>\"()[]\\", r) {
+			return "", false
+		}
 	}
 	return s, true
 }

@@ -26,6 +26,9 @@ const (
 type Server struct {
 	Store *Store
 	Log   *log.Logger
+	// Revoked, when set, is consulted after the TLS handshake: connections
+	// whose client certificate it rejects are closed.
+	Revoked *Revocations
 
 	mu       sync.Mutex
 	sessions map[string]*session
@@ -89,6 +92,11 @@ func (s *Server) handleConn(c net.Conn) {
 	c.SetDeadline(time.Time{})
 	peers := tc.ConnectionState().PeerCertificates
 	if len(peers) == 0 {
+		c.Close()
+		return
+	}
+	if s.Revoked.Revoked(peers[0]) {
+		s.Log.Printf("revoked certificate from %s refused", c.RemoteAddr())
 		c.Close()
 		return
 	}

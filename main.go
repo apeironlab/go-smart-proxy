@@ -209,6 +209,10 @@ func serve() {
 				log.Printf("Error accepting connection: %+v", err)
 				continue
 			}
+			if !acceptClient(c) {
+				c.Close()
+				continue
+			}
 			log.Printf("New connection from %s", c.RemoteAddr().String())
 			activeConns.add(c)
 			go func(conn net.Conn) {
@@ -289,6 +293,10 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
+		if reason := checkLocalUIRequest(r); reason != "" {
+			http.Error(w, reason, http.StatusForbidden)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			apiMux.ServeHTTP(w, r)
 			return
@@ -299,6 +307,14 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	if r.URL.Scheme != "http" {
 		http.Error(w, "unsupported proxy request", http.StatusBadRequest)
+		return
+	}
+	targetPort := r.URL.Port()
+	if targetPort == "" {
+		targetPort = "80"
+	}
+	if isSelfTarget(r.URL.Hostname(), targetPort) {
+		http.Error(w, "forbidden: the proxy cannot connect to itself", http.StatusForbidden)
 		return
 	}
 
@@ -484,6 +500,10 @@ func handleConnect(client net.Conn, clientBr *bufio.Reader, hostport string) {
 // registry entry, so that HTTP CONNECT and SOCKS5 share the routing logic. On
 // dial errors the returned record is already marked as failed.
 func dialTarget(kind, clientAddr, host, port, method, url string) (net.Conn, *bufio.Reader, *ConnInfo, error) {
+	if isSelfTarget(host, port) {
+		log.Printf("Refused %s from %s to %s: the proxy cannot connect to itself", method, clientAddr, net.JoinHostPort(host, port))
+		return nil, nil, nil, errors.New("destination is this proxy")
+	}
 	route, ruleName := routeFor(host)
 	if route == nil {
 		return nil, nil, nil, fmt.Errorf("no route available for %s", host)

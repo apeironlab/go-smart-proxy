@@ -49,7 +49,11 @@ type EnrollConfig struct {
 	SMTPAuth       string // auto (default), plain, login, none
 	StatePath      string
 	CertTTL        time.Duration
-	Logger         *log.Logger
+	// TrustForwardedFor makes the rate limiter use the last X-Forwarded-For
+	// entry (the one appended by a trusted reverse proxy) as the client IP.
+	// Leave it off unless the endpoint is only reachable through that proxy.
+	TrustForwardedFor bool
+	Logger            *log.Logger
 	// SendMail is used by tests; when nil, SMTP is used.
 	SendMail func(to, subject, body string) error
 }
@@ -84,6 +88,8 @@ type EnrollServer struct {
 	items map[string]*Enrollment
 	users map[string]bool
 	rate  map[string][]time.Time
+	// lastPrune is the last time expired state was swept.
+	lastPrune time.Time
 }
 
 func NewEnrollServer(cfg EnrollConfig) (*EnrollServer, error) {
@@ -156,10 +162,7 @@ func (s *EnrollServer) saveLocked() {
 		f.Users = append(f.Users, u)
 	}
 	b, _ := json.MarshalIndent(f, "", "  ")
-	tmp := s.cfg.StatePath + ".tmp"
-	if os.WriteFile(tmp, b, 0o600) == nil {
-		os.Rename(tmp, s.cfg.StatePath)
-	}
+	WriteFileAtomic(s.cfg.StatePath, b, 0o600)
 }
 
 func (s *EnrollServer) allow(key string, limit int) bool {
@@ -167,6 +170,7 @@ func (s *EnrollServer) allow(key string, limit int) bool {
 	defer s.mu.Unlock()
 	now := time.Now()
 	cut := now.Add(-enrollRateWindow)
+	s.pruneLocked(now, cut)
 	times := s.rate[key]
 	kept := times[:0]
 	for _, t := range times {
@@ -180,6 +184,33 @@ func (s *EnrollServer) allow(key string, limit int) bool {
 	}
 	s.rate[key] = append(kept, now)
 	return true
+}
+
+// pruneLocked drops expired enrollments and stale rate-limit entries, so that
+// unauthenticated requests cannot grow memory and the state file without
+// bound. Callers must hold s.mu.
+func (s *EnrollServer) pruneLocked(now, cut time.Time) {
+	if now.Sub(s.lastPrune) < time.Minute {
+		return
+	}
+	s.lastPrune = now
+	for id, it := range s.items {
+		if now.After(it.Expires.Add(time.Hour)) {
+			delete(s.items, id)
+		}
+	}
+	for k, times := range s.rate {
+		fresh := false
+		for _, t := range times {
+			if t.After(cut) {
+				fresh = true
+				break
+			}
+		}
+		if !fresh {
+			delete(s.rate, k)
+		}
+	}
 }
 
 func allowedDomain(email string, domains []string) bool {
@@ -203,7 +234,8 @@ func allowedDomain(email string, domains []string) bool {
 func randomToken(n int) string {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("%d", time.Now().UnixNano())
+		// Never fall back to a predictable value for a secret.
+		panic("enrollment: no secure random source: " + err.Error())
 	}
 	return base64.RawURLEncoding.EncodeToString(b)
 }
@@ -212,7 +244,7 @@ func randomCode() string {
 	const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 	b := make([]byte, enrollCodeLen)
 	if _, err := rand.Read(b); err != nil {
-		return "AAAAAAAA"
+		panic("enrollment: no secure random source: " + err.Error())
 	}
 	for i := range b {
 		b[i] = alphabet[int(b[i])%len(alphabet)]
@@ -242,7 +274,15 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-func clientIP(r *http.Request) string {
+func (s *EnrollServer) clientIP(r *http.Request) string {
+	if s.cfg.TrustForwardedFor {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			if ip := strings.TrimSpace(parts[len(parts)-1]); net.ParseIP(ip) != nil {
+				return ip
+			}
+		}
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
@@ -296,7 +336,7 @@ func (s *EnrollServer) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := clientIP(r)
+	ip := s.clientIP(r)
 	if !s.allow("email:"+email, 4) || !s.allow("ip:"+ip, 12) {
 		writeError(w, http.StatusTooManyRequests, "troppe richieste, riprova tra qualche minuto")
 		return

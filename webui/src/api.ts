@@ -94,6 +94,7 @@ export interface StateInfo {
   systemProxy: boolean
   systemProxyExclude: string[]
   forceChrome: boolean
+  allowRemoteClients: boolean
   uptimeSeconds: number
   activeConns: number
   routes: RouteInfo[]
@@ -175,6 +176,7 @@ export const api = {
     systemProxy: boolean
     systemProxyExclude: string[]
     forceChrome: boolean
+    allowRemoteClients?: boolean
   }) => post('/api/config', form),
   finishOnboarding: () => post('/api/onboarding', {}),
   relay: () => req<RelayStatus>('/api/relay'),

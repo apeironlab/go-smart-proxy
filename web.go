@@ -133,6 +133,7 @@ type stateJSON struct {
 	SystemProxy        bool              `json:"systemProxy"`
 	SystemProxyExclude []string          `json:"systemProxyExclude"`
 	ForceChrome        bool              `json:"forceChrome"`
+	AllowRemoteClients bool              `json:"allowRemoteClients"`
 	Hosts              map[string]string `json:"hosts"`
 	UptimeSeconds      int64             `json:"uptimeSeconds"`
 	ActiveConns        int               `json:"activeConns"`
@@ -149,6 +150,7 @@ func apiState(w http.ResponseWriter, r *http.Request) {
 	systemProxy := configuration.SystemProxy
 	systemProxyExclude := append([]string(nil), configuration.SystemProxyExclude...)
 	forceChrome := configuration.ForceChrome
+	allowRemote := configuration.AllowRemoteClients
 	onboarding := configuration.OnboardingDone != nil && !*configuration.OnboardingDone
 	configMu.Unlock()
 
@@ -169,6 +171,7 @@ func apiState(w http.ResponseWriter, r *http.Request) {
 		SystemProxy:        systemProxy,
 		SystemProxyExclude: systemProxyExclude,
 		ForceChrome:        forceChrome,
+		AllowRemoteClients: allowRemote,
 		Hosts:              hosts,
 		UptimeSeconds:      int64(time.Since(startedAt).Seconds()),
 		ActiveConns:        connReg.activeCount(),
@@ -365,6 +368,9 @@ type credentialFormJSON struct {
 	Name     string `json:"name"`
 	User     string `json:"user"`
 	Password string `json:"password"`
+	// ClearPassword removes the stored password (an empty Password otherwise
+	// means "keep the current one").
+	ClearPassword bool `json:"clearPassword"`
 }
 
 func apiSaveCredential(w http.ResponseWriter, r *http.Request) {
@@ -385,7 +391,7 @@ func apiSaveCredential(w http.ResponseWriter, r *http.Request) {
 			// An empty password means "keep the current one": the API never
 			// sends it back to the UI.
 			password := form.Password
-			if password == "" {
+			if password == "" && !form.ClearPassword {
 				password = configuration.Credentials[i].Password
 			}
 			configuration.Credentials[i] = ConfigCredential{
@@ -503,6 +509,7 @@ func apiGetConfig(w http.ResponseWriter, r *http.Request) {
 	systemProxy := configuration.SystemProxy
 	systemProxyExclude := append([]string(nil), configuration.SystemProxyExclude...)
 	forceChrome := configuration.ForceChrome
+	allowRemote := configuration.AllowRemoteClients
 	configMu.Unlock()
 	hosts := map[string]string{}
 	hostsMu.RLock()
@@ -517,6 +524,7 @@ func apiGetConfig(w http.ResponseWriter, r *http.Request) {
 		"systemProxy":        systemProxy,
 		"systemProxyExclude": systemProxyExclude,
 		"forceChrome":        forceChrome,
+		"allowRemoteClients": allowRemote,
 	})
 }
 
@@ -527,6 +535,7 @@ type configFormJSON struct {
 	SystemProxy        *bool              `json:"systemProxy"`
 	SystemProxyExclude *[]string          `json:"systemProxyExclude"`
 	ForceChrome        *bool              `json:"forceChrome"`
+	AllowRemoteClients *bool              `json:"allowRemoteClients"`
 }
 
 func apiSaveConfig(w http.ResponseWriter, r *http.Request) {
@@ -536,9 +545,44 @@ func apiSaveConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if form.Address != "" {
+		if err := validateListenAddress(form.Address, false); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "address: "+err.Error())
+			return
+		}
+	}
+	if form.SocksAddress != nil {
+		if err := validateListenAddress(*form.SocksAddress, true); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "socksAddress: "+err.Error())
+			return
+		}
+	}
+	// The listeners have no client authentication: binding anything but
+	// loopback is only accepted together with an explicit opt-in.
+	configMu.Lock()
+	allowRemote := configuration.AllowRemoteClients
+	if form.AllowRemoteClients != nil {
+		allowRemote = *form.AllowRemoteClients
+	}
+	wantAddr, wantSocks := configuration.Address, configuration.SocksAddress
+	if form.Address != "" {
+		wantAddr = form.Address
+	}
+	if form.SocksAddress != nil {
+		wantSocks = *form.SocksAddress
+	}
+	configMu.Unlock()
+	if !allowRemote && (!addressIsLoopbackOnly(wantAddr) || !addressIsLoopbackOnly(wantSocks)) {
+		writeAPIError(w, http.StatusBadRequest, "listening on a non-loopback address requires allowRemoteClients: anyone who can reach it could use your upstream credentials")
+		return
+	}
+
 	configMu.Lock()
 	restart := false
 	socksRestart := false
+	if form.AllowRemoteClients != nil {
+		configuration.AllowRemoteClients = *form.AllowRemoteClients
+	}
 	if form.Address != "" && form.Address != configuration.Address {
 		restart = true
 		configuration.Address = form.Address

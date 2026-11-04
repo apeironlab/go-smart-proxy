@@ -324,6 +324,7 @@ Relay:
 SystemProxy: false             # macOS only
 SystemProxyExclude: [utun4]    # macOS network services to leave untouched
 ForceChrome: false             # macOS only
+AllowRemoteClients: false      # serve clients other than this machine (see Security)
 Hosts:
   repo.intra.example.com: 192.0.2.40
 ```
@@ -845,11 +846,31 @@ rather than keeping the CA key in the cluster.
 - `PROXY_NO_KEYCHAIN=1` disables the macOS Keychain and the Windows DPAPI store,
   forcing a master password prompt.
 - The web API never returns credential passwords. An empty password on save
-  keeps the existing one.
-- The web UI/API are unauthenticated and loopback-only. Do not bind the proxy to
-  an untrusted network unless you understand that anyone who can reach the
-  listener can use the proxy and its loopback UI from the same host.
-- The proxy/SOCKS listeners have no authentication.
+  keeps the existing one; send `"clearPassword": true` to remove it.
+- The web UI/API are unauthenticated and loopback-only, and are protected
+  against attacks from web pages open in your browser: the `Host` header must be
+  a loopback name (this blocks DNS rebinding), cross-origin and cross-site
+  requests are refused (`Origin`, `Sec-Fetch-Site`), and requests with a body
+  must be `application/json`, so a page cannot reconfigure the proxy with a
+  "simple" cross-site `POST`.
+- The proxy refuses to connect to its own HTTP and SOCKS5 ports (and loopback
+  addresses on them): a request forwarded to itself would arrive from loopback
+  and bypass the checks above.
+- The proxy/SOCKS listeners have no client authentication and forward with your
+  upstream credentials, so by default **only clients on this machine are
+  served**, even if the listener is bound to another address. Binding a
+  non-loopback address is rejected by the API unless `AllowRemoteClients: true`
+  (Configuration → "Allow other computers to use the proxy"). Configurations
+  that already listened on a non-loopback address keep working after the
+  upgrade (the option is turned on and a warning is logged): bind to
+  `127.0.0.1` to turn it off.
+- Listen addresses are validated before use, and values that reach `scutil` or
+  Chrome's preferences are restricted to safe characters. Chrome's proxy policy
+  is written with `defaults` and only touches `ProxyMode`, `ProxyServer` and
+  `ProxyBypassList`; other Chrome preferences are preserved.
+- Configuration, relay state and enrollment state files are written through a
+  uniquely named temporary file created next to them, never a predictable
+  `.tmp` name.
 - `config.yml*`, `relay-pki`, `relay-certs`, `relay_state.json` and the built
   binaries are ignored by git. Never commit them.
 
@@ -870,9 +891,22 @@ rather than keeping the CA key in the cluster.
 - Enrollment TLS trust can be established by the system roots, an explicitly
   pasted CA, or the explicit fingerprint confirmation (TOFU). Always verify the
   fingerprint out-of-band when prompted.
-- Certificate renewal and revocation are not automated yet. Certificates are
-  short-lived (90 days by default); use **Riconfigura** to enroll again. There is
-  no CRL/OCSP check.
+- Certificate renewal is not automated. Certificates are short-lived (90 days
+  by default); use **Riconfigura** to enroll again.
+- Revocation: the server consults a deny-list file (`relay.NewRevocations`,
+  assigned to `Server.Revoked`). Each line is an e-mail address (all its
+  certificates) or `serial:<hex>`; the file is re-read when it changes, so
+  revoked clients are refused at their next connection without restarting the
+  relay. `relay.Revoke(path, entry)` appends an entry. There is no CRL/OCSP.
+- The relay exit side caps the approval requests waiting for an answer (20 in
+  total, 5 per contact), so a contact cannot flood you with prompts.
+- E-mail addresses must contain exactly one `@`, which keeps the domain
+  allow-list and the SMTP server from interpreting an address differently.
+- Behind a reverse proxy, set `EnrollConfig.TrustForwardedFor` so the
+  enrollment rate limit uses the client address from the proxy's
+  `X-Forwarded-For` (last entry) instead of the proxy's own address. Leave it
+  off when the endpoint is reachable directly. Expired enrollments and stale
+  rate-limit entries are purged automatically.
 
 ### Email
 

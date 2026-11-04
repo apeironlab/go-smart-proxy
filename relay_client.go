@@ -26,6 +26,11 @@ const (
 	relayApprovalWait  = 60 * time.Second
 	relayDialReplyWait = 100 * time.Second
 	relayNoticeTTL     = 15 * time.Second
+	// A contact can open any number of streams: cap the approvals waiting for
+	// an answer so they cannot flood the user with prompts or pile up
+	// goroutines.
+	relayMaxPending        = 20
+	relayMaxPendingPerFrom = 5
 )
 
 // relayRule remembers a route (contact + device + destination) that was approved.
@@ -147,10 +152,7 @@ func (r *relayClient) loadFile() {
 
 func (r *relayClient) saveLocked() {
 	b, _ := json.MarshalIndent(relayPersisted{Rules: r.rules, NextID: r.nextID, State: r.state}, "", "  ")
-	tmp := r.stateFile() + ".tmp"
-	if os.WriteFile(tmp, b, 0o600) == nil {
-		os.Rename(tmp, r.stateFile())
-	}
+	relay.WriteFileAtomic(r.stateFile(), b, 0o600)
 }
 
 func (r *relayClient) loop() {
@@ -562,6 +564,17 @@ func (r *relayClient) authorize(from, fromDevice, host string, port int) bool {
 	if r.ruleAllowsLocked(from, fromDevice, host, port) {
 		r.mu.Unlock()
 		return true
+	}
+	pending, pendingFrom := len(r.approvals), 0
+	for _, p := range r.approvals {
+		if p.From == from {
+			pendingFrom++
+		}
+	}
+	if pending >= relayMaxPending || pendingFrom >= relayMaxPendingPerFrom {
+		r.mu.Unlock()
+		log.Printf("relay: too many pending approvals (%d total, %d from %s): refusing %s:%d", pending, pendingFrom, from, host, port)
+		return false
 	}
 	r.nextID++
 	a := &relayApproval{ID: r.nextID, From: from, FromDevice: fromDevice, Host: host, Port: port, Time: time.Now(), ch: make(chan relayDecision, 1)}

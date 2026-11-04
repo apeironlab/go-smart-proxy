@@ -95,6 +95,13 @@ func applyServiceProxyOverride(serviceKey, host, port string) {
 		return // already correct
 	}
 
+	// The values are interpolated into an scutil script: refuse anything that
+	// could add a command (line breaks, spaces, quotes...).
+	if !safeConfigToken(serviceKey) || !safeConfigToken(host) || !safeConfigToken(port) {
+		log.Printf("VPN proxy override refused: unsafe value in service %q, host %q or port %q", serviceKey, host, port)
+		return
+	}
+
 	script := fmt.Sprintf(`d.init
 d.add HTTPEnable 1
 d.add HTTPPort %s

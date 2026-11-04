@@ -101,10 +101,7 @@ func (s *Store) saveLocked() {
 		f.Devices[k] = keys(v)
 	}
 	b, _ := json.MarshalIndent(f, "", "  ")
-	tmp := s.path + ".tmp"
-	if os.WriteFile(tmp, b, 0o600) == nil {
-		os.Rename(tmp, s.path)
-	}
+	WriteFileAtomic(s.path, b, 0o600)
 }
 
 func (s *Store) IsContact(a, b string) bool {

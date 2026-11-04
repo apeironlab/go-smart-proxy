@@ -119,6 +119,8 @@
   "SOCKS5": "SOCKS5",
   "Empty = disabled": "Vuoto = disabilitato",
   "Empty = automatic. Destination rules are only evaluated in Auto.": "Vuoto = automatico. Le regole di destinazione sono valutate solo in Auto.",
+  "Allow other computers to use the proxy": "Consenti ad altri computer di usare il proxy",
+  "Off by default. The proxy has no client authentication and uses your upstream credentials: enable it only on a trusted network, and only if you need to listen on a non-loopback address": "Disattivato di default. Il proxy non autentica i client e usa le tue credenziali upstream: abilitalo solo su una rete fidata e solo se serve ascoltare su un indirizzo non loopback",
   "Reset system proxy on network change": "Reimposta il proxy di sistema al cambio di rete",
   "With Pulse connected it only rewrites the runtime state of the Pulse service (via scutil, no conflict or reconnections); without VPN it uses networksetup": "Con Pulse connesso riscrive solo lo stato runtime del servizio Pulse (via scutil, nessun conflitto o riconnessione); senza VPN usa networksetup",
   "System proxy exclusions": "Esclusioni del proxy di sistema",

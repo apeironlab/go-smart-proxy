@@ -67,6 +67,7 @@ export default function ConfigPage() {
   const [sysProxy, setSysProxy] = useState(false)
   const [exclude, setExclude] = useState<string[]>([])
   const [forceChrome, setForceChrome] = useState(false)
+  const [allowRemote, setAllowRemote] = useState(false)
   const [sysProxyState, setSysProxyState] = useState<SystemProxyState | null>(null)
   const [forceRoute, setForceRoute] = useState<string>('')
   const [configLoaded, setConfigLoaded] = useState(false)
@@ -88,6 +89,7 @@ export default function ConfigPage() {
         setSysProxy(s.systemProxy)
         setExclude(s.systemProxyExclude ?? [])
         setForceChrome(s.forceChrome)
+        setAllowRemote(s.allowRemoteClients)
         setForceRoute(s.forceRoute || '')
         setConfigLoaded(true)
       }
@@ -344,6 +346,20 @@ export default function ConfigPage() {
             onChange={(v) => applyForceRoute(v)}
           />
         </Group>
+        <Switch
+          mt="md"
+          color="red"
+          label={t('Allow other computers to use the proxy')}
+          description={t('Off by default. The proxy has no client authentication and uses your upstream credentials: enable it only on a trusted network, and only if you need to listen on a non-loopback address')}
+          checked={allowRemote}
+          onChange={(e) => {
+            const v = e.currentTarget.checked
+            setAllowRemote(v)
+            api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: exclude, forceChrome, allowRemoteClients: v })
+              .then(load)
+              .catch((err) => { setAllowRemote(!v); setError(String(err)) })
+          }}
+        />
         <Switch
           mt="md"
           label={t('Reset system proxy on network change')}

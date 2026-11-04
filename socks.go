@@ -49,6 +49,10 @@ func serveSOCKS() {
 				log.Printf("Error accepting SOCKS5 connection: %+v", err)
 				continue
 			}
+			if !acceptClient(c) {
+				c.Close()
+				continue
+			}
 			log.Printf("New SOCKS5 connection from %s", c.RemoteAddr().String())
 			activeConns.add(c)
 			go handleSOCKS(c)

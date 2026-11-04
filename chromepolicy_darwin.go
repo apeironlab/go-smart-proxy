@@ -3,66 +3,58 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"net"
-	"os"
-	"path/filepath"
+	"os/exec"
+	"strings"
 )
 
-// chromePolicyPath is the user-level managed preferences plist Chrome reads
-// for policies on macOS.
-func chromePolicyPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, "Library", "Preferences", "com.google.Chrome.plist"), nil
-}
+const chromeDomain = "com.google.Chrome"
+
+// chromePolicyKeys are the only preference keys this program manages in
+// Chrome's domain. Everything else in the user's Chrome preferences is left
+// untouched.
+var chromePolicyKeys = []string{"ProxyMode", "ProxyServer", "ProxyBypassList"}
 
 // applyChromePolicy forces Chrome to use this proxy via its ProxyMode
 // policy. This does not touch the system proxy settings nor the VPN.
+//
+// The keys are written with `defaults`, so they go through cfprefsd (which is
+// what Chrome reads) and the rest of the preference domain is preserved.
 func applyChromePolicy() {
-	if !configuration.ForceChrome {
+	configMu.Lock()
+	enabled := configuration.ForceChrome
+	address := configuration.Address
+	configMu.Unlock()
+	if !enabled {
 		return
 	}
-	path, err := chromePolicyPath()
-	if err != nil {
-		log.Printf("Error locating Chrome policy file: %+v", err)
-		return
-	}
-	host, port, err := net.SplitHostPort(configuration.Address)
-	if err != nil || host == "" || host == "0.0.0.0" || host == "::" {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || host == "" || host == "0.0.0.0" || host == "::" || !safeConfigToken(host) || !safeConfigToken(port) {
 		host = "127.0.0.1"
 		port = "3128"
 	}
-	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>ProxyMode</key>
-	<string>fixed_servers</string>
-	<key>ProxyServer</key>
-	<string>%s:%s</string>
-	<key>ProxyBypassList</key>
-	<string>localhost;127.0.0.1;*.local;169.254/16</string>
-</dict>
-</plist>
-`, host, port)
-	if err := os.WriteFile(path, []byte(plist), 0644); err != nil {
-		log.Printf("Error writing Chrome policy: %+v", err)
-		return
+	values := map[string]string{
+		"ProxyMode":       "fixed_servers",
+		"ProxyServer":     net.JoinHostPort(host, port),
+		"ProxyBypassList": "localhost;127.0.0.1;*.local;169.254/16",
 	}
-	log.Printf("Chrome policy set: proxy %s:%s (restart Chrome to apply)", host, port)
+	for _, key := range chromePolicyKeys {
+		if out, err := exec.Command("defaults", "write", chromeDomain, key, "-string", values[key]).CombinedOutput(); err != nil {
+			log.Printf("Error writing Chrome policy %s: %v (%s)", key, err, strings.TrimSpace(string(out)))
+			return
+		}
+	}
+	log.Printf("Chrome policy set: proxy %s (restart Chrome to apply)", values["ProxyServer"])
 }
 
-// removeChromePolicy removes the Chrome proxy policy.
+// removeChromePolicy removes the Chrome proxy policy keys set by
+// applyChromePolicy, leaving the other preferences intact.
 func removeChromePolicy() {
-	path, err := chromePolicyPath()
-	if err != nil {
-		return
-	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		log.Printf("Error removing Chrome policy: %+v", err)
+	for _, key := range chromePolicyKeys {
+		out, err := exec.Command("defaults", "delete", chromeDomain, key).CombinedOutput()
+		if err != nil && !strings.Contains(string(out), "does not exist") {
+			log.Printf("Error removing Chrome policy %s: %v (%s)", key, err, strings.TrimSpace(string(out)))
+		}
 	}
 }

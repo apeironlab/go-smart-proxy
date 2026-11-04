@@ -18,6 +18,8 @@ import (
 	"sync"
 
 	"golang.org/x/term"
+
+	"proxy/relay"
 )
 
 const (
@@ -142,28 +144,10 @@ func decryptSecret(password string, data []byte) ([]byte, error) {
 	return decryptWithKey(key, data)
 }
 
-// writeSecretFileAtomic writes data to path with owner-only permissions.
+// writeSecretFileAtomic writes data to path with owner-only permissions, via an
+// exclusively created temporary file next to it.
 func writeSecretFileAtomic(path string, data []byte) error {
-	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	if err := f.Chmod(0o600); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return err
-	}
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return os.Rename(tmp, path)
+	return relay.WriteFileAtomic(path, data, 0o600)
 }
 
 // setConfigCrypto caches the key and salt used for the current configuration.
