@@ -930,6 +930,7 @@ func systrayExit() {
 func systrayReact(quit *systray.MenuItem) {
 	select {
 	case <-quit.ClickedCh:
+		restoreSystemProxy() // Windows: put the system's proxy settings back
 		os.Exit(0)
 	}
 }

@@ -701,6 +701,8 @@ func apiSaveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if configuration.SystemProxy {
 		go applySystemProxy()
+	} else {
+		go restoreSystemProxy()
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
 }

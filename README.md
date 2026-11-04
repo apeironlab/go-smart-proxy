@@ -386,9 +386,9 @@ Relays:                        # one entry per relay server; you can connect to 
         Net: 192.168.1.0/24
     ShareContext: true           # false = share nothing about the network
 
-SystemProxy: false             # macOS only
+SystemProxy: false             # macOS and Windows
 SystemProxyExclude: [utun4]    # macOS network services to leave untouched
-ForceChrome: false             # macOS only
+ForceChrome: false             # macOS and Windows
 AllowRemoteClients: false      # serve clients other than this machine (see Security)
 Hosts:
   repo.intra.example.com: 192.0.2.40
@@ -743,17 +743,34 @@ proxy for the connection).
 - **Quit**.
 - The menu updates immediately after route changes or force-route changes.
 
-### System proxy (macOS only)
+### System proxy (macOS and Windows)
 
 `SystemProxy: true` makes the proxy apply itself as the system HTTP/HTTPS proxy.
-`SystemProxyExclude` lists network services/interfaces to leave untouched
-(e.g. a VPN interface). The setting is re-applied periodically and after network
-changes because VPN clients often overwrite it.
+The setting is re-applied every ten seconds because VPN clients often overwrite
+it.
 
-### Chrome policy (macOS only)
+- **macOS**: through `networksetup` (and, with a VPN service primary, the VPN's
+  runtime proxy state). `SystemProxyExclude` lists network services/interfaces to
+  leave untouched (e.g. a VPN interface).
+- **Windows**: the current user's *Internet Options* (`HKCU\Software\Microsoft\
+  Windows\CurrentVersion\Internet Settings`), which browsers, .NET and most
+  programs read; running programs are told of the change. The proxy is turned on
+  and pointed at this proxy, and *automatic configuration* (a PAC, "detect
+  settings") is turned off, because a PAC would take precedence over it (as on
+  macOS). What was there before is kept in `system_proxy_backup.json` and put
+  back when you switch the option off or quit from the tray; a proxy that dies
+  without quitting leaves the system pointing at it until it runs again.
+  Per-connection proxies of dial-up/VPN connections and machine-wide (WinHTTP)
+  settings are not touched. Not tested on a real Windows machine: the logic is
+  tested with a simulated registry, and the Windows build is compiled and
+  vetted, but the registry and notification calls have not been run.
 
-`ForceChrome: true` installs/removes a Chrome policy so Chrome uses the system
-proxy configuration.
+### Chrome policy (macOS and Windows)
+
+`ForceChrome: true` installs/removes a Chrome policy (`ProxyMode`, `ProxyServer`,
+`ProxyBypassList`) so Chrome uses this proxy: in the macOS preferences, or on
+Windows under `HKCU\Software\Policies\Google\Chrome`. Restart Chrome to apply
+it. Chrome may ignore per-user policies on a computer that is not managed.
 
 ### Desktop notifications
 
@@ -762,7 +779,7 @@ desktop notification:
 
 - macOS: Notification Center via `osascript`
 - Linux: `notify-send`
-- Windows: not implemented yet
+- Windows: a toast through PowerShell (the text goes in environment variables, never in the script)
 
 Rapid notifications are throttled to avoid flooding.
 
@@ -1918,7 +1935,7 @@ Current limitations:
   seconds, against connections already open), not a CRL or OCSP endpoint.
 - The local API is protected by Host/Origin/Content-Type checks and,
   optionally, an access token (see above).
-- Windows lacks system proxy/PAC/Chrome policy/desktop notifications.
+- The Windows system proxy, Chrome policy and notifications are written but could not be run on Windows by the author; see *System proxy*.
 - Linux system tray requires the systray GTK/AppIndicator dependencies.
 - Without `-db` the relay state is in files and the relay must run alone; with
   `-db` (PostgreSQL or MySQL) several relays can share it. Rate limits are
@@ -1933,7 +1950,6 @@ Possible future work:
   flow (`rule → profile → hop chain`), drag-and-drop ordering, and a richer
   destination tester.
 - A standard CRL/OCSP endpoint.
-- Windows system proxy/PAC/Chrome/notifications.
 - Signed macOS builds with native Keychain access control.
 - Rate limits shared between relays, and a state store that does not need the
   CA key on every relay (a signing service).

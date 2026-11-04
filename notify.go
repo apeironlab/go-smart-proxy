@@ -37,6 +37,8 @@ func notifyDesktop(title, body string) {
 		if err := exec.Command("notify-send", title, body).Run(); err != nil {
 			log.Printf("desktop notification: %v", err)
 		}
+	case "windows":
+		notifyWindows(title, body)
 	}
 }
 
