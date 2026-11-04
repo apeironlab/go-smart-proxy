@@ -12,6 +12,13 @@ The management UI is embedded in the binary and served on the proxy listener
 Union, selected from the browser locale or manually from the header menu, with
 English as fallback; code, comments and this README are in English.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/proxy-connections-dark.png">
+    <img src="docs/images/proxy-connections-light.png" alt="Go Smart Proxy: live view of the connections, routes and traffic" width="880">
+  </picture>
+</p>
+
 > **Security first:** the configuration contains proxy credentials and can contain
 > the relay private key. It is encrypted at rest with a master password
 > (`config.yml.enc`). **The master password cannot be recovered.** Read
@@ -19,8 +26,21 @@ English as fallback; code, comments and this README are in English.
 
 ---
 
+## Screenshots
+
+| | |
+|---|---|
+| ![Relay: contacts, devices and route approvals](docs/images/proxy-relay.png)<br>**Relay** — contacts, devices and route approvals | ![Protection: block ads, trackers and malware](docs/images/proxy-protection.png)<br>**Protection** — ads, trackers and malware, plus your organization's rules |
+| ![Rules: destination rules](docs/images/proxy-rules.png)<br>**Rules** — pick the route by destination | ![Applications published by the relay](docs/images/proxy-apps.png)<br>**Applications** — remote apps the relay offers you |
+| ![Relay administration: applications and gateways](docs/images/relay-admin-apps.png)<br>**Relay administration** — applications and gateways | ![Relay administration: blocking rules](docs/images/relay-admin-blocking.png)<br>**Relay administration** — organization-wide blocking |
+
+The interface follows the system theme (light or dark) and speaks the 24 EU languages.
+
+---
+
 ## Table of contents
 
+- [Screenshots](#screenshots)
 - [Features](#features)
 - [Architecture](#architecture)
 - [Requirements](#requirements)
