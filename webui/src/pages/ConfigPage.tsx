@@ -66,8 +66,6 @@ export default function ConfigPage() {
   const [relayCA, setRelayCA] = useState('')
   const [sysProxy, setSysProxy] = useState(false)
   const [exclude, setExclude] = useState<string[]>([])
-  const [pacHijack, setPacHijack] = useState(false)
-  const [pacHijackHost, setPacHijackHost] = useState('wpad')
   const [forceChrome, setForceChrome] = useState(false)
   const [sysProxyState, setSysProxyState] = useState<SystemProxyState | null>(null)
   const [forceRoute, setForceRoute] = useState<string>('')
@@ -89,8 +87,6 @@ export default function ConfigPage() {
         setHosts(Object.entries(s.hosts ?? {}).map(([host, ip]) => ({ host, ip })))
         setSysProxy(s.systemProxy)
         setExclude(s.systemProxyExclude ?? [])
-        setPacHijack(s.pacHijack)
-        setPacHijackHost(s.pacHijackHost || 'wpad')
         setForceChrome(s.forceChrome)
         setForceRoute(s.forceRoute || '')
         setConfigLoaded(true)
@@ -133,8 +129,6 @@ export default function ConfigPage() {
         hosts: hostsObject(),
         systemProxy: sysProxy,
         systemProxyExclude: exclude,
-        pacHijack,
-        pacHijackHost,
         forceChrome,
       })
       load()
@@ -352,37 +346,13 @@ export default function ConfigPage() {
         </Group>
         <Switch
           mt="md"
-          label={t('PAC hijack (wpad)')}
-          description={t('The VPN enforces the corporate PAC (http://wpad/wpad.dat): the proxy serves it itself on port 80 and resolves the host to 127.0.0.1, so browsers go through the proxy without ever touching the VPN settings (requires sudo)')}
-          checked={pacHijack}
-          onChange={(e) => {
-            const v = e.currentTarget.checked
-            setPacHijack(v)
-            api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: exclude, pacHijack: v, pacHijackHost, forceChrome })
-              .then(load)
-              .catch((err) => setError(String(err)))
-          }}
-        />
-        {pacHijack && (
-          <TextInput
-            mt="xs"
-            label={t('PAC host to intercept')}
-            description={t('Entry added to /etc/hosts (default: wpad)')}
-            style={{ maxWidth: 280 }}
-            value={pacHijackHost}
-            onChange={(e) => setPacHijackHost(e.currentTarget.value)}
-            onBlur={saveConfig}
-          />
-        )}
-        <Switch
-          mt="md"
           label={t('Reset system proxy on network change')}
           description={t('With Pulse connected it only rewrites the runtime state of the Pulse service (via scutil, no conflict or reconnections); without VPN it uses networksetup')}
           checked={sysProxy}
           onChange={(e) => {
             const v = e.currentTarget.checked
             setSysProxy(v)
-            api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: v, systemProxyExclude: exclude, pacHijack, pacHijackHost, forceChrome })
+            api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: v, systemProxyExclude: exclude, forceChrome })
               .then(load)
               .catch((err) => setError(String(err)))
           }}
@@ -395,7 +365,7 @@ export default function ConfigPage() {
           value={exclude}
           onChange={(v) => {
             setExclude(v)
-            api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: v, pacHijack, pacHijackHost, forceChrome })
+            api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: v, forceChrome })
               .then(load)
               .catch((err) => setError(String(err)))
           }}

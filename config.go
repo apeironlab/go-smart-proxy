@@ -87,8 +87,6 @@ type Configuration struct {
 	Rules              []ConfigRule       `yaml:"Rules,omitempty"`
 	SystemProxy        bool               `yaml:"SystemProxy"`
 	SystemProxyExclude []string           `yaml:"SystemProxyExclude"`
-	PacHijack          bool               `yaml:"PacHijack"`
-	PacHijackHost      string             `yaml:"PacHijackHost"`
 	ForceChrome        bool               `yaml:"ForceChrome"`
 	// OnboardingDone is nil for legacy configurations (treated as done) and
 	// false for a freshly bootstrapped configuration until the web onboarding

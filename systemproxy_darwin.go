@@ -133,14 +133,11 @@ quit
 func applySystemProxy() {
 	configMu.Lock()
 	enabled := configuration.SystemProxy
-	pacHijack := configuration.PacHijack
 	exclude := append([]string(nil), configuration.SystemProxyExclude...)
 	address := configuration.Address
 	configMu.Unlock()
 
-	// With the PAC hijack active the VPN's own PAC already points here:
-	// touching the services would only fight with the VPN client.
-	if !enabled || pacHijack {
+	if !enabled {
 		return
 	}
 

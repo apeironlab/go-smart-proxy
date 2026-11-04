@@ -81,7 +81,7 @@ English as fallback; code, comments and this README are in English.
 - **System tray** with dynamic route selection and a web UI for configuration,
   rules, credentials, connections, and relay management.
 - **macOS integration**: system proxy configuration (including VPN-overridden
-  proxies), PAC hijack (`wpad`), and Chrome policy enforcement.
+  proxies) and Chrome policy enforcement.
 - **PAC caching**: PAC files are fetched directly, cached, and never block
   request handling.
 - **Connection registry**: live connection log, byte counters, and fail-fast
@@ -138,7 +138,7 @@ resolved through the route/rules engine.
 
 The project is primarily developed on macOS. Windows is supported for the core
 proxy, SOCKS5, relay, encrypted configuration and tray. Linux supports the core
-proxy, SOCKS5, relay, encrypted configuration, hosts/PAC hijack, and tray when
+proxy, SOCKS5, relay, encrypted configuration, and tray when
 the systray dependencies are installed. The macOS-only features are marked in
 the relevant sections.
 
@@ -323,8 +323,6 @@ Relay:
 
 SystemProxy: false             # macOS only
 SystemProxyExclude: [utun4]    # macOS network services to leave untouched
-PacHijack: false               # macOS/Linux; serves wpad on port 80
-PacHijackHost: wpad
 ForceChrome: false             # macOS only
 Hosts:
   repo.intra.example.com: 192.0.2.40
@@ -493,7 +491,7 @@ the HTTP proxy address. It is available only to loopback clients.
 
 Pages:
 
-- **Configurazione** — listeners, SOCKS5, system proxy, PAC hijack, Chrome
+- **Configurazione** — listeners, SOCKS5, system proxy, Chrome
   policy, static hosts, relay connection settings, routes and chains, DNS cache.
 - **Regole** — destination rules and a route test tool.
 - **Credenziali** — named credentials; passwords are never returned by the API
@@ -503,7 +501,7 @@ Pages:
   enrollment/reconfiguration.
 
 The **Configurazione** page is the single place for proxy-wide settings:
-listeners, SOCKS5, system proxy, PAC hijack, Chrome policy, static hosts, relay
+listeners, SOCKS5, system proxy, Chrome policy, static hosts, relay
 address/route/`AllowLocal`, manual relay certificate PEMs (write-only; the API
 never returns private keys), and route ordering. Relay certificate enrollment
 and device renaming remain on the Relay page.
@@ -513,7 +511,6 @@ and device renaming remain on the Relay page.
 | HTTP listener and web UI | Configurazione → Rete |
 | SOCKS5 listener | Configurazione → SOCKS5 |
 | System proxy and excluded services | Configurazione → Rete |
-| PAC hijack and host name | Configurazione → Rete |
 | Chrome policy | Configurazione → Rete |
 | Static host → IP mappings | Configurazione → Host fissi |
 | Routes, chains, PAC/dynamic hops, per-hop `RulesOnly`, route priority | Configurazione → Route |
@@ -571,16 +568,6 @@ trusted (see [Security](#security)).
 `SystemProxyExclude` lists network services/interfaces to leave untouched
 (e.g. a VPN interface). The setting is re-applied periodically and after network
 changes because VPN clients often overwrite it.
-
-### PAC hijack (macOS/Linux)
-
-`PacHijack: true` makes the proxy serve a generated PAC on `127.0.0.1:80` and
-adds a `/etc/hosts` entry for `PacHijackHost` (default `wpad`) pointing to
-`127.0.0.1`. This is useful when a VPN hands out a PAC URL such as
-`http://wpad/wpad.dat` and Chrome would otherwise bypass the proxy.
-
-- Requires privileges to bind port 80 and edit `/etc/hosts` (usually `sudo`).
-- The generated PAC points browsers at this proxy.
 
 ### Chrome policy (macOS only)
 
@@ -1038,7 +1025,7 @@ rebuild the Go binary so the new assets are embedded.
 
 | Path | Description |
 |---|---|
-| `main.go` | HTTP proxy, tunnels, PAC hijack, listeners, tray, connection registry |
+| `main.go` | HTTP proxy, tunnels, listeners, tray, connection registry |
 | `router.go` | Routes, PAC, transports, automatic route selection, DNS cache |
 | `rules.go` | Destination rules and rules API |
 | `chain.go` | Proxy chains, SOCKS5/HTTP hops, relay hop handling |
@@ -1076,7 +1063,6 @@ The Go module is named `proxy`; internal packages are imported as
 | Touch ID prompt does not appear | Keychain disabled (`PROXY_NO_KEYCHAIN`), no biometrics, or non-macOS; enter the master password. |
 | `wrong master password or corrupted file` | The password is wrong or the file was modified. There is no recovery without the password. |
 | Web UI returns `403` | UI/API are only available to loopback clients. |
-| Port 80 / `/etc/hosts` errors with PAC hijack | Run with the needed privileges; disable `PacHijack` if not needed. |
 | System proxy keeps being reset | A VPN client is rewriting it; use `SystemProxyExclude` or turn off the VPN's proxy enforcement. |
 | Chrome ignores the proxy | Check PAC precedence and `ForceChrome` (macOS). |
 | Relay server exits on startup | Missing `-cert/-key/-ca`; enrollment misconfiguration logs `enrollment disabled` but mTLS continues. |

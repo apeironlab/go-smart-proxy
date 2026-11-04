@@ -132,8 +132,6 @@ type stateJSON struct {
 	ForceRoute         string            `json:"forceRoute"`
 	SystemProxy        bool              `json:"systemProxy"`
 	SystemProxyExclude []string          `json:"systemProxyExclude"`
-	PacHijack          bool              `json:"pacHijack"`
-	PacHijackHost      string            `json:"pacHijackHost"`
 	ForceChrome        bool              `json:"forceChrome"`
 	Hosts              map[string]string `json:"hosts"`
 	UptimeSeconds      int64             `json:"uptimeSeconds"`
@@ -150,8 +148,6 @@ func apiState(w http.ResponseWriter, r *http.Request) {
 	socksAddress := configuration.SocksAddress
 	systemProxy := configuration.SystemProxy
 	systemProxyExclude := append([]string(nil), configuration.SystemProxyExclude...)
-	pacHijack := configuration.PacHijack
-	pacHijackHost := configuration.PacHijackHost
 	forceChrome := configuration.ForceChrome
 	onboarding := configuration.OnboardingDone != nil && !*configuration.OnboardingDone
 	configMu.Unlock()
@@ -172,8 +168,6 @@ func apiState(w http.ResponseWriter, r *http.Request) {
 		Network:            netString(st.network),
 		SystemProxy:        systemProxy,
 		SystemProxyExclude: systemProxyExclude,
-		PacHijack:          pacHijack,
-		PacHijackHost:      pacHijackHost,
 		ForceChrome:        forceChrome,
 		Hosts:              hosts,
 		UptimeSeconds:      int64(time.Since(startedAt).Seconds()),
@@ -508,8 +502,6 @@ func apiGetConfig(w http.ResponseWriter, r *http.Request) {
 	socksAddress := configuration.SocksAddress
 	systemProxy := configuration.SystemProxy
 	systemProxyExclude := append([]string(nil), configuration.SystemProxyExclude...)
-	pacHijack := configuration.PacHijack
-	pacHijackHost := configuration.PacHijackHost
 	forceChrome := configuration.ForceChrome
 	configMu.Unlock()
 	hosts := map[string]string{}
@@ -524,8 +516,6 @@ func apiGetConfig(w http.ResponseWriter, r *http.Request) {
 		"hosts":              hosts,
 		"systemProxy":        systemProxy,
 		"systemProxyExclude": systemProxyExclude,
-		"pacHijack":          pacHijack,
-		"pacHijackHost":      pacHijackHost,
 		"forceChrome":        forceChrome,
 	})
 }
@@ -536,8 +526,6 @@ type configFormJSON struct {
 	Hosts              *map[string]string `json:"hosts"`
 	SystemProxy        *bool              `json:"systemProxy"`
 	SystemProxyExclude *[]string          `json:"systemProxyExclude"`
-	PacHijack          *bool              `json:"pacHijack"`
-	PacHijackHost      string             `json:"pacHijackHost"`
 	ForceChrome        *bool              `json:"forceChrome"`
 }
 
@@ -587,14 +575,6 @@ func apiSaveConfig(w http.ResponseWriter, r *http.Request) {
 	if form.SystemProxyExclude != nil {
 		configuration.SystemProxyExclude = append([]string(nil), (*form.SystemProxyExclude)...)
 	}
-	pacHijackChanged := false
-	if form.PacHijack != nil && *form.PacHijack != configuration.PacHijack {
-		configuration.PacHijack = *form.PacHijack
-		pacHijackChanged = true
-	}
-	if form.PacHijackHost != "" {
-		configuration.PacHijackHost = form.PacHijackHost
-	}
 	forceChromeChanged := false
 	if form.ForceChrome != nil && *form.ForceChrome != configuration.ForceChrome {
 		configuration.ForceChrome = *form.ForceChrome
@@ -604,11 +584,6 @@ func apiSaveConfig(w http.ResponseWriter, r *http.Request) {
 		configMu.Unlock()
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
 		return
-	}
-	pacHijackEnabled := configuration.PacHijack
-	pacHijackHost := configuration.PacHijackHost
-	if pacHijackHost == "" {
-		pacHijackHost = "wpad"
 	}
 	forceChromeEnabled := configuration.ForceChrome
 	socksAddress := configuration.SocksAddress
@@ -621,18 +596,6 @@ func apiSaveConfig(w http.ResponseWriter, r *http.Request) {
 	if socksRestart {
 		log.Printf("SOCKS5 listen address changed to %q, restarting listener", socksAddress)
 		restartSocksListener()
-	}
-	if pacHijackChanged {
-		if pacHijackEnabled {
-			if err := ensureHostsEntry(pacHijackHost); err != nil {
-				log.Printf("PAC hijack: cannot update %s: %+v (sudo needed?)", hostsFile, err)
-			}
-		} else {
-			if err := removeHostsEntry(pacHijackHost); err != nil {
-				log.Printf("PAC hijack: cannot update %s: %+v", hostsFile, err)
-			}
-		}
-		restartPacListener()
 	}
 	if forceChromeChanged {
 		if forceChromeEnabled {

@@ -165,14 +165,8 @@ func main() {
 	loadConfigurationOrSetup()
 	relayMgr.Start()
 
-	if configuration.PacHijack {
-		if err := ensureHostsEntry(pacHijackHost()); err != nil {
-			log.Printf("PAC hijack: cannot update %s: %+v (sudo needed?)", hostsFile, err)
-		}
-	}
 	applyChromePolicy()
 	go watchSystemProxy()
-	go servePac()
 	go applySystemProxy()
 
 	go serve()
@@ -236,79 +230,6 @@ func restartListener() {
 	}
 }
 
-var (
-	pacMu             sync.Mutex
-	activePacListener net.Listener
-)
-
-// pacHijackHost returns the hostname to map to 127.0.0.1 in /etc/hosts.
-func pacHijackHost() string {
-	configMu.Lock()
-	host := configuration.PacHijackHost
-	configMu.Unlock()
-	if host == "" {
-		return "wpad"
-	}
-	return host
-}
-
-// pacProxyAddr is the address the generated PAC points browsers at.
-func pacProxyAddr() string {
-	configMu.Lock()
-	address := configuration.Address
-	configMu.Unlock()
-	host, port, err := net.SplitHostPort(address)
-	if err != nil || host == "" || host == "0.0.0.0" || host == "::" {
-		return "127.0.0.1:3128"
-	}
-	return net.JoinHostPort(host, port)
-}
-
-// pacHandler serves the PAC that routes every non-local host to this proxy.
-func pacHandler(w http.ResponseWriter, r *http.Request) {
-	pac := fmt.Sprintf(`function FindProxyForURL(url, host) {
-  if (host == "127.0.0.1" || host == "localhost" || dnsDomainIs(host, ".local")) return "DIRECT";
-  return "PROXY %s";
-}`, pacProxyAddr())
-	w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
-	io.WriteString(w, pac)
-}
-
-// servePac serves the PAC on port 80 (the port the corporate PAC URL uses),
-// so that "http://wpad/wpad.dat" resolves to 127.0.0.1 and returns a PAC that
-// points at this proxy. The VPN's proxy settings are never touched.
-func servePac() {
-	server := &http.Server{
-		Handler:           http.HandlerFunc(pacHandler),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-	for {
-		configMu.Lock()
-		enabled := configuration.PacHijack
-		configMu.Unlock()
-		if !enabled {
-			time.Sleep(3 * time.Second)
-			continue
-		}
-		ln, err := net.Listen("tcp", "127.0.0.1:80")
-		if err != nil {
-			log.Printf("PAC hijack: cannot listen on 127.0.0.1:80: %+v (sudo needed?)", err)
-			time.Sleep(10 * time.Second)
-			continue
-		}
-		pacMu.Lock()
-		activePacListener = ln
-		pacMu.Unlock()
-		log.Printf("PAC hijack: serving http://%s/wpad.dat -> %s", pacHijackHost(), pacProxyAddr())
-		server.Serve(ln)
-		pacMu.Lock()
-		if activePacListener == ln {
-			activePacListener = nil
-		}
-		pacMu.Unlock()
-	}
-}
-
 // watchSystemProxy periodically re-applies the system proxy settings: VPN
 // clients re-apply their own proxy when the tunnel reconnects, so the
 // runtime override must be refreshed. applySystemProxy is idempotent and
@@ -318,17 +239,6 @@ func watchSystemProxy() {
 	defer ticker.Stop()
 	for range ticker.C {
 		applySystemProxy()
-	}
-}
-
-// restartPacListener restarts the PAC listener (e.g. when the PAC hijack
-// setting or the proxy address changes).
-func restartPacListener() {
-	pacMu.Lock()
-	ln := activePacListener
-	pacMu.Unlock()
-	if ln != nil {
-		ln.Close()
 	}
 }
 

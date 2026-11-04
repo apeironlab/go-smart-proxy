@@ -590,20 +590,6 @@ func TestCloseConnectionAPI(t *testing.T) {
 	}
 }
 
-func TestPacHandler(t *testing.T) {
-	resetEnv(t, nil, []ConfigRoute{{Name: "Direct"}})
-	req := httptest.NewRequest("GET", "http://wpad/wpad.dat", nil)
-	w := httptest.NewRecorder()
-	pacHandler(w, req)
-	body := w.Body.String()
-	if !strings.Contains(body, "PROXY 127.0.0.1:3128") {
-		t.Fatalf("unexpected PAC content: %s", body)
-	}
-	if !strings.Contains(body, `host == "127.0.0.1"`) {
-		t.Fatalf("PAC must bypass local hosts: %s", body)
-	}
-}
-
 func startHoldingServer(t *testing.T) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

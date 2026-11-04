@@ -93,8 +93,6 @@ export interface StateInfo {
   forceRoute: string
   systemProxy: boolean
   systemProxyExclude: string[]
-  pacHijack: boolean
-  pacHijackHost: string
   forceChrome: boolean
   uptimeSeconds: number
   activeConns: number
@@ -176,8 +174,6 @@ export const api = {
     hosts: Record<string, string>
     systemProxy: boolean
     systemProxyExclude: string[]
-    pacHijack: boolean
-    pacHijackHost: string
     forceChrome: boolean
   }) => post('/api/config', form),
   finishOnboarding: () => post('/api/onboarding', {}),
