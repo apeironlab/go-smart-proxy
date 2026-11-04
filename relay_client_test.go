@@ -207,7 +207,9 @@ func TestRelayRouteEndToEnd(t *testing.T) {
 	waitFor(t, "contacts", func() bool { return len(alice.Status().Contacts) == 1 && len(bob.Status().Contacts) == 1 })
 
 	// a route through bob: first request needs bob's approval
-	relayMgr = alice
+	relayHub.reset()
+	relayHub.put("default", alice)
+	t.Cleanup(relayHub.reset)
 	chain, err := buildChain([]ConfigHop{{ProxyUrl: "relay://bob@example.com"}})
 	if err != nil {
 		t.Fatal(err)

@@ -84,6 +84,11 @@ func (n NetworkLabel) criteria() netCriteria {
 }
 
 type RelayConfig struct {
+	// Name identifies the relay among the ones this installation is connected
+	// to: lowercase letters, digits, "-" and "_". Hops choose a relay with
+	// relay://contact@example.com?relay=name. The relay migrated from a
+	// single-relay configuration is called "default".
+	Name    string `yaml:"Name,omitempty"`
 	Address string `yaml:"Address"` // host[:port] of the relay (default port 8443)
 	Cert    string `yaml:"Cert"`    // client certificate (its e-mail identifies you)
 	Key     string `yaml:"Key"`
@@ -120,7 +125,12 @@ type RelayConfig struct {
 }
 
 type Configuration struct {
-	Relay              *RelayConfig       `yaml:"Relay,omitempty"`
+	// Relay is the legacy single-relay setting. It is moved into Relays when the
+	// configuration is loaded and not written back.
+	Relay *RelayConfig `yaml:"Relay,omitempty"`
+	// Relays are the relay servers this installation connects to, all at once.
+	// Each has its own identity, address book, approvals and network labels.
+	Relays             []*RelayConfig     `yaml:"Relays,omitempty"`
 	Address            string             `yaml:"Address"`
 	SocksAddress       string             `yaml:"SocksAddress,omitempty"` // optional SOCKS5 listener, empty = disabled
 	Credentials        []ConfigCredential `yaml:"Credentials"`
@@ -261,6 +271,11 @@ func finalizeConfiguration() {
 	}
 	configuration.Hosts = hosts
 
+	if migrateRelayConfigs() {
+		if err := persistConfigurationLocked(); err != nil {
+			log.Printf("WARNING: cannot persist the relay migration: %v", err)
+		}
+	}
 	ensureRelayDevice()
 	enforceRemotePolicy()
 	if migrateRouteUpstreams() {
@@ -289,7 +304,10 @@ func migrateToEncryptedWithPassword(pass string) error {
 	if len(pass) < minPasswordLen {
 		return fmt.Errorf("the master password must be at least %d characters", minPasswordLen)
 	}
-	if cfg := configuration.Relay; cfg != nil && cfg.Address != "" {
+	for _, cfg := range allRelayConfigs() {
+		if cfg.Address == "" {
+			continue
+		}
 		certPEM, keyPEM, err := readRelayPEM(cfg)
 		if err != nil {
 			return fmt.Errorf("relay certificate/key: %w", err)
@@ -348,7 +366,10 @@ func removePlaintextLeftovers() {
 			log.Printf("WARNING: cannot remove %s: %v", path, err)
 		}
 	}
-	if cfg := configuration.Relay; cfg != nil && cfg.KeyPEM != "" && cfg.Key != "" {
+	for _, cfg := range allRelayConfigs() {
+		if cfg.KeyPEM == "" || cfg.Key == "" {
+			continue
+		}
 		if err := os.Remove(cfg.Key); err == nil {
 			log.Printf("Removed plaintext relay key %s (now embedded in %s)", cfg.Key, encryptedConfig)
 		} else if !os.IsNotExist(err) {

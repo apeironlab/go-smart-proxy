@@ -337,5 +337,14 @@
   "This is the saved setting: press Save relay to apply the changes above.": "Questa è l'impostazione salvata: premi Save relay per applicare le modifiche qui sopra.",
   "Used when no entry above holds. Empty = only the VPN yes/no is shared.": "Usata quando nessuna voce qui sopra vale. Vuoto = si condivide solo se c'è una VPN o no.",
   "Your approved contacts can see a name for the network this computer is on and whether a VPN is active, so they and their rules can pick the right exit. Addresses, host names and domains are never shared. The names below belong to this relay: each relay can show its contacts different ones.": "I tuoi contatti approvati vedono un nome per la rete in cui si trova questo computer e se una VPN è attiva, così loro e le loro regole possono scegliere l'uscita giusta. Indirizzi, nomi host e domini non vengono mai condivisi. I nomi qui sotto appartengono a questo relay: ogni relay può mostrare ai propri contatti nomi diversi.",
-  "Your contacts see right now:": "I tuoi contatti vedono adesso:"
+  "Your contacts see right now:": "I tuoi contatti vedono adesso:",
+  "A short name to tell this relay from the others: lowercase letters, digits, - and _. Hops use it as relay://contact@example.com?relay=name.": "Un nome breve per distinguere questo relay dagli altri: lettere minuscole, cifre, - e _. Gli hop lo usano come relay://contatto@example.com?relay=nome.",
+  "Add a relay": "Aggiungi un relay",
+  "Add relay": "Aggiungi relay",
+  "Connect to one more relay server. To get the certificate by e-mail use \"Add relay\" on the Relay page; here you give the address and can paste a certificate afterwards.": "Collegati a un altro server relay. Per ottenere il certificato via e-mail usa \"Aggiungi relay\" nella pagina Relay; qui indichi l'indirizzo e puoi incollare un certificato in seguito.",
+  "Lowercase letters, digits, - and _. Hops use it as relay://contact@example.com?relay=name.": "Lettere minuscole, cifre, - e _. Gli hop lo usano come relay://contatto@example.com?relay=nome.",
+  "No relay is configured yet. Add one here, or use the Relay page to get a certificate by e-mail.": "Nessun relay configurato. Aggiungine uno qui, oppure usa la pagina Relay per ottenere un certificato via e-mail.",
+  "Relay name": "Nome del relay",
+  "Remove relay": "Rimuovi relay",
+  "Remove the relay \"{{name}}\"? Its contacts and approvals on this computer are forgotten; nothing changes on the relay server.": "Rimuovere il relay \"{{name}}\"? Contatti e approvazioni su questo computer vengono dimenticati; sul server del relay non cambia nulla."
 }

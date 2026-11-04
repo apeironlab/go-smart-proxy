@@ -305,32 +305,33 @@ Rules:
     Networks: [10.0.0.0/8, 192.168.1.5]
     Route: office
 
-Relay:
-  Address: 'relay.example.com:8443'
-  # Manual certificate files (legacy) ...
-  Cert: relay/client.pem
-  Key: relay/client-key.pem
-  CA: relay/ca.pem
-  # ... or embedded PEMs (filled by the web UI enrollment)
-  # CertPEM: |
-  #   -----BEGIN CERTIFICATE-----
-  # KeyPEM: |
-  #   -----BEGIN PRIVATE KEY-----
-  # CAPEM: |
-  #   -----BEGIN CERTIFICATE-----
-  Route: ''                    # optional route used to reach the relay
-  Device: quiet-otter-7f3a     # auto-generated per installation
-  EnrollURL: https://proxy.intra.example.com
-  AllowLocal: false            # let contacts reach services on this machine
-  NetworkLabel: elsewhere      # default label shared with contacts (optional)
-  NetworkLabels:               # name the network by what is detected; first match wins
-    - Label: office-vpn
-      VPN: up
-      IFaceUp: utun*
-    - Label: home
-      VPN: down
-      Net: 192.168.1.0/24
-  ShareContext: true           # false = share nothing about the network
+Relays:                        # one entry per relay server; you can connect to several
+  - Name: office                # a short name; hops use ?relay=office
+    Address: 'relay.example.com:8443'
+    # Manual certificate files (legacy) ...
+    Cert: relay/client.pem
+    Key: relay/client-key.pem
+    CA: relay/ca.pem
+    # ... or embedded PEMs (filled by the web UI enrollment)
+    # CertPEM: |
+    #   -----BEGIN CERTIFICATE-----
+    # KeyPEM: |
+    #   -----BEGIN PRIVATE KEY-----
+    # CAPEM: |
+    #   -----BEGIN CERTIFICATE-----
+    Route: ''                    # optional route used to reach the relay
+    Device: quiet-otter-7f3a     # auto-generated per installation
+    EnrollURL: https://proxy.intra.example.com
+    AllowLocal: false            # let contacts reach services on this machine
+    NetworkLabel: elsewhere      # default label shared with contacts (optional)
+    NetworkLabels:               # name the network by what is detected; first match wins
+      - Label: office-vpn
+        VPN: up
+        IFaceUp: utun*
+      - Label: home
+        VPN: down
+        Net: 192.168.1.0/24
+    ShareContext: true           # false = share nothing about the network
 
 SystemProxy: false             # macOS only
 SystemProxyExclude: [utun4]    # macOS network services to leave untouched
@@ -357,7 +358,7 @@ Hosts:
 | `Routes[].Net` | Match when the local network/address matches this IP or CIDR. |
 | `Routes[].Chain` | Ordered upstream hops. An empty chain means a direct connection. |
 | `Routes[].RulesOnly` | Route is never selected or forced manually; only a destination rule can use it. |
-| `Chain[].ProxyUrl` | `http://`, `https://` (CONNECT), `socks5://`, or `relay://email[/device]`. |
+| `Chain[].ProxyUrl` | `http://`, `https://` (CONNECT), `socks5://`, or `relay://email[/device][?relay=name]`. |
 | `Chain[].PacUrl` | PAC file evaluated for each request. A PAC hop must be the only hop of the chain. |
 | `Chain[].Dynamic` | Routing point: evaluates the destination rules and applies the selected route. Must be the last hop. |
 | `Chain[].Credential` | Credential for this proxy/PAC hop. |
@@ -590,8 +591,10 @@ the listener to untrusted networks. A non-exhaustive endpoint list:
 | POST | `/api/force-route` | Force a route or Auto |
 | POST | `/api/pac/refresh` | Refresh a PAC |
 | GET | `/api/connections` | Connection log |
-| GET | `/api/relay` | Relay status, contacts, approvals |
-| GET/POST | `/api/relay/config` | Relay address/route/AllowLocal and manual certificate |
+| GET | `/api/relays` | Status, contacts and approvals of every relay |
+| GET | `/api/relay` | The same for one relay (`?relay=name`, default: the first) |
+| GET | `/api/relays/config` | Configuration of every relay |
+| GET/POST/DELETE | `/api/relay/config` | A relay's address/route/AllowLocal/labels and manual certificate; POST with an unknown `name` adds a relay, DELETE `?relay=name` removes it |
 | POST | `/api/relay/contacts` | Send a contact request |
 | POST | `/api/relay/contacts/respond` | Accept/refuse a contact |
 | POST | `/api/relay/approvals/{id}` | Approve/refuse a route |
@@ -763,6 +766,37 @@ an exit by its network and not only by whether it is online:
 - Contacts running an older version share nothing and show as "network
   unknown". The relay (the `relay` package) must be updated for the context to
   be distributed.
+
+### Several relays at once
+
+The installation can be connected to **several relay servers at the same time**
+(up to 8), for instance the one of your company and the one of a partner.
+Everything is per relay: the certificate and identity, the address book, the
+approvals and the remembered routes, the route used to reach the server and the
+network labels. Your device keeps the same device name on every relay.
+
+- **Configuration**: `Relays` is a list; each entry has a `Name` (lowercase
+  letters, digits, `-` and `_`, at most 30). A single-relay configuration (the
+  old `Relay:` key) is migrated automatically into an entry called `default`,
+  keeping its state file; others keep theirs in `relay_state.<name>.json`.
+- **Web UI**: the Relay and Configuration pages have a relay selector at the
+  top, with a dot for the connection and a counter for what is waiting for you
+  on that relay, plus **Add relay** (enrollment by e-mail from the Relay page, or
+  an address and a pasted certificate from Configuration) and **Remove relay**.
+  The pending-requests banner adds up all of them. API calls name the relay with
+  `?relay=name`; without it the first relay is used.
+- **Hops**: `relay://alice@example.com/device?relay=office` uses the relay called
+  `office`. Without `?relay=` the hop finds the relay that knows the contact
+  (or your own account), so existing routes keep working when you add a second
+  relay. If several relays know the same contact the hop is refused and tells
+  you to add `?relay=name`.
+- **Conditions**: `ExitVPN` and `ExitLabel` of routes and rules look at the
+  exit as it is shared on the relay named by the hop.
+- **Network labels** are part of each relay's configuration, so the same network
+  can carry different names for different groups of contacts.
+- **Limits**: the connection to a relay server never goes through the exit of
+  a contact (of any relay): only the hops before the relay hop are used, as
+  with a single relay. The `?relay=` selector applies to relay hops only.
 
 ### Contact status and link quality
 

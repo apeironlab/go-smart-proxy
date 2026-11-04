@@ -337,5 +337,14 @@
   "This is the saved setting: press Save relay to apply the changes above.": "This is the saved setting: press Save relay to apply the changes above.",
   "Used when no entry above holds. Empty = only the VPN yes/no is shared.": "Used when no entry above holds. Empty = only the VPN yes/no is shared.",
   "Your approved contacts can see a name for the network this computer is on and whether a VPN is active, so they and their rules can pick the right exit. Addresses, host names and domains are never shared. The names below belong to this relay: each relay can show its contacts different ones.": "Your approved contacts can see a name for the network this computer is on and whether a VPN is active, so they and their rules can pick the right exit. Addresses, host names and domains are never shared. The names below belong to this relay: each relay can show its contacts different ones.",
-  "Your contacts see right now:": "Your contacts see right now:"
+  "Your contacts see right now:": "Your contacts see right now:",
+  "A short name to tell this relay from the others: lowercase letters, digits, - and _. Hops use it as relay://contact@example.com?relay=name.": "A short name to tell this relay from the others: lowercase letters, digits, - and _. Hops use it as relay://contact@example.com?relay=name.",
+  "Add a relay": "Add a relay",
+  "Add relay": "Add relay",
+  "Connect to one more relay server. To get the certificate by e-mail use \"Add relay\" on the Relay page; here you give the address and can paste a certificate afterwards.": "Connect to one more relay server. To get the certificate by e-mail use \"Add relay\" on the Relay page; here you give the address and can paste a certificate afterwards.",
+  "Lowercase letters, digits, - and _. Hops use it as relay://contact@example.com?relay=name.": "Lowercase letters, digits, - and _. Hops use it as relay://contact@example.com?relay=name.",
+  "No relay is configured yet. Add one here, or use the Relay page to get a certificate by e-mail.": "No relay is configured yet. Add one here, or use the Relay page to get a certificate by e-mail.",
+  "Relay name": "Relay name",
+  "Remove relay": "Remove relay",
+  "Remove the relay \"{{name}}\"? Its contacts and approvals on this computer are forgotten; nothing changes on the relay server.": "Remove the relay \"{{name}}\"? Its contacts and approvals on this computer are forgotten; nothing changes on the relay server."
 }

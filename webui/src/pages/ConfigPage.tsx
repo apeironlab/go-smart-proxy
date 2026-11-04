@@ -13,6 +13,8 @@ import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import type { Credential, Hop, NetworkLabelRule, RelayConfigInfo, RelayStatus, RouteInfo, StateInfo, SystemProxyState } from '../api'
 import { PageHeader, Section, StatCard } from '../components/ui'
+import { RelaySwitcher } from '../components/relaySwitcher'
+import { useSelectedRelay } from '../relaySelection'
 
 const pacColors: Record<string, string> = {
   none: 'gray',
@@ -69,7 +71,11 @@ const hopKind = (h: HopForm): HopKind =>
 export default function ConfigPage() {
   const { t } = useTranslation()
   const [state, setState] = useState<StateInfo | null>(null)
-  const [relaySt, setRelaySt] = useState<RelayStatus | null>(null)
+  const [relays, setRelays] = useState<RelayStatus[] | null>(null)
+  const relayNames = useMemo(() => (relays ?? []).map((r) => r.name), [relays])
+  const [relayName, selectRelay] = useSelectedRelay(relayNames)
+  const [addRelayOpen, addRelayHandlers] = useDisclosure(false)
+  const [newRelay, setNewRelay] = useState({ name: '', address: '' })
   const [creds, setCreds] = useState<Credential[]>([])
   const [error, setError] = useState<string | null>(null)
   const [address, setAddress] = useState('')
@@ -126,19 +132,27 @@ export default function ConfigPage() {
     }).catch((e) => setError(String(e)))
     api.credentials().then(setCreds).catch(() => {})
     api.systemProxy().then(setSysProxyState).catch(() => {})
-    api.relay().then(setRelaySt).catch(() => {})
-    api.relayConfig().then((rc) => {
+    api.relays().then(setRelays).catch(() => {})
+    api.relayConfig(relayName).then(setRelayCfg).catch(() => {})
+  }, [configLoaded, relayName])
+
+  // The relay form follows the selected relay: it is filled in when the
+  // selection changes, not on every refresh, so edits are not overwritten.
+  useEffect(() => {
+    if (relays === null) return
+    api.relayConfig(relayName).then((rc) => {
       setRelayCfg(rc)
-      if (!configLoaded) {
-        setRelayAddress(rc.address)
-        setRelayRoute(rc.route)
-        setRelayAllowLocal(rc.allowLocal)
-        setRelayLabel(rc.networkLabel ?? '')
-        setRelayLabels(rc.networkLabels ?? [])
-        setRelayShare(rc.shareContext ?? true)
-      }
+      setRelayAddress(rc.address)
+      setRelayRoute(rc.route)
+      setRelayAllowLocal(rc.allowLocal)
+      setRelayLabel(rc.networkLabel ?? '')
+      setRelayLabels(rc.networkLabels ?? [])
+      setRelayShare(rc.shareContext ?? true)
+      setRelayCert('')
+      setRelayKey('')
+      setRelayCA('')
     }).catch(() => {})
-  }, [configLoaded])
+  }, [relayName, relays === null]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     load()
@@ -186,7 +200,7 @@ export default function ConfigPage() {
         keyPem: relayKey,
         caPem: relayCA,
         clearCertificate,
-      })
+      }, relayName || undefined)
       setRelayCfg(info)
       setRelayCert('')
       setRelayKey('')
@@ -331,15 +345,19 @@ export default function ConfigPage() {
         if (h.proxyUrl) add(h.proxyUrl)
       }
     }
-    for (const c of relaySt?.contacts ?? []) {
-      add(`relay://${c.email}`)
-      for (const d of c.devices ?? []) add(`relay://${c.email}/${d}`)
-    }
-    if (relaySt?.email) {
-      for (const d of relaySt.myDevices ?? []) add(`relay://${relaySt.email}/${d.id}`)
+    // With several relays the hop says which one it means.
+    for (const r of relays ?? []) {
+      const q = (relays?.length ?? 0) > 1 ? `?relay=${r.name}` : ''
+      for (const c of r.contacts ?? []) {
+        add(`relay://${c.email}${q}`)
+        for (const d of c.devices ?? []) add(`relay://${c.email}/${d}${q}`)
+      }
+      if (r.email) {
+        for (const d of r.myDevices ?? []) add(`relay://${r.email}/${d.id}${q}`)
+      }
     }
     return out
-  }, [state, relaySt])
+  }, [state, relays])
 
   return (
     <>
@@ -701,13 +719,37 @@ export default function ConfigPage() {
         </Tabs.Panel>
 
         <Tabs.Panel value="relay">
-          <Section
-            title={t('Relay')}
+          <RelaySwitcher
+            relays={(relays ?? []).map((r) => ({ name: r.name, connected: r.connected, pending: r.approvals.length + r.incoming.length }))}
+            selected={relayName} onSelect={selectRelay}
+            onAdd={() => { setNewRelay({ name: relayNames.length ? `relay-${relayNames.length + 1}` : 'default', address: '' }); addRelayHandlers.open() }}
+          />
+          {relays !== null && relays.length === 0 && (
+            <Alert mb="lg" color="gray" variant="light">
+              {t('No relay is configured yet. Add one here, or use the Relay page to get a certificate by e-mail.')}
+            </Alert>
+          )}
+          {(relays?.length ?? 0) > 0 && <Section
+            title={relayName ? `${t('Relay')}: ${relayName}` : t('Relay')}
             description={t('mTLS connection configuration for the relay. To get the certificate by email use the Relay page; here you can also paste a manual certificate.')}
             right={
-              <Badge color={relayCfg?.hasCertificate ? 'green' : 'gray'} variant="light">
-                {relayCfg?.hasCertificate ? t('certificate present') : t('certificate missing')}
-              </Badge>
+              <Group gap="xs" wrap="nowrap">
+                <Badge color={relayCfg?.hasCertificate ? 'green' : 'gray'} variant="light">
+                  {relayCfg?.hasCertificate ? t('certificate present') : t('certificate missing')}
+                </Badge>
+                <Button size="xs" variant="subtle" color="red" leftSection={<IconTrash size={14} />}
+                  onClick={async () => {
+                    if (!window.confirm(t('Remove the relay "{{name}}"? Its contacts and approvals on this computer are forgotten; nothing changes on the relay server.', { name: relayName }))) return
+                    try {
+                      await api.deleteRelay(relayName)
+                      load()
+                    } catch (e) {
+                      setError(String(e))
+                    }
+                  }}>
+                  {t('Remove relay')}
+                </Button>
+              </Group>
             }
           >
         <SimpleGrid cols={{ base: 1, sm: 2 }} mb="sm">
@@ -846,9 +888,39 @@ export default function ConfigPage() {
             </Accordion.Panel>
           </Accordion.Item>
         </Accordion>
-          </Section>
+          </Section>}
         </Tabs.Panel>
       </Tabs>
+
+      <Modal opened={addRelayOpen} onClose={addRelayHandlers.close} title={t('Add a relay')} centered>
+        <Stack gap="sm">
+          <Text size="sm" c="dimmed">
+            {t('Connect to one more relay server. To get the certificate by e-mail use "Add relay" on the Relay page; here you give the address and can paste a certificate afterwards.')}
+          </Text>
+          <TextInput label={t('Relay name')}
+            description={t('Lowercase letters, digits, - and _. Hops use it as relay://contact@example.com?relay=name.')}
+            maxLength={30} value={newRelay.name}
+            onChange={(e) => setNewRelay({ ...newRelay, name: e.currentTarget.value.toLowerCase() })} />
+          <TextInput label={t('mTLS address')} placeholder="relay.example.com:8443"
+            value={newRelay.address} onChange={(e) => setNewRelay({ ...newRelay, address: e.currentTarget.value })} />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={addRelayHandlers.close}>{t('Cancel')}</Button>
+            <Button disabled={!/^[a-z0-9][a-z0-9_-]{0,29}$/.test(newRelay.name) || !newRelay.address.trim() || relayNames.includes(newRelay.name)}
+              onClick={async () => {
+                try {
+                  await api.saveRelayConfig({ address: newRelay.address.trim(), route: '', allowLocal: false, certPem: '', keyPem: '', caPem: '' }, newRelay.name)
+                  addRelayHandlers.close()
+                  selectRelay(newRelay.name)
+                  load()
+                } catch (e) {
+                  setError(String(e))
+                }
+              }}>
+              {t('Add relay')}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
 
       <Modal opened={opened} onClose={close} title={editing ? t('Edit {{name}}', { name: editing.name }) : t('New route')} centered size="xl">
         <Stack gap="sm">

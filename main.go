@@ -163,7 +163,7 @@ func main() {
 	}
 
 	loadConfigurationOrSetup()
-	relayMgr.Start()
+	relayHub.startAll()
 
 	applyChromePolicy()
 	go watchSystemProxy()

@@ -176,6 +176,9 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json()
 }
 
+// Query string naming the relay a call is about.
+const rq = (relay?: string) => (relay ? `?relay=${encodeURIComponent(relay)}` : '')
+
 const post = <T = unknown>(path: string, body: unknown) =>
   req<T>(path, {
     method: 'POST',
@@ -206,22 +209,29 @@ export const api = {
     allowRemoteClients?: boolean
   }) => post('/api/config', form),
   finishOnboarding: () => post('/api/onboarding', {}),
-  relay: () => req<RelayStatus>('/api/relay'),
-  relayConfig: () => req<RelayConfigInfo>('/api/relay/config'),
-  saveRelayConfig: (form: RelayConfigForm) => post<RelayConfigInfo>('/api/relay/config', form),
-  relayEnroll: (address: string, email: string, caPem: string, acceptFingerprint = '') =>
-    post('/api/relay/enroll', { address, email, caPem, acceptFingerprint }),
-  relayEnrollStatus: () => req<{ pending: boolean; email?: string; address?: string; expiresAt?: string }>('/api/relay/enroll'),
+  // Every relay call can name the relay it is about; without a name the first one is used.
+  relay: (relay?: string) => req<RelayStatus>('/api/relay' + rq(relay)),
+  // All relays at once.
+  relays: () => req<RelayStatus[]>('/api/relays'),
+  relayConfig: (relay?: string) => req<RelayConfigInfo>('/api/relay/config' + rq(relay)),
+  relayConfigs: () => req<RelayConfigInfo[]>('/api/relays/config'),
+  // An unknown name adds a relay.
+  saveRelayConfig: (form: RelayConfigForm, relay?: string) =>
+    post<RelayConfigInfo>('/api/relay/config' + rq(relay), { ...form, name: relay ?? '' }),
+  deleteRelay: (relay: string) => req('/api/relay/config' + rq(relay), { method: 'DELETE' }),
+  relayEnroll: (address: string, email: string, caPem: string, acceptFingerprint = '', name = '') =>
+    post('/api/relay/enroll', { name, address, email, caPem, acceptFingerprint }),
+  relayEnrollStatus: () => req<{ pending: boolean; name?: string; email?: string; address?: string; expiresAt?: string }>('/api/relay/enroll'),
   relayConfirm: (code: string) => post('/api/relay/enroll/confirm', { code }),
-  relayRequest: (email: string) => post('/api/relay/contacts', { email }),
+  relayRequest: (email: string, relay?: string) => post('/api/relay/contacts' + rq(relay), { email }),
   // Measures the round trip to the relay (empty email) or to a contact's device.
-  relayPing: (email = '', device = '') => post<PingResult>('/api/relay/ping', { email, device }),
-  relayRespond: (email: string, accept: boolean) => post('/api/relay/contacts/respond', { email, accept }),
-  relayRemove: (email: string) => post('/api/relay/contacts/remove', { email }),
-  relayDecide: (id: number, d: { allow: boolean; always?: boolean; anyPort?: boolean }) =>
-    post(`/api/relay/approvals/${id}`, d),
-  relayDeleteRule: (id: number) => req(`/api/relay/rules/${id}`, { method: 'DELETE' }),
-  relaySetDevice: (device: string) => post('/api/relay/device', { device }),
+  relayPing: (email = '', device = '', relay?: string) => post<PingResult>('/api/relay/ping' + rq(relay), { email, device }),
+  relayRespond: (email: string, accept: boolean, relay?: string) => post('/api/relay/contacts/respond' + rq(relay), { email, accept }),
+  relayRemove: (email: string, relay?: string) => post('/api/relay/contacts/remove' + rq(relay), { email }),
+  relayDecide: (id: number, d: { allow: boolean; always?: boolean; anyPort?: boolean }, relay?: string) =>
+    post(`/api/relay/approvals/${id}` + rq(relay), d),
+  relayDeleteRule: (id: number, relay?: string) => req(`/api/relay/rules/${id}` + rq(relay), { method: 'DELETE' }),
+  relaySetDevice: (device: string, relay?: string) => post('/api/relay/device' + rq(relay), { device }),
   rules: () => req<RoutingRule[]>('/api/rules'),
   saveRules: (r: RoutingRule[]) => post('/api/rules', r),
   testRule: (host: string) => req<RuleTest>(`/api/rules/test?host=${encodeURIComponent(host)}`),
@@ -275,6 +285,7 @@ export interface RelayRule {
 }
 
 export interface RelayStatus {
+  name: string
   enabled: boolean
   connected: boolean
   address: string
@@ -310,6 +321,7 @@ export interface SharedNow {
 }
 
 export interface RelayConfigInfo {
+  name: string
   address: string
   route: string
   allowLocal: boolean

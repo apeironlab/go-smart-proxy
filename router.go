@@ -381,7 +381,7 @@ func discoverNetwork() {
 		resetConnections()
 		go applySystemProxy()
 		// Contacts see whether this device is on a VPN: tell them it changed.
-		go relayMgr.PublishContext()
+		go relayHub.PublishContext()
 	}
 }
 

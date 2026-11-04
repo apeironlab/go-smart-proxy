@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 )
 
 type relayConfigJSON struct {
+	Name           string `json:"name"`
 	Address        string `json:"address"`
 	Route          string `json:"route"`
 	AllowLocal     bool   `json:"allowLocal"`
@@ -46,12 +48,14 @@ func sharedNowFor(cfg *RelayConfig) sharedNowJSON {
 	return sharedNowJSON{Sharing: true, Label: ctx.Label, VPN: ctx.VPN, Rule: matched}
 }
 
-func relayConfigInfoLocked() relayConfigJSON {
-	if configuration.Relay == nil {
+// relayConfigInfoLocked describes one relay's configuration; the caller holds
+// configMu. A nil cfg describes the empty configuration of a relay to add.
+func relayConfigInfoLocked(cfg *RelayConfig) relayConfigJSON {
+	if cfg == nil {
 		return relayConfigJSON{ShareContext: true, NetworkLabels: []NetworkLabel{}, SharedNow: sharedNowJSON{Rule: -1}}
 	}
-	cfg := configuration.Relay
 	return relayConfigJSON{
+		Name:           cfg.Name,
 		Address:        cfg.Address,
 		Route:          cfg.Route,
 		AllowLocal:     cfg.AllowLocal,
@@ -66,18 +70,111 @@ func relayConfigInfoLocked() relayConfigJSON {
 	}
 }
 
+// maxRelays bounds how many relays an installation connects to.
+const maxRelays = 8
+
+// relayQuery is the relay a request is about (?relay=name); empty means the
+// first one.
+func relayQuery(r *http.Request) string {
+	return strings.ToLower(strings.TrimSpace(r.URL.Query().Get("relay")))
+}
+
+// relayFor returns the relay the request is about, or answers 404.
+func relayFor(w http.ResponseWriter, r *http.Request) (*relayClient, bool) {
+	c, ok := relayHub.pick(relayQuery(r))
+	if !ok {
+		writeAPIError(w, http.StatusNotFound, "relay not found")
+		return nil, false
+	}
+	return c, true
+}
+
+// emptyRelayStatus is what the page gets before any relay is configured.
+func emptyRelayStatus() relayStatusJSON {
+	return relayStatusJSON{
+		Contacts: []relay.Contact{}, MyDevices: []relay.DeviceInfo{}, Incoming: []string{}, Outgoing: []string{},
+		Approvals: []*relayApproval{}, Rules: []relayRule{},
+	}
+}
+
 func registerRelayRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/relay", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, relayMgr.Status())
+		if relayQuery(r) == "" && len(relayHub.list()) == 0 {
+			writeJSON(w, emptyRelayStatus())
+			return
+		}
+		if c, ok := relayFor(w, r); ok {
+			writeJSON(w, c.Status())
+		}
+	})
+	// Every configured relay at once: the page shows them side by side and the
+	// header counts what is waiting across all of them.
+	m.HandleFunc("GET /api/relays", func(w http.ResponseWriter, r *http.Request) {
+		out := []relayStatusJSON{}
+		for _, c := range relayHub.list() {
+			out = append(out, c.Status())
+		}
+		writeJSON(w, out)
 	})
 	m.HandleFunc("GET /api/relay/config", func(w http.ResponseWriter, r *http.Request) {
 		configMu.Lock()
-		info := relayConfigInfoLocked()
+		var cfg *RelayConfig
+		if name := relayQuery(r); name != "" {
+			cfg = findRelayConfigLocked(name)
+		} else if len(configuration.Relays) > 0 {
+			cfg = configuration.Relays[0]
+		}
+		info := relayConfigInfoLocked(cfg)
 		configMu.Unlock()
 		writeJSON(w, info)
 	})
+	m.HandleFunc("GET /api/relays/config", func(w http.ResponseWriter, r *http.Request) {
+		configMu.Lock()
+		out := []relayConfigJSON{}
+		for _, cfg := range configuration.Relays {
+			out = append(out, relayConfigInfoLocked(cfg))
+		}
+		configMu.Unlock()
+		writeJSON(w, out)
+	})
+	m.HandleFunc("DELETE /api/relay/config", func(w http.ResponseWriter, r *http.Request) {
+		name := relayQuery(r)
+		if name == "" {
+			writeAPIError(w, http.StatusBadRequest, "name the relay to remove (?relay=name)")
+			return
+		}
+		configMu.Lock()
+		kept := configuration.Relays[:0:0]
+		found := false
+		for _, cfg := range configuration.Relays {
+			if cfg.Name == name {
+				found = true
+				continue
+			}
+			kept = append(kept, cfg)
+		}
+		if !found {
+			configMu.Unlock()
+			writeAPIError(w, http.StatusNotFound, "relay not found")
+			return
+		}
+		configuration.Relays = kept
+		err := persistConfigurationLocked()
+		configMu.Unlock()
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if c := relayHub.get(name); c != nil {
+			file := c.stateFile()
+			relayHub.remove(name)
+			os.Remove(file) // the address book of a relay you left is not kept
+		}
+		writeJSON(w, map[string]string{"status": "ok"})
+	})
 	m.HandleFunc("POST /api/relay/config", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
+			Name             string          `json:"name"`
 			Address          string          `json:"address"`
 			Route            string          `json:"route"`
 			AllowLocal       bool            `json:"allowLocal"`
@@ -145,11 +242,39 @@ func registerRelayRoutes(m *http.ServeMux) {
 			}
 		}
 
-		configMu.Lock()
-		if configuration.Relay == nil {
-			configuration.Relay = &RelayConfig{}
+		// Which relay: the one named in the body or the query, else the first, else
+		// a new one called "default". An unknown name adds a relay.
+		name := strings.ToLower(strings.TrimSpace(body.Name))
+		if name == "" {
+			name = relayQuery(r)
 		}
-		cfg := configuration.Relay
+		configMu.Lock()
+		if name == "" {
+			if len(configuration.Relays) > 0 {
+				name = configuration.Relays[0].Name
+			} else {
+				name = defaultRelayName
+			}
+		}
+		if !validRelayName(name) {
+			configMu.Unlock()
+			writeAPIError(w, http.StatusBadRequest, "invalid relay name (lowercase letters, digits, - and _, at most 30)")
+			return
+		}
+		cfg := findRelayConfigLocked(name)
+		if cfg == nil {
+			if len(configuration.Relays) >= maxRelays {
+				configMu.Unlock()
+				writeAPIError(w, http.StatusBadRequest, "too many relays")
+				return
+			}
+			cfg = &RelayConfig{Name: name}
+			if len(configuration.Relays) > 0 {
+				// your devices keep the same name on every relay
+				cfg.Device = configuration.Relays[0].Device
+			}
+			configuration.Relays = append(configuration.Relays, cfg)
+		}
 		cfg.Address = address
 		cfg.Route = route
 		cfg.AllowLocal = body.AllowLocal
@@ -182,13 +307,13 @@ func registerRelayRoutes(m *http.ServeMux) {
 			}
 		}
 		err := persistConfigurationLocked()
-		info := relayConfigInfoLocked()
+		info := relayConfigInfoLocked(cfg)
 		configMu.Unlock()
 		if err != nil {
 			writeAPIError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		relayMgr.start(cfg)
+		relayHub.apply(cfg)
 		writeJSON(w, info)
 	})
 	m.HandleFunc("POST /api/relay/ping", func(w http.ResponseWriter, r *http.Request) {
@@ -213,7 +338,15 @@ func registerRelayRoutes(m *http.ServeMux) {
 			return
 		}
 		// A failed probe is a result, not a server error: the page shows why.
-		rtt, err := relayMgr.Ping(email, device)
+		if relayQuery(r) == "" && len(relayHub.list()) == 0 {
+			writeJSON(w, map[string]any{"ok": false, "error": "not connected to any relay"})
+			return
+		}
+		c, ok := relayFor(w, r)
+		if !ok {
+			return
+		}
+		rtt, err := c.Ping(email, device)
 		res := map[string]any{"ok": err == nil}
 		if err != nil {
 			res["error"] = err.Error()
@@ -238,7 +371,11 @@ func registerRelayRoutes(m *http.ServeMux) {
 			writeAPIError(w, http.StatusBadRequest, "invalid request")
 			return
 		}
-		if !relayMgr.Decide(id, dec) {
+		c, ok := relayFor(w, r)
+		if !ok {
+			return
+		}
+		if !c.Decide(id, dec) {
 			writeAPIError(w, http.StatusNotFound, "request expired")
 			return
 		}
@@ -250,7 +387,11 @@ func registerRelayRoutes(m *http.ServeMux) {
 			writeAPIError(w, http.StatusBadRequest, "invalid id")
 			return
 		}
-		relayMgr.RemoveRule(id)
+		c, ok := relayFor(w, r)
+		if !ok {
+			return
+		}
+		c.RemoveRule(id)
 		writeJSON(w, map[string]string{"status": "ok"})
 	})
 	m.HandleFunc("POST /api/relay/device", func(w http.ResponseWriter, r *http.Request) {
@@ -266,24 +407,31 @@ func registerRelayRoutes(m *http.ServeMux) {
 			writeAPIError(w, http.StatusBadRequest, "invalid device code")
 			return
 		}
+		c, ok := relayFor(w, r)
+		if !ok {
+			writeAPIError(w, http.StatusBadRequest, "relay not configured")
+			return
+		}
 		configMu.Lock()
-		if configuration.Relay == nil {
+		cfg := findRelayConfigLocked(c.name)
+		if cfg == nil {
 			configMu.Unlock()
 			writeAPIError(w, http.StatusBadRequest, "relay not configured")
 			return
 		}
-		configuration.Relay.Device = device
+		cfg.Device = device
 		err := persistConfigurationLocked()
 		configMu.Unlock()
 		if err != nil {
 			writeAPIError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		relayMgr.SetDevice(device)
+		c.SetDevice(device)
 		writeJSON(w, map[string]string{"status": "ok", "device": device})
 	})
 	m.HandleFunc("POST /api/relay/enroll", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
+			Name              string `json:"name"`
 			Address           string `json:"address"`
 			Email             string `json:"email"`
 			CAPEM             string `json:"caPem"`
@@ -293,7 +441,11 @@ func registerRelayRoutes(m *http.ServeMux) {
 			writeAPIError(w, http.StatusBadRequest, "invalid body")
 			return
 		}
-		if err := relayEnroll(body.Address, body.Email, body.CAPEM, body.AcceptFingerprint); err != nil {
+		name := strings.ToLower(strings.TrimSpace(body.Name))
+		if name == "" {
+			name = relayQuery(r)
+		}
+		if err := relayEnroll(name, body.Address, body.Email, body.CAPEM, body.AcceptFingerprint); err != nil {
 			var untrusted *untrustedCertificateError
 			if errors.As(err, &untrusted) {
 				w.Header().Set("Content-Type", "application/json")
@@ -340,7 +492,11 @@ func relayCommand(w http.ResponseWriter, r *http.Request, typ string) {
 		return
 	}
 	m.T, m.Email = typ, email
-	if err := relayMgr.send(m); err != nil {
+	c, ok := relayFor(w, r)
+	if !ok {
+		return
+	}
+	if err := c.send(m); err != nil {
 		writeAPIError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}

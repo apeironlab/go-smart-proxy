@@ -174,7 +174,7 @@ func exitConditionsMet(rt *ProxyRoute, vpn, label string) (bool, string) {
 	if hop == nil {
 		return false, "the route has no relay hop"
 	}
-	ctxs, why := relayMgr.exitContexts(hop.addr, hop.device)
+	ctxs, why := relayHub.exitContexts(hop.relayName, hop.addr, hop.device)
 	if len(ctxs) == 0 {
 		return false, why
 	}

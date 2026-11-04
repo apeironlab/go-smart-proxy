@@ -34,7 +34,7 @@ export default function App() {
     load()
     const timer = setInterval(load, 5000)
     const loadRelay = () =>
-      api.relay().then((r) => setPending(r.approvals.length + r.incoming.length)).catch(() => {})
+      api.relays().then((all) => setPending(all.reduce((n, r) => n + r.approvals.length + r.incoming.length, 0))).catch(() => {})
     loadRelay()
     const relayTimer = setInterval(loadRelay, 3000)
     return () => {

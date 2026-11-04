@@ -27,6 +27,7 @@ type chainHop struct {
 	scheme    string // "http", "socks5", "relay", "pac" or "dynamic"
 	addr      string // host:port, or the contact e-mail for relay hops, or the PAC URL
 	device    string // relay hops: contact device code (empty = any)
+	relayName string // relay hops: which relay server (empty = the one that knows the contact)
 	user      string
 	password  string
 	cred      string
@@ -105,8 +106,12 @@ func buildChain(cfg []ConfigHop) ([]*chainHop, error) {
 			if !ok {
 				return nil, fmt.Errorf("hop %d: use relay://name@domain/device with a simple device code", i+1)
 			}
+			relayName := strings.ToLower(strings.TrimSpace(u.Query().Get("relay")))
+			if relayName != "" && !validRelayName(relayName) {
+				return nil, fmt.Errorf("hop %d: invalid relay name %q (lowercase letters, digits, - and _)", i+1, relayName)
+			}
 			relayHop = i
-			hops = append(hops, &chainHop{scheme: "relay", addr: email, device: device, rulesOnly: h.RulesOnly})
+			hops = append(hops, &chainHop{scheme: "relay", addr: email, device: device, relayName: relayName, rulesOnly: h.RulesOnly})
 			continue
 		case "socks5", "socks5h":
 			hop.scheme = "socks5"
@@ -276,18 +281,22 @@ func chainLabel(hops []*chainHop) string {
 			continue
 		}
 		addrs[i] = h.addr
-		if h.scheme == "relay" && h.device != "" {
-			addrs[i] += "/" + h.device
+		if h.scheme == "relay" {
+			addrs[i] = relayDisplay(h)
 		}
 	}
 	return strings.Join(addrs, " → ")
 }
 
 func relayDisplay(h *chainHop) string {
+	s := h.addr
 	if h.device != "" {
-		return h.addr + "/" + h.device
+		s += "/" + h.device
 	}
-	return h.addr
+	if h.relayName != "" {
+		s += " @" + h.relayName
+	}
+	return s
 }
 
 // dialChain opens a tunnel to target through every hop of the route, in order.
@@ -327,7 +336,7 @@ func dialChain(route *ProxyRoute, target, host string, rec *ConnInfo) (net.Conn,
 			next = hops[relayIdx+1].addr
 		}
 		rec.event(fmt.Sprintf("hop %d/%d relay via %s -> %s", relayIdx+1, len(hops), relayDisplay(hops[relayIdx]), next))
-		raw, err := relayMgr.Dial(hops[relayIdx].addr, hops[relayIdx].device, next)
+		raw, err := relayHub.Dial(hops[relayIdx].relayName, hops[relayIdx].addr, hops[relayIdx].device, next)
 		if err != nil {
 			return nil, nil, fmt.Errorf("hop %d (relay %s): %w", relayIdx+1, relayDisplay(hops[relayIdx]), err)
 		}

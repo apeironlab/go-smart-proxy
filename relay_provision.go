@@ -27,6 +27,7 @@ import (
 )
 
 type pendingEnrollment struct {
+	Name         string // the relay entry being created or renewed
 	BaseURL      string
 	Email        string
 	Device       string
@@ -269,7 +270,11 @@ func isCertificateError(err error) bool {
 // confirmation code. The private key stays in memory until confirmation.
 // acceptFingerprint is set when the user explicitly accepted an otherwise
 // untrusted server certificate; the connection is then pinned to it.
-func relayEnroll(address, email, serverCAPEM, acceptFingerprint string) error {
+func relayEnroll(name, address, email, serverCAPEM, acceptFingerprint string) error {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name != "" && !validRelayName(name) {
+		return errors.New("nome del relay non valido (minuscole, cifre, - e _)")
+	}
 	email, ok := relay.NormalizeEmail(email)
 	if !ok {
 		return errors.New("indirizzo e-mail non valido")
@@ -292,10 +297,24 @@ func relayEnroll(address, email, serverCAPEM, acceptFingerprint string) error {
 		pin = trust.Fingerprint
 	}
 
+	// The relay being enrolled: the named one (a renewal when it exists, a new
+	// relay otherwise), or the first one, or a new relay called "default".
 	configMu.Lock()
+	if name == "" {
+		if len(configuration.Relays) > 0 {
+			name = configuration.Relays[0].Name
+		} else {
+			name = defaultRelayName
+		}
+	}
 	device := ""
-	if configuration.Relay != nil {
-		device = configuration.Relay.Device
+	if existing := findRelayConfigLocked(name); existing != nil {
+		device = existing.Device
+	} else if len(configuration.Relays) >= maxRelays {
+		configMu.Unlock()
+		return errors.New("troppi relay configurati")
+	} else if len(configuration.Relays) > 0 {
+		device = configuration.Relays[0].Device // same device name on every relay
 	}
 	configMu.Unlock()
 	if device == "" {
@@ -348,6 +367,7 @@ func relayEnroll(address, email, serverCAPEM, acceptFingerprint string) error {
 	enrollMu.Lock()
 	trustPending = nil
 	enrollPending = &pendingEnrollment{
+		Name:         name,
 		BaseURL:      base.String(),
 		Email:        email,
 		Device:       device,
@@ -423,10 +443,11 @@ func relayEnrollConfirm(code string) error {
 	}
 
 	configMu.Lock()
-	if configuration.Relay == nil {
-		configuration.Relay = &RelayConfig{}
+	cfg := findRelayConfigLocked(p.Name)
+	if cfg == nil {
+		cfg = &RelayConfig{Name: p.Name}
+		configuration.Relays = append(configuration.Relays, cfg)
 	}
-	cfg := configuration.Relay
 	cfg.Address = res.RelayAddress
 	cfg.Cert = ""
 	cfg.Key = ""
@@ -455,8 +476,8 @@ func relayEnrollConfirm(code string) error {
 	}
 	enrollMu.Unlock()
 
-	relayMgr.start(cfg)
-	log.Printf("Relay enrollment completed for %s (device %s)", p.Email, p.Device)
+	relayHub.apply(cfg)
+	log.Printf("Relay %q enrollment completed for %s (device %s)", p.Name, p.Email, p.Device)
 	return nil
 }
 
@@ -468,6 +489,7 @@ func enrollPendingInfo() map[string]any {
 	}
 	return map[string]any{
 		"pending":   true,
+		"name":      enrollPending.Name,
 		"email":     enrollPending.Email,
 		"address":   enrollPending.BaseURL,
 		"expiresAt": enrollPending.Expires,

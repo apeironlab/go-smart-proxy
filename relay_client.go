@@ -68,6 +68,8 @@ type relayPersisted struct {
 // relayClient keeps the connection to the relay, the address book and the
 // approvals for routes requested by contacts.
 type relayClient struct {
+	name      string // the relay's name in the configuration
+	stopped   bool
 	mu        sync.Mutex
 	cfg       *RelayConfig
 	sess      *yamux.Session
@@ -88,11 +90,21 @@ type relayClient struct {
 	file      string // persisted state, relayStateFile by default
 }
 
-var relayMgr = &relayClient{approvals: map[int64]*relayApproval{}}
+// stop disconnects the relay and ends its reconnection loop.
+func (r *relayClient) stop() {
+	r.mu.Lock()
+	r.stopped = true
+	sess := r.sess
+	r.mu.Unlock()
+	if sess != nil {
+		sess.Close()
+	}
+}
 
-// Start connects to the relay in the background, if one is configured.
-func (r *relayClient) Start() {
-	r.start(configuration.Relay)
+func (r *relayClient) isStopped() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stopped
 }
 
 func (r *relayClient) start(cfg *RelayConfig) {
@@ -115,11 +127,16 @@ func (r *relayClient) start(cfg *RelayConfig) {
 	}
 }
 
+// stateFile is where the address book and approvals are kept. The relay
+// migrated from a single-relay installation keeps the historical file name.
 func (r *relayClient) stateFile() string {
 	if r.file != "" {
 		return r.file
 	}
-	return relayStateFile
+	if r.name == "" || r.name == defaultRelayName {
+		return relayStateFile
+	}
+	return "relay_state." + r.name + ".json"
 }
 
 func (r *relayClient) loadFile() {
@@ -158,6 +175,9 @@ func (r *relayClient) saveLocked() {
 func (r *relayClient) loop() {
 	backoff := 2 * time.Second
 	for {
+		if r.isStopped() {
+			return
+		}
 		started := time.Now()
 		err := r.connectOnce()
 		r.mu.Lock()
@@ -172,6 +192,9 @@ func (r *relayClient) loop() {
 		r.mu.Unlock()
 		if err != nil {
 			log.Printf("relay: %v", err)
+		}
+		if r.isStopped() {
+			return
 		}
 		if time.Since(started) > 30*time.Second {
 			backoff = 2 * time.Second
@@ -637,7 +660,11 @@ func (r *relayClient) authorize(from, fromDevice, host string, port int) bool {
 	r.approvals[a.ID] = a
 	r.mu.Unlock()
 	log.Printf("relay: waiting for approval of %s/%s -> %s:%d", from, fromDevice, host, port)
-	notifyDesktop("Richiesta di rotta", fmt.Sprintf("%s%s vuole raggiungere %s:%d", from, deviceSuffix(fromDevice), host, port))
+	where := ""
+	if r.name != "" && len(relayHub.list()) > 1 {
+		where = " (relay " + r.name + ")"
+	}
+	notifyDesktop("Richiesta di rotta", fmt.Sprintf("%s%s vuole raggiungere %s:%d%s", from, deviceSuffix(fromDevice), host, port, where))
 
 	var dec relayDecision
 	select {
@@ -688,6 +715,7 @@ func (r *relayClient) RemoveRule(id int64) {
 }
 
 type relayStatusJSON struct {
+	Name      string             `json:"name"`
 	Enabled   bool               `json:"enabled"`
 	Connected bool               `json:"connected"`
 	Address   string             `json:"address"`
@@ -709,6 +737,7 @@ func (r *relayClient) Status() relayStatusJSON {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	st := relayStatusJSON{
+		Name:      r.name,
 		Enabled:   r.cfg != nil,
 		Connected: r.connected,
 		Route:     r.route,

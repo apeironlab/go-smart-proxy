@@ -40,23 +40,37 @@ func randomDeviceID() string {
 		hex.EncodeToString(suffix[:])
 }
 
-// ensureRelayDevice assigns this installation a device code if the relay is
-// configured and the configuration does not have a valid one yet.
+// ensureRelayDevice assigns this installation a device code on every
+// configured relay that does not have a valid one yet. A new relay reuses the
+// code of the first one, so your devices keep the same name everywhere.
 func ensureRelayDevice() {
-	cfg := configuration.Relay
-	if cfg == nil || cfg.Address == "" {
+	changed := false
+	shared := ""
+	for _, cfg := range configuration.Relays {
+		if cfg == nil || cfg.Address == "" {
+			continue
+		}
+		if device, ok := relay.NormalizeDevice(cfg.Device); ok && device != "" {
+			cfg.Device = device
+			if shared == "" {
+				shared = device
+			}
+			continue
+		}
+		if shared == "" {
+			shared = randomDeviceID()
+		}
+		cfg.Device = shared
+		changed = true
+		log.Printf("Relay %q device name: %s", cfg.Name, cfg.Device)
+	}
+	if !changed {
 		return
 	}
-	if device, ok := relay.NormalizeDevice(cfg.Device); ok && device != "" {
-		cfg.Device = device
-		return
-	}
-	cfg.Device = randomDeviceID()
 	configMu.Lock()
 	err := persistConfigurationLocked()
 	configMu.Unlock()
 	if err != nil {
 		log.Printf("WARNING: cannot save the relay device name: %v", err)
 	}
-	log.Printf("Relay device name: %s", cfg.Device)
 }

@@ -118,8 +118,11 @@ func TestLoadEncryptedConfiguration(t *testing.T) {
 	if configuration.OnboardingDone == nil || !*configuration.OnboardingDone {
 		t.Fatal("an existing configuration must skip onboarding")
 	}
-	if configuration.Relay == nil || configuration.Relay.Device == "" {
-		t.Fatal("the relay device code was not generated")
+	if len(configuration.Relays) != 1 || configuration.Relays[0].Device == "" || configuration.Relays[0].Name != "default" {
+		t.Fatalf("the legacy relay must become relay \"default\" with a device code: %+v", configuration.Relays)
+	}
+	if configuration.Relay != nil {
+		t.Fatal("the legacy Relay entry must be moved into Relays")
 	}
 	if _, _, ok := configCrypto(); !ok {
 		t.Fatal("the configuration key was not cached after loading")
@@ -142,8 +145,8 @@ func TestInitialConfig(t *testing.T) {
 	if configuration.Address != "127.0.0.1:3128" || configuration.SocksAddress != "127.0.0.1:1080" {
 		t.Fatalf("unexpected defaults: %+v", configuration)
 	}
-	if configuration.Relay != nil {
-		t.Fatalf("unexpected relay config: %+v", configuration.Relay)
+	if configuration.Relay != nil || len(configuration.Relays) != 0 {
+		t.Fatalf("unexpected relay config: %+v %+v", configuration.Relay, configuration.Relays)
 	}
 	if configuration.OnboardingDone == nil || *configuration.OnboardingDone {
 		t.Fatal("a fresh configuration must require onboarding")

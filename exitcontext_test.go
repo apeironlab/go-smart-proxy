@@ -7,18 +7,15 @@ import (
 	"proxy/relay"
 )
 
-// setRelayState replaces what the relay told us about contacts for a test.
+// setRelayState makes a single relay called "default" with the given address
+// book, as the relay told us.
 func setRelayState(t *testing.T, st relay.State, device string) {
 	t.Helper()
-	relayMgr.mu.Lock()
-	old, oldDev := relayMgr.state, relayMgr.device
-	relayMgr.state, relayMgr.device = st, device
-	relayMgr.mu.Unlock()
-	t.Cleanup(func() {
-		relayMgr.mu.Lock()
-		relayMgr.state, relayMgr.device = old, oldDev
-		relayMgr.mu.Unlock()
-	})
+	c := newRelayClient("default")
+	c.state, c.device = st, device
+	relayHub.reset()
+	relayHub.put("default", c)
+	t.Cleanup(relayHub.reset)
 }
 
 func bobState(ctx map[string]relay.NetContext, online bool, devices ...string) relay.State {
@@ -181,37 +178,35 @@ func TestRuleExitConditionsFallThroughToNextRule(t *testing.T) {
 
 func TestSharedContext(t *testing.T) {
 	yes, no := true, false
+	rm := newRelayClient("default")
 	save := func(rc *RelayConfig, vpn []string) {
 		stateMu.Lock()
 		analysis = netAnalysis{VPN: vpn}
 		stateMu.Unlock()
-		relayMgr.mu.Lock()
-		relayMgr.cfg = rc
-		relayMgr.mu.Unlock()
+		rm.mu.Lock()
+		rm.cfg = rc
+		rm.mu.Unlock()
 	}
 	t.Cleanup(func() {
 		stateMu.Lock()
 		analysis = netAnalysis{}
 		stateMu.Unlock()
-		relayMgr.mu.Lock()
-		relayMgr.cfg = nil
-		relayMgr.mu.Unlock()
 	})
 
 	save(&RelayConfig{NetworkLabel: "office-vpn"}, []string{"utun4"})
-	if c := relayMgr.sharedContext(); c == nil || c.Label != "office-vpn" || !c.VPN {
+	if c := rm.sharedContext(); c == nil || c.Label != "office-vpn" || !c.VPN {
 		t.Fatalf("default is to share label and VPN: %+v", c)
 	}
 	save(&RelayConfig{NetworkLabel: "home"}, nil)
-	if c := relayMgr.sharedContext(); c == nil || c.VPN {
+	if c := rm.sharedContext(); c == nil || c.VPN {
 		t.Fatalf("no VPN: %+v", c)
 	}
 	save(&RelayConfig{NetworkLabel: "secret", ShareContext: &no}, []string{"utun4"})
-	if c := relayMgr.sharedContext(); c != nil {
+	if c := rm.sharedContext(); c != nil {
 		t.Fatalf("sharing off must share nothing: %+v", c)
 	}
 	save(&RelayConfig{ShareContext: &yes}, nil)
-	if c := relayMgr.sharedContext(); c == nil || c.Label != "" {
+	if c := rm.sharedContext(); c == nil || c.Label != "" {
 		t.Fatalf("no label chosen: only the VPN flag goes out: %+v", c)
 	}
 }
@@ -270,29 +265,25 @@ func TestSharedContextFollowsTheNetworkTable(t *testing.T) {
 		analysis = netAnalysis{VPN: vpn, Active: map[string]bool{}}
 		stateMu.Unlock()
 	}
-	relayMgr.mu.Lock()
-	relayMgr.cfg = cfg
-	relayMgr.mu.Unlock()
+	rm := newRelayClient("default")
+	rm.cfg = cfg
 	t.Cleanup(func() {
 		stateMu.Lock()
 		analysis = netAnalysis{}
 		stateMu.Unlock()
-		relayMgr.mu.Lock()
-		relayMgr.cfg = nil
-		relayMgr.mu.Unlock()
 	})
 
 	setNet([]string{"utun4"})
-	if c := relayMgr.sharedContext(); c == nil || c.Label != "office-vpn" || !c.VPN {
+	if c := rm.sharedContext(); c == nil || c.Label != "office-vpn" || !c.VPN {
 		t.Fatalf("on the VPN: %+v", c)
 	}
 	setNet(nil)
-	if c := relayMgr.sharedContext(); c == nil || c.Label != "default" || c.VPN {
+	if c := rm.sharedContext(); c == nil || c.Label != "default" || c.VPN {
 		t.Fatalf("off the VPN: %+v", c)
 	}
 	no := false
 	cfg.ShareContext = &no
-	if c := relayMgr.sharedContext(); c != nil {
+	if c := rm.sharedContext(); c != nil {
 		t.Fatalf("sharing off: %+v", c)
 	}
 }
@@ -329,22 +320,22 @@ func TestValidateNetworkLabels(t *testing.T) {
 func TestRelayConfigInfoShowsWhatIsSharedNow(t *testing.T) {
 	cfg := &RelayConfig{Address: "r.example:8443", NetworkLabel: "default", NetworkLabels: []NetworkLabel{{Label: "office-vpn", VPN: "up"}}}
 	configMu.Lock()
-	old := configuration.Relay
-	configuration.Relay = cfg
+	old := configuration.Relays
+	configuration.Relays = []*RelayConfig{cfg}
 	configMu.Unlock()
 	stateMu.Lock()
 	analysis = netAnalysis{VPN: []string{"utun4"}, Active: map[string]bool{}}
 	stateMu.Unlock()
 	t.Cleanup(func() {
 		configMu.Lock()
-		configuration.Relay = old
+		configuration.Relays = old
 		configMu.Unlock()
 		stateMu.Lock()
 		analysis = netAnalysis{}
 		stateMu.Unlock()
 	})
 	configMu.Lock()
-	info := relayConfigInfoLocked()
+	info := relayConfigInfoLocked(cfg)
 	configMu.Unlock()
 	if !info.SharedNow.Sharing || info.SharedNow.Label != "office-vpn" || !info.SharedNow.VPN || info.SharedNow.Rule != 0 {
 		t.Fatalf("shared now: %+v", info.SharedNow)

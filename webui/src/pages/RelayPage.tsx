@@ -10,13 +10,26 @@ import { Dot, EmptyState, PageHeader, Section } from '../components/ui'
 import { ContextBadges } from '../components/contextBadges'
 import { ProbeBadge, bestProbe, qualityOf } from '../components/linkQuality'
 import type { Probe } from '../components/linkQuality'
+import { RelaySwitcher } from '../components/relaySwitcher'
+import { useSelectedRelay } from '../relaySelection'
+
+// What the page shows before any relay is configured: the enrollment form.
+const NO_RELAY: RelayStatus = {
+  name: '', enabled: false, connected: false, address: '', route: '', email: '', device: '',
+  contacts: [], myDevices: [], incoming: [], outgoing: [], approvals: [], rules: [],
+}
 
 const formatFingerprint = (fp: string) =>
   fp.replace(/(..)(?!$)/g, '$1:').toUpperCase()
 
 export default function RelayPage() {
   const { t, i18n } = useTranslation()
-  const [st, setSt] = useState<RelayStatus | null>(null)
+  const [all, setAll] = useState<RelayStatus[] | null>(null)
+  const names = useMemo(() => (all ?? []).map((r) => r.name), [all])
+  const [relayName, selectRelay] = useSelectedRelay(names)
+  const st: RelayStatus | null = all === null ? null : (all.find((r) => r.name === relayName) ?? NO_RELAY)
+  const [addingNew, setAddingNew] = useState(false)
+  const [enrollName, setEnrollName] = useState('')
   const [email, setEmail] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [deviceOpen, setDeviceOpen] = useState(false)
@@ -38,17 +51,19 @@ export default function RelayPage() {
   const enrollRestored = useRef(false)
 
   const load = useCallback(() => {
-    api.relay().then(setSt).catch((e) => setError(String(e)))
+    api.relays().then(setAll).catch((e) => setError(String(e)))
     api.relayEnrollStatus().then((s) => {
       if (s.pending && s.email && !enrollRestored.current) {
         enrollRestored.current = true
+        setEnrollName(s.name ?? '')
+        if (s.name) selectRelay(s.name)
         setEnrollEmail(s.email)
         setEnrollAddress(s.address ?? '')
         setEnrollPhase('code')
         setShowEnroll(true)
       }
     }).catch(() => {})
-  }, [])
+  }, [selectRelay])
 
   useEffect(() => {
     load()
@@ -67,7 +82,7 @@ export default function RelayPage() {
   }
 
   const saveDevice = async () => {
-    await run(() => api.relaySetDevice(deviceValue.trim()))
+    await run(() => api.relaySetDevice(deviceValue.trim(), relayName))
     setDeviceOpen(false)
   }
 
@@ -75,7 +90,7 @@ export default function RelayPage() {
     setBusy(true)
     try {
       setError(null)
-      await api.relayEnroll(enrollAddress.trim(), enrollEmail.trim(), enrollCA.trim(), acceptFingerprint)
+      await api.relayEnroll(enrollAddress.trim(), enrollEmail.trim(), enrollCA.trim(), acceptFingerprint, enrollName.trim())
       setCertPrompt(null)
       setEnrollPhase('code')
     } catch (e) {
@@ -99,7 +114,9 @@ export default function RelayPage() {
       await api.relayConfirm(enrollCode.trim())
       setEnrollPhase('form')
       setShowEnroll(false)
+      setAddingNew(false)
       setEnrollCode('')
+      if (enrollName.trim()) selectRelay(enrollName.trim())
       load()
     } catch (e) {
       setError(String(e))
@@ -128,15 +145,15 @@ export default function RelayPage() {
   }, [st])
   const targetsKey = JSON.stringify(targets)
   const probe = useCallback(async (email: string, device: string) => {
-    const key = `${email}|${device}`
+    const key = `${relayName}|${email}|${device}`
     setProbes((p) => ({ ...p, [key]: { state: 'pending' } }))
     try {
-      const r = await api.relayPing(email, device)
+      const r = await api.relayPing(email, device, relayName)
       setProbes((p) => ({ ...p, [key]: { state: 'done', ok: r.ok, rttMs: r.rttMs, error: r.error, at: Date.now() } }))
     } catch (e) {
       setProbes((p) => ({ ...p, [key]: { state: 'done', ok: false, error: String(e), at: Date.now() } }))
     }
-  }, [])
+  }, [relayName])
   const probeAll = useCallback(async () => {
     const list: { email: string; device: string }[] = JSON.parse(targetsKey)
     for (let i = 0; i < list.length; i += 3) {
@@ -149,7 +166,7 @@ export default function RelayPage() {
     const timer = setInterval(probeAll, 60000)
     return () => clearInterval(timer)
   }, [targetsKey, probeAll])
-  const probeOf = (email: string, device: string) => probes[`${email}|${device}`]
+  const probeOf = (email: string, device: string) => probes[`${relayName}|${email}|${device}`]
   const ago = (unixSeconds: number) => {
     const rtf = new Intl.RelativeTimeFormat(i18n.language, { numeric: 'auto' })
     const secs = Math.max(0, Math.floor(now / 1000 - unixSeconds))
@@ -165,6 +182,12 @@ export default function RelayPage() {
       <Stack gap={0}>
         <PageHeader icon={IconRouteAltRight} title={t('Relay')}
           description={t('Reach services through the network of your contacts, and let them reach yours, over an authenticated mTLS channel.')} />
+        {names.length > 0 && (
+          <RelaySwitcher
+            relays={(all ?? []).map((r) => ({ name: r.name, connected: r.connected, pending: r.approvals.length + r.incoming.length }))}
+            selected={relayName} onSelect={(n) => { selectRelay(n); setShowEnroll(false); setAddingNew(false) }}
+          />
+        )}
         {error && <Alert color="red" withCloseButton onClose={() => setError(null)} mb="md">{error}</Alert>}
         {enrollPhase === 'form' ? (
           <Section
@@ -172,6 +195,12 @@ export default function RelayPage() {
             description={t('Enter the enrollment endpoint address and your email. The relay will send a confirmation code; the certificate will be created locally and signed by the relay.')}
           >
             <Stack gap="sm">
+              {addingNew && (
+                <TextInput label={t('Relay name')}
+                  description={t('A short name to tell this relay from the others: lowercase letters, digits, - and _. Hops use it as relay://contact@example.com?relay=name.')}
+                  placeholder="partner" maxLength={30}
+                  value={enrollName} onChange={(e) => setEnrollName(e.currentTarget.value.toLowerCase())} />
+              )}
               <TextInput label={t('Relay address (enrollment)')} placeholder="relay.example.com:8444"
                 value={enrollAddress} onChange={(e) => setEnrollAddress(e.currentTarget.value)} />
               <TextInput label={t('Email')} placeholder="nome@dominio.it"
@@ -180,9 +209,9 @@ export default function RelayPage() {
                 description={t('Only needed if the HTTPS enrollment endpoint uses an internal CA. The mTLS relay CA is provided by the relay.')}
                 minRows={3} value={enrollCA} onChange={(e) => setEnrollCA(e.currentTarget.value)} />
               <Group justify="flex-end">
-                {st.enabled && <Button variant="subtle" onClick={() => setShowEnroll(false)}>{t('Cancel')}</Button>}
+                {st.enabled && <Button variant="subtle" onClick={() => { setShowEnroll(false); setAddingNew(false) }}>{t('Cancel')}</Button>}
                 <Button onClick={() => requestEnrollment()} loading={busy}
-                  disabled={!enrollAddress.trim() || !enrollEmail.trim()}>
+                  disabled={!enrollAddress.trim() || !enrollEmail.trim() || (addingNew && !/^[a-z0-9][a-z0-9_-]{0,29}$/.test(enrollName))}>
                   {t('Send request')}
                 </Button>
               </Group>
@@ -276,14 +305,29 @@ export default function RelayPage() {
           <>
             <Button variant="default" disabled={!st.connected} onClick={() => probeAll()}>{t('Test connections')}</Button>
           <Button variant="default" onClick={() => {
+            setEnrollName(st.name)
             setEnrollAddress(st.enrollUrl ?? '')
             setEnrollEmail(st.email ?? '')
+            setAddingNew(false)
             setShowEnroll(true)
           }}>{t('Reconfigure')}</Button>
           </>
         }
       />
 
+      <RelaySwitcher
+        relays={(all ?? []).map((r) => ({ name: r.name, connected: r.connected, pending: r.approvals.length + r.incoming.length }))}
+        selected={relayName} onSelect={selectRelay}
+        onAdd={() => {
+          setEnrollName(`relay-${names.length + 1}`)
+          setEnrollAddress('')
+          setEnrollEmail(st.email ?? '')
+          setEnrollCA('')
+          setEnrollPhase('form')
+          setAddingNew(true)
+          setShowEnroll(true)
+        }}
+      />
       {error && <Alert color="red" withCloseButton onClose={() => setError(null)} mb="md">{error}</Alert>}
       {st.notice && <Alert color="yellow" mb="md">{st.notice}</Alert>}
       {!st.connected && st.error && <Alert color="red" title={t('Relay connection')} mb="md">{st.error}</Alert>}
@@ -300,10 +344,10 @@ export default function RelayPage() {
                   <Table.Td>{e}</Table.Td>
                   <Table.Td>
                     <Group gap="xs" justify="flex-end">
-                      <Button size="xs" leftSection={<IconCheck size={14} />} onClick={() => run(() => api.relayRespond(e, true))}>
+                      <Button size="xs" leftSection={<IconCheck size={14} />} onClick={() => run(() => api.relayRespond(e, true, relayName))}>
                         {t('Accept')}
                       </Button>
-                      <Button size="xs" color="red" variant="light" leftSection={<IconX size={14} />} onClick={() => run(() => api.relayRespond(e, false))}>
+                      <Button size="xs" color="red" variant="light" leftSection={<IconX size={14} />} onClick={() => run(() => api.relayRespond(e, false, relayName))}>
                         {t('Decline')}
                       </Button>
                     </Group>
@@ -365,16 +409,16 @@ export default function RelayPage() {
                   <Table.Td><Code>{a.host}:{a.port}</Code></Table.Td>
                   <Table.Td>
                     <Group gap="xs" justify="flex-end">
-                      <Button size="xs" variant="default" onClick={() => run(() => api.relayDecide(a.id, { allow: true }))}>
+                      <Button size="xs" variant="default" onClick={() => run(() => api.relayDecide(a.id, { allow: true }, relayName))}>
                         {t('Allow once')}
                       </Button>
-                      <Button size="xs" onClick={() => run(() => api.relayDecide(a.id, { allow: true, always: true }))}>
+                      <Button size="xs" onClick={() => run(() => api.relayDecide(a.id, { allow: true, always: true }, relayName))}>
                         {t('Always allow')}
                       </Button>
-                      <Button size="xs" variant="light" onClick={() => run(() => api.relayDecide(a.id, { allow: true, always: true, anyPort: true }))}>
+                      <Button size="xs" variant="light" onClick={() => run(() => api.relayDecide(a.id, { allow: true, always: true, anyPort: true }, relayName))}>
                         {t('Always, all ports')}
                       </Button>
-                      <Button size="xs" color="red" variant="light" onClick={() => run(() => api.relayDecide(a.id, { allow: false }))}>
+                      <Button size="xs" color="red" variant="light" onClick={() => run(() => api.relayDecide(a.id, { allow: false }, relayName))}>
                         {t('Deny')}
                       </Button>
                     </Group>
@@ -392,7 +436,7 @@ export default function RelayPage() {
             onSubmit={(ev) => {
               ev.preventDefault()
               if (!email.trim()) return
-              run(() => api.relayRequest(email.trim())).then(() => setEmail(''))
+              run(() => api.relayRequest(email.trim(), relayName)).then(() => setEmail(''))
             }}
           >
             <Group gap="xs">
@@ -461,7 +505,7 @@ export default function RelayPage() {
                 </Table.Td>
                 <Table.Td>
                   <ActionIcon variant="subtle" color="red" title={t('Remove contact')}
-                    onClick={() => window.confirm(t('Remove {{email}}?', { email: c.email })) && run(() => api.relayRemove(c.email))}>
+                    onClick={() => window.confirm(t('Remove {{email}}?', { email: c.email })) && run(() => api.relayRemove(c.email, relayName))}>
                     <IconTrash size={16} />
                   </ActionIcon>
                 </Table.Td>
@@ -475,7 +519,7 @@ export default function RelayPage() {
                 <Table.Td />
                 <Table.Td />
                 <Table.Td>
-                  <ActionIcon variant="subtle" color="gray" title={t('Cancel request')} onClick={() => run(() => api.relayRemove(e))}>
+                  <ActionIcon variant="subtle" color="gray" title={t('Cancel request')} onClick={() => run(() => api.relayRemove(e, relayName))}>
                     <IconX size={16} />
                   </ActionIcon>
                 </Table.Td>
@@ -510,7 +554,7 @@ export default function RelayPage() {
                 </Table.Td>
                 <Table.Td><Code>{r.host}:{r.port || '*'}</Code></Table.Td>
                 <Table.Td>
-                  <ActionIcon variant="subtle" color="red" title={t('Revoke')} onClick={() => run(() => api.relayDeleteRule(r.id))}>
+                  <ActionIcon variant="subtle" color="red" title={t('Revoke')} onClick={() => run(() => api.relayDeleteRule(r.id, relayName))}>
                     <IconTrash size={16} />
                   </ActionIcon>
                 </Table.Td>
