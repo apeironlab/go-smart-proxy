@@ -2,12 +2,17 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"io"
 	"net"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/hashicorp/yamux"
 
 	"proxy/relay"
 )
@@ -244,5 +249,114 @@ func TestRelayRouteEndToEnd(t *testing.T) {
 	}()
 	if _, _, err := dialChain(route, "10.9.9.9:80", "10.9.9.9", connReg.newConn("tunnel", "", "", "10.9.9.9:80", "", "t", "", "", "")); err == nil {
 		t.Fatal("a denied route must fail")
+	}
+}
+
+func TestHandleIncomingPing(t *testing.T) {
+	c := &relayClient{email: "me@example.com", approvals: map[int64]*relayApproval{},
+		state: relay.State{Contacts: []relay.Contact{{Email: "friend@example.com"}}}}
+	probe := func(from string) relay.DialResp {
+		a, b := net.Pipe()
+		defer a.Close()
+		go c.handleIncoming(b)
+		relay.WriteLine(a, relay.DialReq{T: relay.TPing, From: from})
+		a.SetReadDeadline(time.Now().Add(3 * time.Second))
+		var resp relay.DialResp
+		relay.ReadLine(relay.NewReader(a), &resp)
+		return resp
+	}
+	if r := probe("friend@example.com"); !r.OK {
+		t.Fatalf("a contact's probe must be answered: %+v", r)
+	}
+	if r := probe("me@example.com"); !r.OK {
+		t.Fatalf("our own other device must be answered: %+v", r)
+	}
+	if r := probe("stranger@example.com"); r.OK {
+		t.Fatalf("a stranger's probe must be refused: %+v", r)
+	}
+	if len(c.approvals) != 0 {
+		t.Fatal("a probe must never create an approval request")
+	}
+}
+
+func TestPingMeasuresAndReportsErrors(t *testing.T) {
+	cc, sc := net.Pipe()
+	srv, err := yamux.Server(sc, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli, err := yamux.Client(cc, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cli.Close(); srv.Close() })
+
+	go func() {
+		for {
+			st, err := srv.AcceptStream()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer st.Close()
+				var req relay.DialReq
+				if relay.ReadLine(relay.NewReader(st), &req) != nil || req.T != relay.TPing {
+					return
+				}
+				switch req.Via {
+				case "slow@example.com":
+					time.Sleep(60 * time.Millisecond)
+					relay.WriteLine(st, relay.DialResp{OK: true})
+				case "gone@example.com":
+					relay.WriteLine(st, relay.DialResp{Error: "gone@example.com is offline"})
+				case "mute@example.com":
+					time.Sleep(2 * time.Second)
+				default:
+					relay.WriteLine(st, relay.DialResp{OK: true})
+				}
+			}()
+		}
+	}()
+
+	c := &relayClient{sess: cli}
+	if rtt, err := c.Ping("", ""); err != nil || rtt <= 0 {
+		t.Fatalf("relay ping: %v %v", rtt, err)
+	}
+	if rtt, err := c.Ping("slow@example.com", ""); err != nil || rtt < 60*time.Millisecond || rtt > time.Second {
+		t.Fatalf("slow contact: rtt=%v err=%v", rtt, err)
+	}
+	if _, err := c.Ping("gone@example.com", ""); err == nil || err.Error() != "gone@example.com is offline" {
+		t.Fatalf("offline contact must surface the relay's reason, got %v", err)
+	}
+	old := relayPingTimeout
+	relayPingTimeout = 150 * time.Millisecond
+	defer func() { relayPingTimeout = old }()
+	if _, err := c.Ping("mute@example.com", ""); err == nil {
+		t.Fatal("an unanswered probe must time out")
+	}
+	if _, err := (&relayClient{}).Ping("", ""); err == nil {
+		t.Fatal("without a session the probe must fail cleanly")
+	}
+}
+
+func TestRelayPingAPI(t *testing.T) {
+	post := func(body string) (int, map[string]any) {
+		r := httptest.NewRequest("POST", "/api/relay/ping", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		apiMux.ServeHTTP(w, r)
+		var out map[string]any
+		json.NewDecoder(w.Body).Decode(&out)
+		return w.Code, out
+	}
+	// Not connected: a failed probe is a normal result the page can show.
+	code, out := post(`{"email":"friend@example.com"}`)
+	if code != 200 || out["ok"] != false || out["error"] == "" {
+		t.Fatalf("not connected: %d %v", code, out)
+	}
+	if code, _ := post(`{"email":"not an address"}`); code != 400 {
+		t.Fatalf("invalid e-mail: %d", code)
+	}
+	if code, _ := post(`{"email":"a@example.com","device":"Bad Device!"}`); code != 400 {
+		t.Fatalf("invalid device: %d", code)
 	}
 }

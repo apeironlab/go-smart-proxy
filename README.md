@@ -712,6 +712,30 @@ devices sharing one certificate all authenticate as the same user.
    same user must ask for approval again. Rules can be revoked from the Relay
    page.
 
+### Contact status and link quality
+
+The **Relay** page tells you whether a contact is worth using before you put it
+in a route:
+
+- **Status**: online or offline. For an offline contact the relay remembers when
+  it was last online ("last seen 3 hours ago"); this is kept in the relay state
+  file and survives restarts.
+- **Latency**: every minute while the page is open (and on demand with *Test
+  connections* or the per-device refresh button) the client sends a `ping`
+  probe along the real path: this computer, the relay, the contact's computer
+  and back. Nothing is opened on the other side, no destination is involved and
+  no approval is requested, so probing never bothers the contact. The same
+  probe without a contact measures the link to the relay itself.
+- **Verdict**: *worth using* below 150 ms, *usable* below 400 ms, *slow* above.
+  An online contact that does not answer is shown as *online, not reachable*
+  (for instance when it runs a version that predates probes). The latency is
+  that of the relay path; a real connection also pays the contact's own network.
+
+Only your own devices and your contacts answer a probe, and a stranger cannot
+use it to learn whether someone is online. `POST /api/relay/ping` with
+`{"email": "", "device": ""}` returns `{"ok": true, "rttMs": 11.4}`; an empty
+e-mail probes the relay.
+
 ### Relay server
 
 Build and run the relay:

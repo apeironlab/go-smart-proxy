@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActionIcon, Alert, Badge, Button, Code, Group, Modal, Stack, Table, Text, Textarea, TextInput,
 } from '@mantine/core'
@@ -6,13 +6,15 @@ import { IconCheck, IconPencil, IconPlus, IconRouteAltRight, IconTrash, IconUser
 import { useTranslation } from 'react-i18next'
 import { api, ApiError } from '../api'
 import type { CertificatePrompt, RelayStatus } from '../api'
-import { EmptyState, PageHeader, Section } from '../components/ui'
+import { Dot, EmptyState, PageHeader, Section } from '../components/ui'
+import { ProbeBadge, bestProbe, qualityOf } from '../components/linkQuality'
+import type { Probe } from '../components/linkQuality'
 
 const formatFingerprint = (fp: string) =>
   fp.replace(/(..)(?!$)/g, '$1:').toUpperCase()
 
 export default function RelayPage() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [st, setSt] = useState<RelayStatus | null>(null)
   const [email, setEmail] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -25,6 +27,12 @@ export default function RelayPage() {
   const [enrollPhase, setEnrollPhase] = useState<'form' | 'code'>('form')
   const [showEnroll, setShowEnroll] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [probes, setProbes] = useState<Record<string, Probe>>({})
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30000)
+    return () => clearInterval(timer)
+  }, [])
   const [certPrompt, setCertPrompt] = useState<CertificatePrompt | null>(null)
   const enrollRestored = useRef(false)
 
@@ -97,6 +105,57 @@ export default function RelayPage() {
     } finally {
       setBusy(false)
     }
+  }
+
+  // --- link quality -------------------------------------------------------
+  // Every path worth knowing about: the relay itself, the online devices of
+  // each contact and our other devices. Probing crosses the real path
+  // (this computer -> relay -> contact's computer and back) without opening
+  // anything on the other side.
+  const targets = useMemo(() => {
+    if (!st?.connected) return [] as { email: string; device: string }[]
+    const out = [{ email: '', device: '' }]
+    for (const c of st.contacts) {
+      if (!c.online) continue
+      if (c.devices?.length) c.devices.forEach((d) => out.push({ email: c.email, device: d }))
+      else out.push({ email: c.email, device: '' })
+    }
+    for (const d of st.myDevices ?? []) {
+      if (d.online && d.id !== st.device) out.push({ email: st.email, device: d.id })
+    }
+    return out
+  }, [st])
+  const targetsKey = JSON.stringify(targets)
+  const probe = useCallback(async (email: string, device: string) => {
+    const key = `${email}|${device}`
+    setProbes((p) => ({ ...p, [key]: { state: 'pending' } }))
+    try {
+      const r = await api.relayPing(email, device)
+      setProbes((p) => ({ ...p, [key]: { state: 'done', ok: r.ok, rttMs: r.rttMs, error: r.error, at: Date.now() } }))
+    } catch (e) {
+      setProbes((p) => ({ ...p, [key]: { state: 'done', ok: false, error: String(e), at: Date.now() } }))
+    }
+  }, [])
+  const probeAll = useCallback(async () => {
+    const list: { email: string; device: string }[] = JSON.parse(targetsKey)
+    for (let i = 0; i < list.length; i += 3) {
+      await Promise.all(list.slice(i, i + 3).map((x) => probe(x.email, x.device)))
+    }
+  }, [targetsKey, probe])
+  useEffect(() => {
+    if (targetsKey === '[]') return
+    probeAll()
+    const timer = setInterval(probeAll, 60000)
+    return () => clearInterval(timer)
+  }, [targetsKey, probeAll])
+  const probeOf = (email: string, device: string) => probes[`${email}|${device}`]
+  const ago = (unixSeconds: number) => {
+    const rtf = new Intl.RelativeTimeFormat(i18n.language, { numeric: 'auto' })
+    const secs = Math.max(0, Math.floor(now / 1000 - unixSeconds))
+    if (secs < 60) return rtf.format(0, 'second')
+    if (secs < 3600) return rtf.format(-Math.floor(secs / 60), 'minute')
+    if (secs < 86400) return rtf.format(-Math.floor(secs / 3600), 'hour')
+    return rtf.format(-Math.floor(secs / 86400), 'day')
   }
 
   if (!st) return null
@@ -204,14 +263,23 @@ export default function RelayPage() {
               </Group>
             )}
             {st.connected && st.route && <Badge variant="outline" color="gray" tt="none">{t('via {{route}}', { route: st.route })}</Badge>}
+            {st.connected && (
+              <Group gap={4} wrap="nowrap">
+                <Text size="xs" c="dimmed">{t('relay latency')}</Text>
+                <ProbeBadge probe={probeOf('', '')} onTest={() => probe('', '')} />
+              </Group>
+            )}
           </Group>
         }
         actions={
+          <>
+            <Button variant="default" disabled={!st.connected} onClick={() => probeAll()}>{t('Test connections')}</Button>
           <Button variant="default" onClick={() => {
             setEnrollAddress(st.enrollUrl ?? '')
             setEnrollEmail(st.email ?? '')
             setShowEnroll(true)
           }}>{t('Reconfigure')}</Button>
+          </>
         }
       />
 
@@ -262,6 +330,11 @@ export default function RelayPage() {
                 </Table.Td>
                 <Table.Td>
                   <Code>{st.email ? `relay://${st.email}/${d.id}` : d.id}</Code>
+                </Table.Td>
+                <Table.Td>
+                  {d.id === st.device
+                    ? <Text size="xs" c="dimmed">{t('this computer')}</Text>
+                    : d.online && <ProbeBadge probe={probeOf(st.email, d.id)} onTest={() => probe(st.email, d.id)} />}
                 </Table.Td>
               </Table.Tr>
             ))}
@@ -325,21 +398,57 @@ export default function RelayPage() {
             </Group>
           </form>
         }>
-        <Table.ScrollContainer minWidth={560}>
+        <Table.ScrollContainer minWidth={760}>
         <Table>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>{t('Contact')}</Table.Th>
+              <Table.Th>{t('Status')}</Table.Th>
+              <Table.Th>{t('Is it worth it?')}</Table.Th>
+              <Table.Th>{t('Devices and latency')}</Table.Th>
+              <Table.Th />
+            </Table.Tr>
+          </Table.Thead>
           <Table.Tbody>
-            {st.contacts.map((c) => (
+            {st.contacts.map((c) => {
+              const paths = c.devices?.length ? c.devices : ['']
+              const best = c.online ? bestProbe(paths.map((d) => probeOf(c.email, d))) : null
+              const tested = paths.every((d) => probeOf(c.email, d)?.state === 'done')
+              return (
               <Table.Tr key={c.email}>
-                <Table.Td>{c.email}</Table.Td>
-                <Table.Td><Badge size="sm" variant="light" color={c.online ? 'green' : 'gray'}>{c.online ? t('online') : t('offline')}</Badge></Table.Td>
+                <Table.Td><Text fw={600} size="sm">{c.email}</Text></Table.Td>
                 <Table.Td>
-                  <Group gap={4}>
-                    {(c.devices ?? []).map((d) => (
-                      <Code key={d}>{`relay://${c.email}/${d}`}</Code>
-                    ))}
-                    {!(c.devices ?? []).length && c.online && <Code>{`relay://${c.email}`}</Code>}
-                    {!c.online && <Text size="sm" c="dimmed">-</Text>}
+                  <Group gap={6} wrap="nowrap">
+                    <Dot color={c.online ? 'green' : 'gray'} />
+                    <Text size="sm">{c.online ? t('online') : t('offline')}</Text>
                   </Group>
+                  {!c.online && (
+                    <Text size="xs" c="dimmed">
+                      {c.lastSeen ? t('last seen {{when}}', { when: ago(c.lastSeen) }) : t('never seen online')}
+                    </Text>
+                  )}
+                </Table.Td>
+                <Table.Td>
+                  {!c.online && <Badge size="sm" variant="light" color="gray" tt="none">{t('not available')}</Badge>}
+                  {c.online && best && (
+                    <Badge size="sm" variant="filled" tt="none"
+                      color={qualityOf(best.rttMs) === 'good' ? 'green' : qualityOf(best.rttMs) === 'ok' ? 'yellow' : 'orange'}>
+                      {qualityOf(best.rttMs) === 'good' ? t('worth using') : qualityOf(best.rttMs) === 'ok' ? t('usable') : t('slow')}
+                    </Badge>
+                  )}
+                  {c.online && !best && tested && <Badge size="sm" variant="light" color="red" tt="none">{t('online, not reachable')}</Badge>}
+                  {c.online && !best && !tested && <Text size="xs" c="dimmed">{t('testing...')}</Text>}
+                </Table.Td>
+                <Table.Td>
+                  <Stack gap={4}>
+                    {c.online && paths.map((d) => (
+                      <Group key={d || 'any'} gap="xs" wrap="nowrap">
+                        <Code>{d ? `relay://${c.email}/${d}` : `relay://${c.email}`}</Code>
+                        <ProbeBadge probe={probeOf(c.email, d)} onTest={() => probe(c.email, d)} />
+                      </Group>
+                    ))}
+                    {!c.online && <Text size="sm" c="dimmed">-</Text>}
+                  </Stack>
                 </Table.Td>
                 <Table.Td>
                   <ActionIcon variant="subtle" color="red" title={t('Remove contact')}
@@ -348,11 +457,13 @@ export default function RelayPage() {
                   </ActionIcon>
                 </Table.Td>
               </Table.Tr>
-            ))}
+              )
+            })}
             {st.outgoing.map((e) => (
               <Table.Tr key={e}>
                 <Table.Td>{e}</Table.Td>
                 <Table.Td><Badge size="sm" variant="light" color="yellow">{t('pending')}</Badge></Table.Td>
+                <Table.Td />
                 <Table.Td />
                 <Table.Td>
                   <ActionIcon variant="subtle" color="gray" title={t('Cancel request')} onClick={() => run(() => api.relayRemove(e))}>
@@ -368,6 +479,9 @@ export default function RelayPage() {
           <EmptyState icon={IconUsers} title={t('No contacts')}
             text={t('Send a request to a colleague to route traffic through each other\'s networks.')} />
         )}
+        <Text size="xs" c="dimmed" mt="xs">
+          {t('Latency is measured end to end (this computer, the relay, the contact\'s computer and back) every minute while this page is open, without opening anything on the other side. "Worth using" means below 150 ms; "usable" below 400 ms.')}
+        </Text>
         <Text size="xs" c="dimmed" mt="xs">
           {t("To exit a contact's network, use")} <Code>relay://email/device</Code>{' '}
           {t('as the first proxy in a route chain. With only one device online,')} <Code>relay://email</Code>{' '}

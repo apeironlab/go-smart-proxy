@@ -455,15 +455,71 @@ func (r *relayClient) Dial(email, device, target string) (net.Conn, error) {
 	return &bufConn{Conn: st, br: br}, nil
 }
 
+// relayPingTimeout bounds how long a probe waits for the answer (a variable so
+// tests can shorten it).
+var relayPingTimeout = 8 * time.Second
+
+// Ping measures the round trip to the relay (email empty) or, through the
+// relay, to a device of a contact (or of the user). It crosses the same path a
+// real connection would, but opens nothing on the other side.
+func (r *relayClient) Ping(email, device string) (time.Duration, error) {
+	r.mu.Lock()
+	sess := r.sess
+	r.mu.Unlock()
+	if sess == nil {
+		return 0, errors.New("not connected to the relay")
+	}
+	st, err := sess.OpenStream()
+	if err != nil {
+		return 0, err
+	}
+	defer st.Close()
+	start := time.Now()
+	if err := relay.WriteLine(st, relay.DialReq{T: relay.TPing, Via: email, ViaDevice: device}); err != nil {
+		return 0, err
+	}
+	st.SetReadDeadline(time.Now().Add(relayPingTimeout))
+	var resp relay.DialResp
+	if err := relay.ReadLine(relay.NewReader(st), &resp); err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			return 0, errors.New("no answer in time")
+		}
+		return 0, err
+	}
+	rtt := time.Since(start)
+	if !resp.OK {
+		if resp.Error == "" {
+			resp.Error = "refused"
+		}
+		return 0, errors.New(resp.Error)
+	}
+	return rtt, nil
+}
+
 // handleIncoming serves a contact that asked us to open a connection for it.
 func (r *relayClient) handleIncoming(st net.Conn) {
 	defer st.Close()
 	br := relay.NewReader(st)
 	var req relay.DialReq
-	if err := relay.ReadLine(br, &req); err != nil || req.T != relay.TDial {
+	if err := relay.ReadLine(br, &req); err != nil || (req.T != relay.TDial && req.T != relay.TPing) {
 		return
 	}
 	deny := func(msg string) { relay.WriteLine(st, relay.DialResp{Error: msg}) }
+	if req.T == relay.TPing {
+		// A reachability probe: it carries no destination, opens nothing and
+		// needs no approval. Only the user's own devices and contacts get an
+		// answer.
+		from, ok := relay.NormalizeEmail(req.From)
+		r.mu.Lock()
+		self := r.email
+		r.mu.Unlock()
+		if !ok || (from != self && !r.isContact(from)) {
+			deny("not a contact")
+			return
+		}
+		relay.WriteLine(st, relay.DialResp{OK: true})
+		return
+	}
 
 	from, ok := relay.NormalizeEmail(req.From)
 	if !ok {

@@ -5,6 +5,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"time"
 )
 
 // Store keeps contacts and pending contact requests, persisted as JSON.
@@ -14,18 +15,20 @@ type Store struct {
 	contacts map[string]map[string]bool // email -> set of contact emails (symmetric)
 	pending  map[string]map[string]bool // to -> set of requesters
 	devices  map[string]map[string]bool // email -> set of known device codes
+	lastSeen map[string]int64           // email -> Unix time of the last disconnection
 }
 
 type storeFile struct {
 	Contacts map[string][]string `json:"contacts"`
 	Pending  map[string][]string `json:"pending"`
 	Devices  map[string][]string `json:"devices"`
+	LastSeen map[string]int64    `json:"lastSeen,omitempty"`
 }
 
 func NewStore(path string) (*Store, error) {
 	s := &Store{
 		path: path, contacts: map[string]map[string]bool{}, pending: map[string]map[string]bool{},
-		devices: map[string]map[string]bool{},
+		devices: map[string]map[string]bool{}, lastSeen: map[string]int64{},
 	}
 	if path == "" {
 		return s, nil
@@ -55,6 +58,9 @@ func NewStore(path string) (*Store, error) {
 		for _, d := range v {
 			addTo(s.devices, k, d)
 		}
+	}
+	for k, v := range f.LastSeen {
+		s.lastSeen[k] = v
 	}
 	return s, nil
 }
@@ -90,7 +96,7 @@ func (s *Store) saveLocked() {
 	if s.path == "" {
 		return
 	}
-	f := storeFile{Contacts: map[string][]string{}, Pending: map[string][]string{}, Devices: map[string][]string{}}
+	f := storeFile{Contacts: map[string][]string{}, Pending: map[string][]string{}, Devices: map[string][]string{}, LastSeen: map[string]int64{}}
 	for k, v := range s.contacts {
 		f.Contacts[k] = keys(v)
 	}
@@ -99,6 +105,9 @@ func (s *Store) saveLocked() {
 	}
 	for k, v := range s.devices {
 		f.Devices[k] = keys(v)
+	}
+	for k, v := range s.lastSeen {
+		f.LastSeen[k] = v
 	}
 	b, _ := json.MarshalIndent(f, "", "  ")
 	WriteFileAtomic(s.path, b, 0o600)
@@ -120,6 +129,21 @@ func (s *Store) RememberDevice(email, device string) bool {
 	addTo(s.devices, email, device)
 	s.saveLocked()
 	return true
+}
+
+// Seen records that email was online until now.
+func (s *Store) Seen(email string, t time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastSeen[email] = t.Unix()
+	s.saveLocked()
+}
+
+// LastSeen returns when email was last online (Unix seconds), or 0.
+func (s *Store) LastSeen(email string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastSeen[email]
 }
 
 // Devices returns all known devices of an email, sorted.

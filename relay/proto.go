@@ -19,6 +19,7 @@ import (
 const (
 	TControl        = "control"         // first line on the control stream (client -> relay)
 	TDial           = "dial"            // first line on a dial stream
+	TPing           = "ping"            // first line on a ping stream: reachability and latency probe
 	TState          = "state"           // relay -> client: full state snapshot
 	TContactRequest = "contact_request" // client -> relay
 	TContactRespond = "contact_respond" // client -> relay
@@ -37,6 +38,9 @@ type Contact struct {
 	Email   string   `json:"email"`
 	Online  bool     `json:"online"`
 	Devices []string `json:"devices,omitempty"` // online devices of the contact
+	// LastSeen is when the contact was last online (Unix seconds), set only
+	// while it is offline and was seen at least once.
+	LastSeen int64 `json:"lastSeen,omitempty"`
 }
 
 // DeviceInfo describes one of the user's own devices.

@@ -148,6 +148,7 @@ func (s *Server) unregister(sess *session) {
 	email, device := sess.email, sess.device
 	sess.mu.Unlock()
 	s.Log.Printf("%s/%s disconnected", email, device)
+	s.Store.Seen(email, time.Now())
 	s.notifyPresence(email)
 	s.pushState(email, "")
 }
@@ -224,7 +225,11 @@ func (s *Server) pushStateDevice(email, device, notice string) {
 	st := State{T: TState, Email: email, Incoming: in, Outgoing: out, Notice: notice}
 	for _, c := range contacts {
 		devices := s.onlineDevices(c)
-		st.Contacts = append(st.Contacts, Contact{Email: c, Online: len(devices) > 0, Devices: devices})
+		ct := Contact{Email: c, Online: len(devices) > 0, Devices: devices}
+		if !ct.Online {
+			ct.LastSeen = s.Store.LastSeen(c)
+		}
+		st.Contacts = append(st.Contacts, ct)
 	}
 	ownOnline := map[string]bool{}
 	s.mu.Lock()
@@ -290,6 +295,13 @@ func (s *Server) handleStream(sess *session, st net.Conn) {
 			return
 		}
 		s.handleDial(sess, st, br, req)
+	case TPing:
+		var req DialReq
+		if err := json.Unmarshal(line, &req); err != nil {
+			st.Close()
+			return
+		}
+		s.handlePing(sess, st, req)
 	default:
 		st.Close()
 	}
@@ -363,6 +375,73 @@ func (s *Server) handleControl(sess *session, st net.Conn, br *bufio.Reader, hel
 			s.pushState(e, "")
 		}
 	}
+}
+
+// pingTimeout bounds how long a probe waits for the contact's device.
+const pingTimeout = 6 * time.Second
+
+// handlePing answers a reachability probe. Without Via it only tests the link
+// to the relay; with Via it also crosses to the contact's device and back, so
+// the round trip measured by the caller is the one a real connection pays.
+// A probe carries no destination and never needs the contact's approval.
+func (s *Server) handlePing(sess *session, st net.Conn, req DialReq) {
+	defer st.Close()
+	reply := func(r DialResp) {
+		st.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		WriteLine(st, r)
+	}
+	if strings.TrimSpace(req.Via) == "" {
+		reply(DialResp{OK: true})
+		return
+	}
+	select {
+	case <-sess.ready:
+	case <-time.After(5 * time.Second):
+		reply(DialResp{Error: "control stream not ready"})
+		return
+	}
+	sess.mu.Lock()
+	fromDevice := sess.device
+	sess.mu.Unlock()
+
+	via, ok := NormalizeEmail(req.Via)
+	viaDevice, dok := NormalizeDevice(req.ViaDevice)
+	if !ok || !dok {
+		reply(DialResp{Error: "invalid request"})
+		return
+	}
+	if via != sess.email && !s.Store.IsContact(sess.email, via) {
+		reply(DialResp{Error: via + " is not in your contacts"})
+		return
+	}
+	peer, err := s.peer(via, viaDevice)
+	if err != nil {
+		reply(DialResp{Error: err.Error()})
+		return
+	}
+	if peer == sess {
+		reply(DialResp{Error: "this is the device you are using"})
+		return
+	}
+	ps, err := peer.ys.OpenStream()
+	if err != nil {
+		reply(DialResp{Error: via + " is unreachable"})
+		return
+	}
+	defer ps.Close()
+	if err := WriteLine(ps, DialReq{T: TPing, From: sess.email, FromDevice: fromDevice}); err != nil {
+		reply(DialResp{Error: via + " is unreachable"})
+		return
+	}
+	ps.SetReadDeadline(time.Now().Add(pingTimeout))
+	var resp DialResp
+	if err := ReadLine(NewReader(ps), &resp); err != nil {
+		// Older clients close the stream without understanding the probe: the
+		// device is connected, it just cannot be timed.
+		reply(DialResp{Error: "no answer (the contact may run an older version)"})
+		return
+	}
+	reply(resp)
 }
 
 func validTarget(t string) bool {

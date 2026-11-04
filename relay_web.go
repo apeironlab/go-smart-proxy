@@ -139,6 +139,37 @@ func registerRelayRoutes(m *http.ServeMux) {
 		relayMgr.start(cfg)
 		writeJSON(w, info)
 	})
+	m.HandleFunc("POST /api/relay/ping", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Email  string `json:"email"`
+			Device string `json:"device"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid body")
+			return
+		}
+		email := strings.TrimSpace(body.Email)
+		if email != "" {
+			if _, ok := relay.NormalizeEmail(email); !ok {
+				writeAPIError(w, http.StatusBadRequest, "invalid e-mail address")
+				return
+			}
+		}
+		device, ok := relay.NormalizeDevice(body.Device)
+		if !ok {
+			writeAPIError(w, http.StatusBadRequest, "invalid device")
+			return
+		}
+		// A failed probe is a result, not a server error: the page shows why.
+		rtt, err := relayMgr.Ping(email, device)
+		res := map[string]any{"ok": err == nil}
+		if err != nil {
+			res["error"] = err.Error()
+		} else {
+			res["rttMs"] = float64(rtt.Microseconds()) / 1000
+		}
+		writeJSON(w, res)
+	})
 	m.HandleFunc("POST /api/relay/contacts", func(w http.ResponseWriter, r *http.Request) {
 		relayCommand(w, r, relay.TContactRequest)
 	})

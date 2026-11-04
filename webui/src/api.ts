@@ -210,6 +210,8 @@ export const api = {
   relayEnrollStatus: () => req<{ pending: boolean; email?: string; address?: string; expiresAt?: string }>('/api/relay/enroll'),
   relayConfirm: (code: string) => post('/api/relay/enroll/confirm', { code }),
   relayRequest: (email: string) => post('/api/relay/contacts', { email }),
+  // Measures the round trip to the relay (empty email) or to a contact's device.
+  relayPing: (email = '', device = '') => post<PingResult>('/api/relay/ping', { email, device }),
   relayRespond: (email: string, accept: boolean) => post('/api/relay/contacts/respond', { email, accept }),
   relayRemove: (email: string) => post('/api/relay/contacts/remove', { email }),
   relayDecide: (id: number, d: { allow: boolean; always?: boolean; anyPort?: boolean }) =>
@@ -226,6 +228,14 @@ export interface RelayContact {
   email: string
   online: boolean
   devices?: string[]
+  // Unix seconds of the last time the contact was online (offline contacts only).
+  lastSeen?: number
+}
+
+export interface PingResult {
+  ok: boolean
+  rttMs?: number
+  error?: string
 }
 
 export interface RelayApproval {
