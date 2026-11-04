@@ -277,8 +277,10 @@ Credentials:
 Routes:
   - Name: office
     Gateway: ''                # optional: default gateway IP
-    IFace: utun4               # optional: default interface name
+    IFace: utun4               # optional: default interface name (globs allowed: utun*)
     Net: 10.0.0.0/8            # optional: local network/address
+    IFaceUp: tun*              # optional: apply while a matching interface is in use
+    VPN: up                    # optional: up = only with a VPN, down = only without
     RulesOnly: false           # never selected or forced manually
     Chain:                     # ordered upstream hops
       - ProxyUrl: http://proxy.corp:8080
@@ -338,7 +340,9 @@ Hosts:
 | `Credentials` | Named username/password pairs used by routes and hops. |
 | `Routes` | Ordered route list. `Direct` is always appended last. |
 | `Routes[].Gateway` | Match when the system default gateway is this IP. |
-| `Routes[].IFace` | Match when the default interface has this name. |
+| `Routes[].IFace` | Match when the default interface has this name (comma-separated names or globs such as `utun*`). |
+| `Routes[].IFaceUp` | Match while an interface with this name (or glob) is **in use**: up, with an IPv4 address and carrying routes. Unlike `IFace` it also sees split-tunnel VPNs that leave the default route alone. |
+| `Routes[].VPN` | `up`: match only while a VPN is active; `down`: only while none is. |
 | `Routes[].Net` | Match when the local network/address matches this IP or CIDR. |
 | `Routes[].Chain` | Ordered upstream hops. An empty chain means a direct connection. |
 | `Routes[].RulesOnly` | Route is never selected or forced manually; only a destination rule can use it. |
@@ -370,8 +374,43 @@ For each destination, the route is chosen in this order:
 2. **Destination rules**, in order, only while the selection is **Auto**. The
    first matching rule whose route is applicable on the current network wins.
 3. **Automatic selection**: the first route in configuration order whose
-   `Gateway`, `IFace`, `Net` and PAC (if any) are available.
+   `Gateway`, `IFace`, `IFaceUp`, `VPN`, `Net` and PAC (if any) are available.
 4. **`Direct`** (always last, always applicable).
+
+#### Network and VPN detection
+
+The automatic selection depends on what the proxy sees of the network, and it
+reads the same things on every operating system:
+
+- **Default route and gateway** come from the routing table (`/proc/net/route`
+  on Linux, `netstat -rn -f inet` on macOS and the BSDs, `route print -4` on
+  Windows; only numeric columns are parsed, so the system language does not
+  matter). The real gateway is used, not the local address, so `Gateway`
+  matches on all platforms. Interface-scoped defaults (BSD `I` flag) never
+  decide the default.
+- **An interface is "in use"** when it is up, has a usable IPv4 address (not
+  loopback or link-local) and carries routes. Tunnel interfaces that VPN
+  clients leave behind after disconnecting (typically macOS `utun*` with only
+  an IPv6 link-local address) are therefore ignored.
+- **A VPN is active** when an interface in use is a tunnel: it is point-to-point
+  or its name is typical of VPNs (`utun`, `tun`, `tap`, `ppp`, `wg`, `gpd`,
+  Pulse/Ivanti, AnyConnect, GlobalProtect, FortiClient, OpenVPN, WireGuard,
+  Tailscale, ZeroTier...). Docker, VM, WSL, bridge and similar virtual
+  interfaces are never counted. This works for full-tunnel VPNs (default route
+  through the tunnel) and split-tunnel ones (default route unchanged).
+  Anything the heuristics misjudge can be targeted explicitly with `IFaceUp`.
+- A change in any of this (including a split-tunnel VPN connecting, which does
+  not alter the default route) is treated as a network change: PACs and
+  transports are reset, connections are closed and the system proxy is
+  re-applied. Linux and macOS react to routing events immediately; all systems
+  also poll every 3 seconds, which is the only mechanism on Windows.
+
+The **Network and VPN detection** panel (Configuration → Network) shows the
+interfaces, which one carries the default route, which are in use and which are
+VPNs; the Routes table explains why a route is not applicable.
+
+Limits: only IPv4 routes are considered, and a point-to-point interface that is
+not a VPN (a mobile-modem `ppp0`, for instance) counts as one.
 
 Routes marked `RulesOnly: true` are skipped by automatic selection and cannot be
 forced: they can only be used by a matching destination rule, and do not appear
@@ -1087,7 +1126,7 @@ The Go module is named `proxy`; internal packages are imported as
 | Symptom | What to check |
 |---|---|
 | `PAC not available` | PAC URL reachable directly, cache in `cache/`, route's `Chain[].PacUrl`. |
-| Route never selected | `Gateway`/`IFace`/`Net` values against the Config page network state; `RulesOnly` flags. |
+| Route never selected | `Gateway`/`IFace`/`IFaceUp`/`VPN`/`Net` values against the "Network and VPN detection" panel on the Config page (the Routes table shows why a route is not applicable); `RulesOnly` flags. |
 | Relay does not connect | `Relay.Address`, certificate/CA, `Relay.Route`, proxy logs; re-enroll from the Relay page. |
 | `has multiple devices online: select one` | Use `relay://email/device`; see the device list on the Relay page. |
 | Enrollment returns `403 dominio non abilitato` | The relay's `-allow-domains` must contain the **exact** domain. |

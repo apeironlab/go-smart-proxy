@@ -26,6 +26,14 @@ type ConfigRoute struct {
 	Gateway string `yaml:"Gateway"`
 	IFace   string `yaml:"IFace"`
 	Net     string `yaml:"Net"`
+	// IFaceUp makes the route applicable only while a matching network
+	// interface is in use (up, with an address and carrying routes). Unlike
+	// IFace, which looks at the default route only, it also sees split-tunnel
+	// VPNs that leave the default route alone. Comma-separated names or globs
+	// ("utun4", "tun*", "Pulse*").
+	IFaceUp string `yaml:"IFaceUp,omitempty"`
+	// VPN restricts the route to "up" (a VPN is active) or "down" (none is).
+	VPN string `yaml:"VPN,omitempty"`
 	// PacUrl, ProxyUrl and Credential are legacy route-level upstream fields.
 	// They are migrated to a single hop in Chain when the configuration is
 	// loaded, and the current UI no longer writes them.

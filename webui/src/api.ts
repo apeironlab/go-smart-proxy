@@ -11,6 +11,8 @@ export interface RouteInfo {
   gateway: string
   iface: string
   net: string
+  ifaceUp?: string
+  vpn?: string
   chain?: string[] | null
   hops?: Hop[] | null
   rulesOnly: boolean
@@ -82,6 +84,24 @@ export interface SystemProxyState {
   vpnPacEnabled: boolean
 }
 
+export interface IfaceStatus {
+  name: string
+  up: boolean
+  addrs: string[]
+  vpnLike: boolean
+  routed: boolean
+  default: boolean
+  active: boolean
+  vpn: boolean
+}
+
+export interface VpnState {
+  active: boolean
+  interfaces: string[]
+  defaultIface: string
+  all: IfaceStatus[]
+}
+
 export interface StateInfo {
   address: string
   socksAddress: string
@@ -99,6 +119,7 @@ export interface StateInfo {
   activeConns: number
   routes: RouteInfo[]
   dns: DnsEntry[]
+  vpn: VpnState
 }
 
 export interface RouteForm {
@@ -106,6 +127,8 @@ export interface RouteForm {
   gateway: string
   iface: string
   net: string
+  ifaceUp: string
+  vpn: string
   hops: Hop[]
   rulesOnly: boolean
 }

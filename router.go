@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +30,8 @@ type ProxyRoute struct {
 	gateway   string
 	iface     string
 	net       string
+	ifaceUp   string
+	vpn       string
 	pacUrl    string
 	proxyUrl  string
 	user      string
@@ -67,6 +70,7 @@ var (
 	ifaceNames  map[string]bool
 	networkNets map[string]bool
 	localIPs    []net.IP
+	analysis    netAnalysis
 
 	timer *time.Timer
 )
@@ -78,6 +82,7 @@ type netState struct {
 	ifaceNames  map[string]bool
 	networkNets map[string]bool
 	localIPs    []net.IP
+	analysis    netAnalysis
 }
 
 var pacFetchClient = &http.Client{
@@ -149,8 +154,13 @@ func newProxyRoute(r *ConfigRoute) (*ProxyRoute, error) {
 		gateway:   r.Gateway,
 		iface:     r.IFace,
 		net:       r.Net,
+		ifaceUp:   strings.TrimSpace(r.IFaceUp),
+		vpn:       strings.ToLower(strings.TrimSpace(r.VPN)),
 		rulesOnly: r.RulesOnly,
 		hops:      append([]ConfigHop(nil), r.Chain...),
+	}
+	if p.vpn != "" && p.vpn != "up" && p.vpn != "down" {
+		return nil, fmt.Errorf("invalid VPN %q (use \"up\" or \"down\")", r.VPN)
 	}
 	chain, err := buildChain(r.Chain)
 	if err != nil {
@@ -196,8 +206,8 @@ func loadRoutes() {
 			continue
 		}
 		newRoutes = append(newRoutes, route)
-		log.Printf("Loaded route %q (iface=%q gateway=%q net=%q upstream=%q)",
-			r.Name, route.iface, route.gateway, route.net, configHopsLabel(route.hops))
+		log.Printf("Loaded route %q (iface=%q gateway=%q net=%q ifaceUp=%q vpn=%q upstream=%q)",
+			r.Name, route.iface, route.gateway, route.net, route.ifaceUp, route.vpn, configHopsLabel(route.hops))
 	}
 	newRoutes = append(newRoutes, &ProxyRoute{
 		name: "Direct",
@@ -240,6 +250,7 @@ func getNetState() netState {
 		ifaceNames:  ifaceNames,
 		networkNets: networkNets,
 		localIPs:    localIPs,
+		analysis:    analysis,
 	}
 }
 
@@ -287,7 +298,12 @@ func discoverNetwork() {
 		}
 	}
 
-	log.Printf("Found default gateway (or local IP) %s, default interface %s with net %s", ip.String(), diface.Name, ipnet.String())
+	newAnalysis, aerr := detectNetwork()
+	if aerr != nil {
+		log.Printf("Network detection: %v (VPN state unknown)", aerr)
+	}
+	log.Printf("Found default gateway (or local IP) %s, default interface %s with net %s, VPN: %s",
+		ip.String(), diface.Name, ipnet.String(), vpnLabel(newAnalysis))
 
 	stateMu.Lock()
 	firstRun := defaultGw == nil
@@ -295,6 +311,9 @@ func discoverNetwork() {
 		iface.Name != diface.Name ||
 		network == nil || network.String() != ipnet.String()
 
+	if !changed && analysis.signature() != newAnalysis.signature() {
+		changed = true
+	}
 	if !changed {
 		if len(ifaceNames) != len(newIfaceNames) {
 			changed = true
@@ -328,6 +347,7 @@ func discoverNetwork() {
 		ifaceNames = newIfaceNames
 		networkNets = newNetworkNets
 		localIPs = newLocalIPs
+		analysis = newAnalysis
 	}
 	stateMu.Unlock()
 
@@ -530,8 +550,30 @@ func (p *ProxyRoute) applicable(st netState) (bool, string) {
 	if p.gateway != "" && (st.defaultGw == nil || st.defaultGw.String() != p.gateway) {
 		return false, fmt.Sprintf("gateway %s != %s", st.defaultGw.String(), p.gateway)
 	}
-	if p.iface != "" && st.iface.Name != p.iface {
+	if p.iface != "" && !matchIface(p.iface, st.iface.Name) {
 		return false, fmt.Sprintf("default iface %q != %q", st.iface.Name, p.iface)
+	}
+	if p.ifaceUp != "" {
+		found := false
+		for name := range st.analysis.Active {
+			if matchIface(p.ifaceUp, name) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false, fmt.Sprintf("no active interface matches %q", p.ifaceUp)
+		}
+	}
+	switch p.vpn {
+	case "up":
+		if len(st.analysis.VPN) == 0 {
+			return false, "no VPN is active"
+		}
+	case "down":
+		if len(st.analysis.VPN) > 0 {
+			return false, fmt.Sprintf("a VPN is active (%s)", strings.Join(st.analysis.VPN, ", "))
+		}
 	}
 	if p.net != "" {
 		found := false
@@ -557,6 +599,14 @@ func (p *ProxyRoute) applicable(st netState) (bool, string) {
 		}
 	}
 	return true, ""
+}
+
+// vpnLabel summarizes the VPN detection for logs.
+func vpnLabel(a netAnalysis) string {
+	if len(a.VPN) == 0 {
+		return "none"
+	}
+	return strings.Join(a.VPN, ", ")
 }
 
 func (p *ProxyRoute) isApplicable(st netState) bool {
@@ -600,6 +650,8 @@ func (p *ProxyRoute) info(st netState) routeInfoJSON {
 		Gateway:    p.gateway,
 		IFace:      p.iface,
 		Net:        p.net,
+		IFaceUp:    p.ifaceUp,
+		VPN:        p.vpn,
 		Chain:      chainStrings(p.chain),
 		Hops:       append([]ConfigHop{}, p.hops...),
 		RulesOnly:  p.rulesOnly,

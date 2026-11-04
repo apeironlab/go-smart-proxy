@@ -101,7 +101,7 @@ export default function ConfigPage() {
   const [opened, { open, close }] = useDisclosure(false)
   const [editing, setEditing] = useState<RouteInfo | null>(null)
   const [form, setForm] = useState({
-    name: '', gateway: '', iface: '', net: '',
+    name: '', gateway: '', iface: '', net: '', ifaceUp: '', vpn: '',
     hops: [] as HopForm[], rulesOnly: false,
   })
   const [busy, setBusy] = useState(false)
@@ -200,7 +200,7 @@ export default function ConfigPage() {
 
   const openNew = () => {
     setEditing(null)
-    setForm({ name: '', gateway: '', iface: '', net: '', hops: [], rulesOnly: false })
+    setForm({ name: '', gateway: '', iface: '', net: '', ifaceUp: '', vpn: '', hops: [], rulesOnly: false })
     open()
   }
 
@@ -208,6 +208,7 @@ export default function ConfigPage() {
     setEditing(r)
     setForm({
       name: r.name, gateway: r.gateway, iface: r.iface, net: r.net,
+      ifaceUp: r.ifaceUp ?? '', vpn: r.vpn ?? '',
       hops: (r.hops ?? []).map((h) => ({
         proxyUrl: h.proxyUrl ?? '',
         pacUrl: h.pacUrl ?? '',
@@ -419,6 +420,48 @@ export default function ConfigPage() {
           </Section>
 
           <Section
+            title={t('Network and VPN detection')}
+            description={t('What the proxy sees right now. In Auto mode the first route whose conditions match is used, so these are the facts the conditions are checked against.')}
+            right={
+              <Badge size="lg" variant="light" color={state?.vpn?.active ? 'grape' : 'gray'} tt="none">
+                {state?.vpn?.active ? t('VPN connected: {{names}}', { names: state.vpn.interfaces.join(', ') }) : t('No VPN detected')}
+              </Badge>
+            }
+          >
+            <Table.ScrollContainer minWidth={560}>
+              <Table verticalSpacing="xs">
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>{t('Interface')}</Table.Th>
+                    <Table.Th>{t('Addresses')}</Table.Th>
+                    <Table.Th>{t('State')}</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {(state?.vpn?.all ?? []).filter((i) => i.up).map((i) => (
+                    <Table.Tr key={i.name} style={{ opacity: i.active ? 1 : 0.55 }}>
+                      <Table.Td><Text fw={600} size="sm">{i.name}</Text></Table.Td>
+                      <Table.Td><Text size="xs" c="dimmed" truncate="end" maw={320}>{(i.addrs ?? []).join(', ') || '-'}</Text></Table.Td>
+                      <Table.Td>
+                        <Group gap={4}>
+                          {i.default && <Badge size="xs" color="blue" variant="light" tt="none">{t('default route')}</Badge>}
+                          {i.vpn && <Badge size="xs" color="grape" variant="light" tt="none">VPN</Badge>}
+                          {!i.vpn && i.vpnLike && <Badge size="xs" color="gray" variant="outline" tt="none">{t('tunnel, not in use')}</Badge>}
+                          {i.active && !i.default && !i.vpn && <Badge size="xs" color="teal" variant="light" tt="none">{t('in use')}</Badge>}
+                          {!i.active && <Badge size="xs" color="gray" variant="light" tt="none">{t('inactive')}</Badge>}
+                        </Group>
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Table.ScrollContainer>
+            <Text size="xs" c="dimmed" mt="sm">
+              {t('An interface counts as in use only when it is up, has an IPv4 address and carries routes: tunnels left behind by a disconnected VPN client are ignored.')}
+            </Text>
+          </Section>
+
+          <Section
             title={t('System proxy')}
             description={t('Keep the operating system pointed at this proxy, even when a VPN client rewrites it.')}
           >
@@ -531,9 +574,14 @@ export default function ConfigPage() {
                 <Group gap={6} wrap="nowrap">
                   <Text fw={600}>{r.name}</Text>
                   {r.rulesOnly && <Badge size="xs" variant="light">{t('rules')}</Badge>}
+                  {r.vpn === 'up' && <Badge size="xs" variant="light" color="grape" tt="none">{t('VPN connected')}</Badge>}
+                  {r.vpn === 'down' && <Badge size="xs" variant="light" color="gray" tt="none">{t('No VPN')}</Badge>}
                 </Group>
               </Table.Td>
-              <Table.Td>{r.iface || '-'}</Table.Td>
+              <Table.Td>
+                {r.iface || '-'}
+                {r.ifaceUp && <Text size="xs" c="dimmed">{t('in use')}: {r.ifaceUp}</Text>}
+              </Table.Td>
               <Table.Td>{r.gateway || '-'}</Table.Td>
               <Table.Td>{r.net || '-'}</Table.Td>
               <Table.Td>
@@ -715,6 +763,15 @@ export default function ConfigPage() {
               onChange={(e) => setForm({ ...form, gateway: e.currentTarget.value })} />
             <TextInput label={t('Network (optional)')} placeholder={t('e.g. 192.168.1.0/24')}
               value={form.net} onChange={(e) => setForm({ ...form, net: e.currentTarget.value })} />
+            <Select label={t('VPN state (optional)')}
+              description={t('Use the route only while a VPN is connected, or only while none is.')}
+              placeholder={t('Any')} clearable
+              data={[{ value: 'up', label: t('VPN connected') }, { value: 'down', label: t('No VPN') }]}
+              value={form.vpn || null} onChange={(v) => setForm({ ...form, vpn: v ?? '' })} />
+            <TextInput label={t('Interface in use (optional)')}
+              description={t('Applies while a matching interface is up and carrying traffic, even if it is not the default route. Names or wildcards, comma-separated.')}
+              placeholder="utun4, tun*, Pulse*"
+              value={form.ifaceUp} onChange={(e) => setForm({ ...form, ifaceUp: e.currentTarget.value })} />
           </SimpleGrid>
           <Switch
             label={t('Rules only')}

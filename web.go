@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -108,6 +110,8 @@ type routeInfoJSON struct {
 	Gateway    string      `json:"gateway"`
 	IFace      string      `json:"iface"`
 	Net        string      `json:"net"`
+	IFaceUp    string      `json:"ifaceUp,omitempty"`
+	VPN        string      `json:"vpn,omitempty"`
 	Chain      []string    `json:"chain"`
 	Hops       []ConfigHop `json:"hops"`
 	RulesOnly  bool        `json:"rulesOnly"`
@@ -115,6 +119,15 @@ type routeInfoJSON struct {
 	WhyNot     string      `json:"whyNot,omitempty"`
 	PacStatus  string      `json:"pacStatus"`
 	PacError   string      `json:"pacError,omitempty"`
+}
+
+// vpnStateJSON describes what the network detection currently sees, so the UI
+// can explain why a route was or was not chosen.
+type vpnStateJSON struct {
+	Active       bool          `json:"active"`
+	Interfaces   []string      `json:"interfaces"`
+	DefaultIface string        `json:"defaultIface"`
+	All          []ifaceStatus `json:"all"`
 }
 
 type dnsEntryJSON struct {
@@ -138,6 +151,7 @@ type stateJSON struct {
 	UptimeSeconds      int64             `json:"uptimeSeconds"`
 	ActiveConns        int               `json:"activeConns"`
 	Routes             []routeInfoJSON   `json:"routes"`
+	VPN                vpnStateJSON      `json:"vpn"`
 	DNS                []dnsEntryJSON    `json:"dns"`
 }
 
@@ -162,12 +176,18 @@ func apiState(w http.ResponseWriter, r *http.Request) {
 	hostsMu.RUnlock()
 
 	state := stateJSON{
-		Address:            address,
-		SocksAddress:       socksAddress,
-		Onboarding:         onboarding,
-		Iface:              st.iface.Name,
-		Gateway:            fmt.Sprintf("%v", st.defaultGw),
-		Network:            netString(st.network),
+		Address:      address,
+		SocksAddress: socksAddress,
+		Onboarding:   onboarding,
+		Iface:        st.iface.Name,
+		Gateway:      fmt.Sprintf("%v", st.defaultGw),
+		Network:      netString(st.network),
+		VPN: vpnStateJSON{
+			Active:       len(st.analysis.VPN) > 0,
+			Interfaces:   append([]string{}, st.analysis.VPN...),
+			DefaultIface: st.analysis.DefaultIface,
+			All:          append([]ifaceStatus{}, st.analysis.Ifaces...),
+		},
 		SystemProxy:        systemProxy,
 		SystemProxyExclude: systemProxyExclude,
 		ForceChrome:        forceChrome,
@@ -220,6 +240,8 @@ type routeFormJSON struct {
 	Gateway   string      `json:"gateway"`
 	IFace     string      `json:"iface"`
 	Net       string      `json:"net"`
+	IFaceUp   string      `json:"ifaceUp"`
+	VPN       string      `json:"vpn"`
 	Hops      []ConfigHop `json:"hops"`
 	RulesOnly bool        `json:"rulesOnly"`
 }
@@ -247,6 +269,16 @@ func apiSaveRoute(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if v := strings.ToLower(strings.TrimSpace(form.VPN)); v != "" && v != "up" && v != "down" {
+		writeAPIError(w, http.StatusBadRequest, `vpn must be empty, "up" or "down"`)
+		return
+	}
+	for _, pat := range strings.Split(form.IFaceUp+","+form.IFace, ",") {
+		if _, err := path.Match(strings.ToLower(strings.TrimSpace(pat)), ""); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid interface pattern "+strconv.Quote(strings.TrimSpace(pat)))
+			return
+		}
+	}
 
 	configMu.Lock()
 	route := ConfigRoute{
@@ -255,6 +287,8 @@ func apiSaveRoute(w http.ResponseWriter, r *http.Request) {
 		Gateway:   form.Gateway,
 		IFace:     form.IFace,
 		Net:       form.Net,
+		IFaceUp:   strings.TrimSpace(form.IFaceUp),
+		VPN:       strings.ToLower(strings.TrimSpace(form.VPN)),
 		RulesOnly: form.RulesOnly,
 	}
 	found := false
