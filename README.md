@@ -322,7 +322,14 @@ Relay:
   Device: quiet-otter-7f3a     # auto-generated per installation
   EnrollURL: https://proxy.intra.example.com
   AllowLocal: false            # let contacts reach services on this machine
-  NetworkLabel: office-vpn     # name of this network, shared with contacts (optional)
+  NetworkLabel: elsewhere      # default label shared with contacts (optional)
+  NetworkLabels:               # name the network by what is detected; first match wins
+    - Label: office-vpn
+      VPN: up
+      IFaceUp: utun*
+    - Label: home
+      VPN: down
+      Net: 192.168.1.0/24
   ShareContext: true           # false = share nothing about the network
 
 SystemProxy: false             # macOS only
@@ -722,11 +729,23 @@ devices sharing one certificate all authenticate as the same user.
 A contact device can tell its approved contacts where it is, so you can choose
 an exit by its network and not only by whether it is online:
 
-- **What is shared** (and nothing else): a **label** you choose for the network
-  (`NetworkLabel`, at most 40 characters, for instance `office-vpn`) and
+- **What is shared** (and nothing else): a **label** that names the network and
   whether a **VPN is active** on that device, detected as described above. No
   addresses, host names or domains leave the machine. `ShareContext: false`
-  shares nothing at all. Both are set in Configuration → Relay.
+  shares nothing at all.
+- **Labels by network** (Configuration → Relay): the label is not a fixed word
+  but follows what the device detects. `NetworkLabels` is an ordered table; the
+  first entry whose conditions all hold names the network, and `NetworkLabel`
+  (at most 40 characters) is the default when none does. An entry has a `Label`
+  and at least one of `VPN` (`up`/`down`), `IFaceUp` (an interface in use, names
+  or globs), `IFace` (the default interface), `Net` (a local network, CIDR) and
+  `Gateway`: the same conditions routes use. The page shows what contacts see
+  right now and which entry matched, and the label is republished whenever the
+  network changes.
+- **Per relay**: the table is part of the relay's own configuration, so each
+  relay shows its contacts the labels you set for it. Today there is one relay;
+  when several can be connected, each will carry its own table and the same
+  network can be named differently for different groups of contacts.
 - **Who sees it**: only your approved contacts and your own devices, never
   strangers. It is pushed again whenever the device's network changes, for
   instance when it connects to a VPN.

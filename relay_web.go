@@ -22,13 +22,33 @@ type relayConfigJSON struct {
 	HasCA          bool   `json:"hasCA"`
 	// NetworkLabel and ShareContext control what contacts learn about the
 	// network this device is on (a label you choose and whether a VPN is up).
-	NetworkLabel string `json:"networkLabel"`
-	ShareContext bool   `json:"shareContext"`
+	NetworkLabel  string         `json:"networkLabel"`
+	NetworkLabels []NetworkLabel `json:"networkLabels"`
+	ShareContext  bool           `json:"shareContext"`
+	// SharedNow is what contacts see at this moment, to check the table.
+	SharedNow sharedNowJSON `json:"sharedNow"`
+}
+
+type sharedNowJSON struct {
+	Sharing bool   `json:"sharing"`
+	Label   string `json:"label"`
+	VPN     bool   `json:"vpn"`
+	// Rule is the index of the matching NetworkLabels entry, or -1 when the
+	// default label applies.
+	Rule int `json:"rule"`
+}
+
+func sharedNowFor(cfg *RelayConfig) sharedNowJSON {
+	ctx, matched := sharedContextFor(cfg)
+	if ctx == nil {
+		return sharedNowJSON{Rule: -1}
+	}
+	return sharedNowJSON{Sharing: true, Label: ctx.Label, VPN: ctx.VPN, Rule: matched}
 }
 
 func relayConfigInfoLocked() relayConfigJSON {
 	if configuration.Relay == nil {
-		return relayConfigJSON{ShareContext: true}
+		return relayConfigJSON{ShareContext: true, NetworkLabels: []NetworkLabel{}, SharedNow: sharedNowJSON{Rule: -1}}
 	}
 	cfg := configuration.Relay
 	return relayConfigJSON{
@@ -36,7 +56,9 @@ func relayConfigInfoLocked() relayConfigJSON {
 		Route:          cfg.Route,
 		AllowLocal:     cfg.AllowLocal,
 		NetworkLabel:   cfg.NetworkLabel,
+		NetworkLabels:  append([]NetworkLabel{}, cfg.NetworkLabels...),
 		ShareContext:   cfg.ShareContext == nil || *cfg.ShareContext,
+		SharedNow:      sharedNowFor(cfg),
 		Device:         cfg.Device,
 		EnrollURL:      cfg.EnrollURL,
 		HasCertificate: cfg.CertPEM != "" || (cfg.Cert != "" && cfg.Key != ""),
@@ -56,15 +78,16 @@ func registerRelayRoutes(m *http.ServeMux) {
 	})
 	m.HandleFunc("POST /api/relay/config", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Address          string  `json:"address"`
-			Route            string  `json:"route"`
-			AllowLocal       bool    `json:"allowLocal"`
-			CertPEM          string  `json:"certPem"`
-			KeyPEM           string  `json:"keyPem"`
-			CAPEM            string  `json:"caPem"`
-			ClearCertificate bool    `json:"clearCertificate"`
-			NetworkLabel     *string `json:"networkLabel"`
-			ShareContext     *bool   `json:"shareContext"`
+			Address          string          `json:"address"`
+			Route            string          `json:"route"`
+			AllowLocal       bool            `json:"allowLocal"`
+			CertPEM          string          `json:"certPem"`
+			KeyPEM           string          `json:"keyPem"`
+			CAPEM            string          `json:"caPem"`
+			ClearCertificate bool            `json:"clearCertificate"`
+			NetworkLabel     *string         `json:"networkLabel"`
+			NetworkLabels    *[]NetworkLabel `json:"networkLabels"`
+			ShareContext     *bool           `json:"shareContext"`
 		}
 		if err := readJSON(r, &body); err != nil {
 			writeAPIError(w, http.StatusBadRequest, "invalid body")
@@ -113,6 +136,15 @@ func registerRelayRoutes(m *http.ServeMux) {
 			}
 		}
 
+		var labels []NetworkLabel
+		if body.NetworkLabels != nil {
+			var err error
+			if labels, err = validateNetworkLabels(*body.NetworkLabels); err != nil {
+				writeAPIError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+
 		configMu.Lock()
 		if configuration.Relay == nil {
 			configuration.Relay = &RelayConfig{}
@@ -125,6 +157,9 @@ func registerRelayRoutes(m *http.ServeMux) {
 			if sc := relay.SanitizeContext(&relay.NetContext{Label: *body.NetworkLabel}); sc != nil {
 				cfg.NetworkLabel = sc.Label
 			}
+		}
+		if body.NetworkLabels != nil {
+			cfg.NetworkLabels = labels
 		}
 		if body.ShareContext != nil {
 			share := *body.ShareContext

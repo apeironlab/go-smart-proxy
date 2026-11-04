@@ -323,5 +323,19 @@
   "no VPN": "nessuna VPN",
   "not on a VPN": "non su VPN",
   "on a VPN": "su VPN",
-  "only if the exit is": "solo se l'uscita è"
+  "only if the exit is": "solo se l'uscita è",
+  "(default label)": "(etichetta predefinita)",
+  "(entry {{n}} of the table)": "(voce {{n}} della tabella)",
+  "Add label": "Aggiungi etichetta",
+  "Default label": "Etichetta predefinita",
+  "Interface in use": "Interfaccia in uso",
+  "Label": "Etichetta",
+  "Labels by network": "Etichette per rete",
+  "No labels by network yet: only the default label is shared.": "Ancora nessuna etichetta per rete: si condivide solo quella predefinita.",
+  "Nothing is shared with your contacts.": "Non viene condiviso nulla con i tuoi contatti.",
+  "The first entry whose conditions all hold names the network. When none holds, the default label below is used.": "La prima voce le cui condizioni valgono tutte dà il nome alla rete. Se nessuna vale, si usa l'etichetta predefinita qui sotto.",
+  "This is the saved setting: press Save relay to apply the changes above.": "Questa è l'impostazione salvata: premi Save relay per applicare le modifiche qui sopra.",
+  "Used when no entry above holds. Empty = only the VPN yes/no is shared.": "Usata quando nessuna voce qui sopra vale. Vuoto = si condivide solo se c'è una VPN o no.",
+  "Your approved contacts can see a name for the network this computer is on and whether a VPN is active, so they and their rules can pick the right exit. Addresses, host names and domains are never shared. The names below belong to this relay: each relay can show its contacts different ones.": "I tuoi contatti approvati vedono un nome per la rete in cui si trova questo computer e se una VPN è attiva, così loro e le loro regole possono scegliere l'uscita giusta. Indirizzi, nomi host e domini non vengono mai condivisi. I nomi qui sotto appartengono a questo relay: ogni relay può mostrare ai propri contatti nomi diversi.",
+  "Your contacts see right now:": "I tuoi contatti vedono adesso:"
 }

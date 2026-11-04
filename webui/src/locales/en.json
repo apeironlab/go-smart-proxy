@@ -323,5 +323,19 @@
   "no VPN": "no VPN",
   "not on a VPN": "not on a VPN",
   "on a VPN": "on a VPN",
-  "only if the exit is": "only if the exit is"
+  "only if the exit is": "only if the exit is",
+  "(default label)": "(default label)",
+  "(entry {{n}} of the table)": "(entry {{n}} of the table)",
+  "Add label": "Add label",
+  "Default label": "Default label",
+  "Interface in use": "Interface in use",
+  "Label": "Label",
+  "Labels by network": "Labels by network",
+  "No labels by network yet: only the default label is shared.": "No labels by network yet: only the default label is shared.",
+  "Nothing is shared with your contacts.": "Nothing is shared with your contacts.",
+  "The first entry whose conditions all hold names the network. When none holds, the default label below is used.": "The first entry whose conditions all hold names the network. When none holds, the default label below is used.",
+  "This is the saved setting: press Save relay to apply the changes above.": "This is the saved setting: press Save relay to apply the changes above.",
+  "Used when no entry above holds. Empty = only the VPN yes/no is shared.": "Used when no entry above holds. Empty = only the VPN yes/no is shared.",
+  "Your approved contacts can see a name for the network this computer is on and whether a VPN is active, so they and their rules can pick the right exit. Addresses, host names and domains are never shared. The names below belong to this relay: each relay can show its contacts different ones.": "Your approved contacts can see a name for the network this computer is on and whether a VPN is active, so they and their rules can pick the right exit. Addresses, host names and domains are never shared. The names below belong to this relay: each relay can show its contacts different ones.",
+  "Your contacts see right now:": "Your contacts see right now:"
 }

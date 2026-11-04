@@ -13,28 +13,68 @@ import (
 // destination rule can require that the exit of the route's relay hop is on a
 // VPN, or carries a given label.
 
-// sharedContext is the context this device tells its contacts, or nil when the
-// user turned sharing off. Only a label and a VPN yes/no ever leave the
-// machine: no addresses, no host names, no domains.
-func (r *relayClient) sharedContext() *relay.NetContext {
-	configMu.Lock()
-	cfg := r.cfg
-	var label string
-	share := true
-	if cfg != nil {
-		label = cfg.NetworkLabel
-		if cfg.ShareContext != nil {
-			share = *cfg.ShareContext
+// labelForNetwork picks the label shared with a relay's contacts: the first
+// NetworkLabels entry whose conditions hold on the current network, otherwise
+// the default NetworkLabel. matched is the index of the entry, or -1.
+func labelForNetwork(cfg *RelayConfig, st netState) (label string, matched int) {
+	for i, nl := range cfg.NetworkLabels {
+		c := nl.criteria()
+		if c.isEmpty() || strings.TrimSpace(nl.Label) == "" {
+			continue
+		}
+		if ok, _ := c.match(st); ok {
+			return nl.Label, i
 		}
 	}
-	configMu.Unlock()
-	if !share {
-		return nil
+	return cfg.NetworkLabel, -1
+}
+
+// sharedContextFor builds the context to share with a relay's contacts: nil
+// when the user turned sharing off. Only a label and a VPN yes/no ever leave the
+// machine: no addresses, no host names, no domains. The caller holds configMu.
+func sharedContextFor(cfg *RelayConfig) (ctx *relay.NetContext, matched int) {
+	if cfg == nil || (cfg.ShareContext != nil && !*cfg.ShareContext) {
+		return nil, -1
 	}
-	return relay.SanitizeContext(&relay.NetContext{
-		Label: label,
-		VPN:   len(getNetState().analysis.VPN) > 0,
-	})
+	st := getNetState()
+	label, matched := labelForNetwork(cfg, st)
+	return relay.SanitizeContext(&relay.NetContext{Label: label, VPN: len(st.analysis.VPN) > 0}), matched
+}
+
+// sharedContext is the context this device tells the contacts of the relay it
+// is connected to, or nil when sharing is off.
+func (r *relayClient) sharedContext() *relay.NetContext {
+	configMu.Lock()
+	defer configMu.Unlock()
+	ctx, _ := sharedContextFor(r.cfg)
+	return ctx
+}
+
+// validateNetworkLabels checks and normalizes the label table sent by the UI.
+func validateNetworkLabels(in []NetworkLabel) ([]NetworkLabel, error) {
+	if len(in) > 30 {
+		return nil, fmt.Errorf("too many network labels (at most 30)")
+	}
+	out := make([]NetworkLabel, 0, len(in))
+	for i, nl := range in {
+		sc := relay.SanitizeContext(&relay.NetContext{Label: nl.Label})
+		nl.Label = sc.Label
+		nl.VPN = strings.ToLower(strings.TrimSpace(nl.VPN))
+		nl.IFaceUp, nl.IFace = strings.TrimSpace(nl.IFaceUp), strings.TrimSpace(nl.IFace)
+		nl.Net, nl.Gateway = strings.TrimSpace(nl.Net), strings.TrimSpace(nl.Gateway)
+		if nl.Label == "" {
+			return nil, fmt.Errorf("network label %d: the label is empty", i+1)
+		}
+		c := nl.criteria()
+		if c.isEmpty() {
+			return nil, fmt.Errorf("network label %q: set at least one condition (VPN, interface in use, network...)", nl.Label)
+		}
+		if err := c.validate(); err != nil {
+			return nil, fmt.Errorf("network label %q: %w", nl.Label, err)
+		}
+		out = append(out, nl)
+	}
+	return out, nil
 }
 
 // PublishContext sends the current context to the relay. It is called after

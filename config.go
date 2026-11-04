@@ -68,6 +68,21 @@ type ConfigHop struct {
 
 // RelayConfig connects this proxy to a relay (see cmd/proxyrelay) so that it can
 // reach, and be reached by, the contacts in the address book.
+// NetworkLabel gives a name to a network, recognised by local conditions. Every
+// condition that is set must hold (at least one must be set).
+type NetworkLabel struct {
+	Label   string `yaml:"Label" json:"label"`
+	VPN     string `yaml:"VPN,omitempty" json:"vpn"`         // "up" or "down"
+	IFaceUp string `yaml:"IFaceUp,omitempty" json:"ifaceUp"` // an interface in use (names or globs)
+	IFace   string `yaml:"IFace,omitempty" json:"iface"`     // the default interface
+	Net     string `yaml:"Net,omitempty" json:"net"`         // a local network (CIDR)
+	Gateway string `yaml:"Gateway,omitempty" json:"gateway"` // the default gateway
+}
+
+func (n NetworkLabel) criteria() netCriteria {
+	return netCriteria{Gateway: n.Gateway, IFace: n.IFace, Net: n.Net, IFaceUp: n.IFaceUp, VPN: strings.ToLower(strings.TrimSpace(n.VPN))}
+}
+
 type RelayConfig struct {
 	Address string `yaml:"Address"` // host[:port] of the relay (default port 8443)
 	Cert    string `yaml:"Cert"`    // client certificate (its e-mail identifies you)
@@ -94,6 +109,12 @@ type RelayConfig struct {
 	// with whether a VPN is active, so routes and rules can pick an exit by
 	// where it is. Nothing else about your network is shared.
 	NetworkLabel string `yaml:"NetworkLabel,omitempty"`
+	// NetworkLabels name the network this device is on, by what it detects:
+	// the first entry whose conditions all hold gives the label shared with
+	// this relay's contacts; NetworkLabel is the fallback. Being part of the
+	// relay's own configuration, each relay can show its contacts a different
+	// label for the same network.
+	NetworkLabels []NetworkLabel `yaml:"NetworkLabels,omitempty"`
 	// ShareContext turns that sharing off when false. Unset means on.
 	ShareContext *bool `yaml:"ShareContext,omitempty"`
 }

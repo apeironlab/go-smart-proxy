@@ -292,6 +292,23 @@ export interface RelayStatus {
   rules: RelayRule[]
 }
 
+// A name for a network, recognised by local conditions (all that are set must hold).
+export interface NetworkLabelRule {
+  label: string
+  vpn: string
+  ifaceUp: string
+  iface: string
+  net: string
+  gateway: string
+}
+
+export interface SharedNow {
+  sharing: boolean
+  label: string
+  vpn: boolean
+  rule: number // index of the matching entry, -1 = default label
+}
+
 export interface RelayConfigInfo {
   address: string
   route: string
@@ -301,7 +318,9 @@ export interface RelayConfigInfo {
   hasCertificate: boolean
   hasCA: boolean
   networkLabel: string
+  networkLabels: NetworkLabelRule[]
   shareContext: boolean
+  sharedNow: SharedNow
 }
 
 export interface RelayConfigForm {
@@ -309,6 +328,7 @@ export interface RelayConfigForm {
   route: string
   allowLocal: boolean
   networkLabel?: string
+  networkLabels?: NetworkLabelRule[]
   shareContext?: boolean
   certPem: string
   keyPem: string

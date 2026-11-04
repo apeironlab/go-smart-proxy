@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"testing"
 
 	"proxy/relay"
@@ -212,5 +213,143 @@ func TestSharedContext(t *testing.T) {
 	save(&RelayConfig{ShareContext: &yes}, nil)
 	if c := relayMgr.sharedContext(); c == nil || c.Label != "" {
 		t.Fatalf("no label chosen: only the VPN flag goes out: %+v", c)
+	}
+}
+
+func netWith(vpn []string, defaultIface string, nets ...string) netState {
+	st := netState{
+		iface:       net.Interface{Name: defaultIface},
+		analysis:    netAnalysis{VPN: vpn, Active: map[string]bool{defaultIface: true}},
+		networkNets: map[string]bool{},
+	}
+	for _, v := range vpn {
+		st.analysis.Active[v] = true
+	}
+	for _, n := range nets {
+		st.networkNets[n] = true
+	}
+	return st
+}
+
+func TestLabelForNetwork(t *testing.T) {
+	cfg := &RelayConfig{
+		NetworkLabel: "elsewhere",
+		NetworkLabels: []NetworkLabel{
+			{Label: "office-vpn", VPN: "up", IFaceUp: "utun*"},
+			{Label: "office-lan", Net: "10.20.0.0/16"},
+			{Label: "home", VPN: "down", Net: "192.168.1.0/24"},
+			{Label: "ignored-no-conditions"},
+			{VPN: "up"}, // no label: skipped
+		},
+	}
+	cases := []struct {
+		name  string
+		st    netState
+		label string
+		rule  int
+	}{
+		{"on the VPN", netWith([]string{"utun4"}, "en0", "192.168.1.0/24"), "office-vpn", 0},
+		{"first match wins over a later one", netWith([]string{"utun4"}, "en0", "10.20.0.0/16"), "office-vpn", 0},
+		{"on the office LAN", netWith(nil, "en0", "10.20.0.0/16"), "office-lan", 1},
+		{"at home", netWith(nil, "en0", "192.168.1.0/24"), "home", 2},
+		{"a VPN anywhere else", netWith([]string{"tun0"}, "wlan0", "172.16.0.0/12"), "elsewhere", -1},
+		{"unknown network", netWith(nil, "en0", "172.16.0.0/12"), "elsewhere", -1},
+	}
+	for _, c := range cases {
+		label, rule := labelForNetwork(cfg, c.st)
+		if label != c.label || rule != c.rule {
+			t.Errorf("%s: got %q (rule %d), want %q (rule %d)", c.name, label, rule, c.label, c.rule)
+		}
+	}
+}
+
+func TestSharedContextFollowsTheNetworkTable(t *testing.T) {
+	cfg := &RelayConfig{NetworkLabel: "default", NetworkLabels: []NetworkLabel{{Label: "office-vpn", VPN: "up"}}}
+	setNet := func(vpn []string) {
+		stateMu.Lock()
+		analysis = netAnalysis{VPN: vpn, Active: map[string]bool{}}
+		stateMu.Unlock()
+	}
+	relayMgr.mu.Lock()
+	relayMgr.cfg = cfg
+	relayMgr.mu.Unlock()
+	t.Cleanup(func() {
+		stateMu.Lock()
+		analysis = netAnalysis{}
+		stateMu.Unlock()
+		relayMgr.mu.Lock()
+		relayMgr.cfg = nil
+		relayMgr.mu.Unlock()
+	})
+
+	setNet([]string{"utun4"})
+	if c := relayMgr.sharedContext(); c == nil || c.Label != "office-vpn" || !c.VPN {
+		t.Fatalf("on the VPN: %+v", c)
+	}
+	setNet(nil)
+	if c := relayMgr.sharedContext(); c == nil || c.Label != "default" || c.VPN {
+		t.Fatalf("off the VPN: %+v", c)
+	}
+	no := false
+	cfg.ShareContext = &no
+	if c := relayMgr.sharedContext(); c != nil {
+		t.Fatalf("sharing off: %+v", c)
+	}
+}
+
+func TestValidateNetworkLabels(t *testing.T) {
+	good, err := validateNetworkLabels([]NetworkLabel{{Label: "  office\x00 ", VPN: " UP ", IFaceUp: " utun* "}, {Label: "lan", Net: "10.0.0.0/8"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if good[0].Label != "office" || good[0].VPN != "up" || good[0].IFaceUp != "utun*" {
+		t.Fatalf("normalization: %+v", good[0])
+	}
+	for name, in := range map[string][]NetworkLabel{
+		"empty label":        {{VPN: "up"}},
+		"no condition":       {{Label: "x"}},
+		"bad vpn":            {{Label: "x", VPN: "maybe"}},
+		"bad cidr":           {{Label: "x", Net: "10.0.0.0"}},
+		"bad gateway":        {{Label: "x", Gateway: "gw"}},
+		"bad interface glob": {{Label: "x", IFaceUp: "[oops"}},
+	} {
+		if _, err := validateNetworkLabels(in); err == nil {
+			t.Errorf("%s must be rejected", name)
+		}
+	}
+	many := make([]NetworkLabel, 31)
+	for i := range many {
+		many[i] = NetworkLabel{Label: "x", VPN: "up"}
+	}
+	if _, err := validateNetworkLabels(many); err == nil {
+		t.Error("too many entries")
+	}
+}
+
+func TestRelayConfigInfoShowsWhatIsSharedNow(t *testing.T) {
+	cfg := &RelayConfig{Address: "r.example:8443", NetworkLabel: "default", NetworkLabels: []NetworkLabel{{Label: "office-vpn", VPN: "up"}}}
+	configMu.Lock()
+	old := configuration.Relay
+	configuration.Relay = cfg
+	configMu.Unlock()
+	stateMu.Lock()
+	analysis = netAnalysis{VPN: []string{"utun4"}, Active: map[string]bool{}}
+	stateMu.Unlock()
+	t.Cleanup(func() {
+		configMu.Lock()
+		configuration.Relay = old
+		configMu.Unlock()
+		stateMu.Lock()
+		analysis = netAnalysis{}
+		stateMu.Unlock()
+	})
+	configMu.Lock()
+	info := relayConfigInfoLocked()
+	configMu.Unlock()
+	if !info.SharedNow.Sharing || info.SharedNow.Label != "office-vpn" || !info.SharedNow.VPN || info.SharedNow.Rule != 0 {
+		t.Fatalf("shared now: %+v", info.SharedNow)
+	}
+	if len(info.NetworkLabels) != 1 || info.NetworkLabel != "default" {
+		t.Fatalf("table: %+v", info)
 	}
 }

@@ -559,59 +559,12 @@ func (p *ProxyRoute) refreshPAC() {
 // applicable checks the cheap network filters and returns the reason why the
 // route is not applicable, if any. The PAC is checked only by Check().
 func (p *ProxyRoute) applicable(st netState) (bool, string) {
-	if p.gateway != "" && (st.defaultGw == nil || st.defaultGw.String() != p.gateway) {
-		return false, fmt.Sprintf("gateway %s != %s", st.defaultGw.String(), p.gateway)
-	}
-	if p.iface != "" && !matchIface(p.iface, st.iface.Name) {
-		return false, fmt.Sprintf("default iface %q != %q", st.iface.Name, p.iface)
-	}
-	if p.ifaceUp != "" {
-		found := false
-		for name := range st.analysis.Active {
-			if matchIface(p.ifaceUp, name) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false, fmt.Sprintf("no active interface matches %q", p.ifaceUp)
-		}
+	c := netCriteria{Gateway: p.gateway, IFace: p.iface, Net: p.net, IFaceUp: p.ifaceUp, VPN: p.vpn}
+	if ok, why := c.match(st); !ok {
+		return false, why
 	}
 	if ok, why := exitConditionsMet(p, p.exitVPN, p.exitLabel); !ok {
 		return false, why
-	}
-	switch p.vpn {
-	case "up":
-		if len(st.analysis.VPN) == 0 {
-			return false, "no VPN is active"
-		}
-	case "down":
-		if len(st.analysis.VPN) > 0 {
-			return false, fmt.Sprintf("a VPN is active (%s)", strings.Join(st.analysis.VPN, ", "))
-		}
-	}
-	if p.net != "" {
-		found := false
-		if st.networkNets[p.net] {
-			found = true
-		} else {
-			_, pNet, err := net.ParseCIDR(p.net)
-			if err == nil {
-				for _, ip := range st.localIPs {
-					if pNet.Contains(ip) {
-						found = true
-						break
-					}
-				}
-			}
-		}
-		if !found {
-			netStr := ""
-			if st.network != nil {
-				netStr = st.network.String()
-			}
-			return false, fmt.Sprintf("net %q not found (default is %q)", p.net, netStr)
-		}
 	}
 	return true, ""
 }

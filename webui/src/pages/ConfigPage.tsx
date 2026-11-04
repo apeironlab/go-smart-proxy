@@ -11,7 +11,7 @@ import {
 import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import { api } from '../api'
-import type { Credential, Hop, RelayConfigInfo, RelayStatus, RouteInfo, StateInfo, SystemProxyState } from '../api'
+import type { Credential, Hop, NetworkLabelRule, RelayConfigInfo, RelayStatus, RouteInfo, StateInfo, SystemProxyState } from '../api'
 import { PageHeader, Section, StatCard } from '../components/ui'
 
 const pacColors: Record<string, string> = {
@@ -80,6 +80,7 @@ export default function ConfigPage() {
   const [relayRoute, setRelayRoute] = useState('')
   const [relayAllowLocal, setRelayAllowLocal] = useState(false)
   const [relayLabel, setRelayLabel] = useState('')
+  const [relayLabels, setRelayLabels] = useState<NetworkLabelRule[]>([])
   const [relayShare, setRelayShare] = useState(true)
   const [relayCert, setRelayCert] = useState('')
   const [relayKey, setRelayKey] = useState('')
@@ -133,6 +134,7 @@ export default function ConfigPage() {
         setRelayRoute(rc.route)
         setRelayAllowLocal(rc.allowLocal)
         setRelayLabel(rc.networkLabel ?? '')
+        setRelayLabels(rc.networkLabels ?? [])
         setRelayShare(rc.shareContext ?? true)
       }
     }).catch(() => {})
@@ -178,6 +180,7 @@ export default function ConfigPage() {
         route: relayRoute,
         allowLocal: relayAllowLocal,
         networkLabel: relayLabel,
+        networkLabels: relayLabels.map((l) => ({ ...l, label: l.label.trim() })),
         shareContext: relayShare,
         certPem: relayCert,
         keyPem: relayKey,
@@ -716,17 +719,90 @@ export default function ConfigPage() {
         </SimpleGrid>
         <Divider my="md" label={t('Network context shared with your contacts')} labelPosition="left" />
         <Text size="xs" c="dimmed" mb="sm">
-          {t('Your approved contacts can see a name you choose for the network this computer is on and whether a VPN is active, so they and their rules can pick the right exit. Addresses, host names and domains are never shared.')}
+          {t('Your approved contacts can see a name for the network this computer is on and whether a VPN is active, so they and their rules can pick the right exit. Addresses, host names and domains are never shared. The names below belong to this relay: each relay can show its contacts different ones.')}
         </Text>
-        <SimpleGrid cols={{ base: 1, sm: 2 }} mb="md">
-          <TextInput label={t('Network label')} placeholder="office-vpn"
-            description={t('A name of your choice, at most 40 characters. Empty = only the VPN yes/no is shared.')}
+        <Switch mb="md" label={t('Share the network context')}
+          description={t('Turn off to share nothing at all.')}
+          checked={relayShare} onChange={(e) => setRelayShare(e.currentTarget.checked)} />
+
+        <Stack gap="xs" mb="sm" style={{ opacity: relayShare ? 1 : 0.5 }}>
+          <Group justify="space-between" align="flex-end">
+            <div>
+              <Text size="sm" fw={600}>{t('Labels by network')}</Text>
+              <Text size="xs" c="dimmed">
+                {t('The first entry whose conditions all hold names the network. When none holds, the default label below is used.')}
+              </Text>
+            </div>
+            <Button size="xs" variant="light" leftSection={<IconPlus size={14} />} disabled={!relayShare}
+              onClick={() => setRelayLabels([...relayLabels, { label: '', vpn: '', ifaceUp: '', iface: '', net: '', gateway: '' }])}>
+              {t('Add label')}
+            </Button>
+          </Group>
+          {relayLabels.map((nl, i) => {
+            const set = (patch: Partial<NetworkLabelRule>) =>
+              setRelayLabels(relayLabels.map((x, j) => (j === i ? { ...x, ...patch } : x)))
+            const move = (d: number) => {
+              const next = [...relayLabels]
+              ;[next[i], next[i + d]] = [next[i + d], next[i]]
+              setRelayLabels(next)
+            }
+            const active = relayCfg?.sharedNow?.sharing && relayCfg.sharedNow.rule === i
+            return (
+              <Paper key={i} withBorder p="sm" radius="md"
+                style={active ? { borderColor: 'var(--mantine-color-grape-6)' } : undefined}>
+                <Group gap="xs" align="flex-end" wrap="nowrap">
+                  <Badge variant="light" size="lg" w={32} px={0}>{i + 1}</Badge>
+                  <SimpleGrid cols={{ base: 1, sm: 4 }} spacing="xs" style={{ flex: 1 }}>
+                    <TextInput label={i === 0 ? t('Label') : undefined} placeholder="office-vpn" maxLength={40}
+                      value={nl.label} onChange={(e) => set({ label: e.currentTarget.value })} />
+                    <Select label={i === 0 ? t('VPN') : undefined} placeholder={t('Any')} clearable
+                      data={[{ value: 'up', label: t('VPN connected') }, { value: 'down', label: t('No VPN') }]}
+                      value={nl.vpn || null} onChange={(v) => set({ vpn: v ?? '' })} />
+                    <TextInput label={i === 0 ? t('Interface in use') : undefined} placeholder="utun*, Pulse*"
+                      value={nl.ifaceUp} onChange={(e) => set({ ifaceUp: e.currentTarget.value })} />
+                    <TextInput label={i === 0 ? t('Network') : undefined} placeholder="10.20.0.0/16"
+                      value={nl.net} onChange={(e) => set({ net: e.currentTarget.value })} />
+                  </SimpleGrid>
+                  <Group gap={2} wrap="nowrap">
+                    <ActionIcon variant="subtle" color="gray" disabled={i === 0} onClick={() => move(-1)}
+                      title={t('Move up')} aria-label={t('Move up')}><IconArrowUp size={16} /></ActionIcon>
+                    <ActionIcon variant="subtle" color="gray" disabled={i === relayLabels.length - 1} onClick={() => move(1)}
+                      title={t('Move down')} aria-label={t('Move down')}><IconArrowDown size={16} /></ActionIcon>
+                    <ActionIcon variant="subtle" color="red" title={t('Remove')} aria-label={t('Remove')}
+                      onClick={() => setRelayLabels(relayLabels.filter((_, j) => j !== i))}><IconTrash size={16} /></ActionIcon>
+                  </Group>
+                </Group>
+              </Paper>
+            )
+          })}
+          {!relayLabels.length && <Text size="xs" c="dimmed">{t('No labels by network yet: only the default label is shared.')}</Text>}
+          <TextInput maw={360} label={t('Default label')}
+            description={t('Used when no entry above holds. Empty = only the VPN yes/no is shared.')}
             maxLength={40} disabled={!relayShare}
             value={relayLabel} onChange={(e) => setRelayLabel(e.currentTarget.value)} />
-          <Switch mt={{ base: 0, sm: 28 }} label={t('Share the network context')}
-            description={t('Turn off to share nothing at all.')}
-            checked={relayShare} onChange={(e) => setRelayShare(e.currentTarget.checked)} />
-        </SimpleGrid>
+        </Stack>
+
+        {relayCfg?.sharedNow && (
+          <Alert mb="md" variant="light" color={relayCfg.sharedNow.sharing ? 'grape' : 'gray'}>
+            {relayCfg.sharedNow.sharing ? (
+              <Group gap="xs">
+                <Text size="sm">{t('Your contacts see right now:')}</Text>
+                <Badge size="sm" variant="light" color={relayCfg.sharedNow.vpn ? 'grape' : 'gray'} tt="none">
+                  {relayCfg.sharedNow.vpn ? 'VPN' : t('no VPN')}
+                </Badge>
+                {relayCfg.sharedNow.label && <Badge size="sm" variant="outline" color="grape" tt="none">{relayCfg.sharedNow.label}</Badge>}
+                <Text size="xs" c="dimmed">
+                  {relayCfg.sharedNow.rule >= 0
+                    ? t('(entry {{n}} of the table)', { n: relayCfg.sharedNow.rule + 1 })
+                    : t('(default label)')}
+                </Text>
+              </Group>
+            ) : (
+              <Text size="sm">{t('Nothing is shared with your contacts.')}</Text>
+            )}
+            <Text size="xs" c="dimmed" mt={4}>{t('This is the saved setting: press Save relay to apply the changes above.')}</Text>
+          </Alert>
+        )}
         <Switch label={t('Allow contacts to reach services on this machine')}
           description={t('AllowLocal: not recommended unless strictly necessary.')}
           checked={relayAllowLocal} onChange={(e) => setRelayAllowLocal(e.currentTarget.checked)} />
