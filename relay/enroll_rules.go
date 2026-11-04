@@ -225,7 +225,7 @@ func (s *EnrollServer) certTTL() time.Duration {
 }
 
 // sign issues a certificate for an authenticated request and records it.
-func (s *EnrollServer) sign(csr []byte, email, device, method string) (string, error) {
+func (s *EnrollServer) sign(csr []byte, email, device, method, ip string) (string, error) {
 	signed, err := SignCSR(s.cfg.CADir, csr, email, s.certTTL())
 	if err != nil {
 		return "", err
@@ -245,6 +245,10 @@ func (s *EnrollServer) sign(csr []byte, email, device, method string) (string, e
 		}
 	}
 	s.audit("enroll.issued", email, serial, method)
+	if serial != "" {
+		s.recordIssued(&IssuedCert{Serial: serial, Email: email, Device: device, Method: method, IP: ip, Issued: time.Now(), Expires: notAfter})
+	}
+	s.notifyDevice(email, device, method, ip, notAfter)
 	return string(signed), nil
 }
 

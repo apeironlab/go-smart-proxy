@@ -43,6 +43,7 @@ English as fallback; code, comments and this README are in English.
   - [Manual certificate provisioning](#manual-certificate-provisioning)
   - [Enrollment over email](#enrollment-over-email)
   - [Applications (remote access to protected apps)](#applications-remote-access-to-protected-apps)
+  - [Notifications and self-service revocation](#notifications-and-self-service-revocation)
   - [Relay administration interface (optional)](#relay-administration-interface-optional)
   - [Kubernetes deployment](#kubernetes-deployment)
 - [Security](#security)
@@ -1178,6 +1179,38 @@ identity provider reported when the user last enrolled (the e-mail code
 reports none), so for fast revocation use short certificate lifetimes or list
 addresses; an identity can always be revoked in the interface.
 
+### Notifications and self-service revocation
+
+**Every time a device is associated to an address, the relay e-mails that
+address**: which device, with which method, from which IP address, when, until
+when the certificate is valid, and a link to revoke. It is sent whatever the
+method (e-mail code, password, LDAP, OpenID Connect, SAML), in the background:
+a mail problem is only logged and never fails an enrollment. If the owner of the
+address did not do it, they know at once.
+
+**Users can revoke the certificates of their own address** at
+`<public-url>/revoke`, with an e-mail confirmation:
+
+1. They type their address. The page answers the same whether or not the
+   address has certificates, so it cannot be used to find out who is a user.
+2. If it has active certificates, the relay mails a link (valid 30 minutes, good
+   once). The link only *shows* the devices (laptop, phone...) with their
+   address and dates: opening it, as mail scanners and previews do, revokes
+   nothing.
+3. They choose the devices and press **Revoke**. The certificates go on the
+   revocation list, the devices are disconnected at once, a confirmation is
+   mailed, and the event is in the audit log (`user.revoke`). The devices must
+   enroll again to be used.
+
+Requests are rate-limited (3 per address and 15 per IP in 10 minutes), so the
+form cannot be used to flood a mailbox. The feature needs `-public-url` and the
+revocation list, which `proxyrelay serve` now always has (`-revoked`, by default
+`revoked.txt` next to `-state`). The relay keeps a ledger of the certificates it
+issues (in the `-enroll-state` file) to show them; certificates issued by hand
+with `ca client` are not in it and are revoked by an administrator
+(`proxyrelay revoke`). Old certificates leave the ledger 30 days after they
+expire.
+
 ### Relay administration interface (optional)
 
 A web interface to see and manage the relay. It is **off by default**: without
@@ -1606,7 +1639,7 @@ Current limitations:
 
 - Master password rotation is not implemented (a new encrypted config must be
   created to change it).
-- Certificate renewal is manual (Relay → Riconfigura); no revocation/CRL/OCSP.
+- Certificate renewal is manual (Relay → Riconfigura). Revocation is a list file checked at connection, not a CRL/OCSP; users and administrators can add to it.
 - Enrollment invitations are initiated by the admin CLI; there is no admin web
   console or user database UI.
 - The local API has no authentication; it is intended for loopback use.
@@ -1624,7 +1657,7 @@ Possible future work:
 - Per-device certificate identities (today device codes are routing labels and
   devices may share one certificate).
 - Password rotation/rewrap tooling and recovery-key design.
-- Automatic certificate renewal, revocation, and audit logs.
+- Automatic certificate renewal and a standard CRL/OCSP endpoint.
 - Admin UI/API for invitations, users, and device management.
 - Windows system proxy/PAC/Chrome/notifications.
 - Signed macOS builds with native Keychain access control.

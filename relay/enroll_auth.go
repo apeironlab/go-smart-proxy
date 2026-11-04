@@ -180,7 +180,7 @@ func (s *EnrollServer) checkIdentity(m *methodEntry, id Identity, want string) e
 
 // issue signs the certificate for an authenticated user.
 func (s *EnrollServer) issue(it *Enrollment) (string, error) {
-	return s.sign([]byte(it.CSRPEM), it.Email, it.Device, it.Method)
+	return s.sign([]byte(it.CSRPEM), it.Email, it.Device, it.Method, it.ClientAddr)
 }
 
 func (s *EnrollServer) method(w http.ResponseWriter, r *http.Request) (*methodEntry, bool) {
@@ -239,7 +239,7 @@ func (s *EnrollServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "accesso non consentito")
 		return
 	}
-	it := &Enrollment{Email: pr.email, Device: pr.device, CSRPEM: pr.csr, Method: m.ID}
+	it := &Enrollment{Email: pr.email, Device: pr.device, CSRPEM: pr.csr, Method: m.ID, ClientAddr: s.clientIP(r)}
 	cert, err := s.issue(it)
 	if err != nil {
 		s.log.Printf("enrollment signing for %s failed: %v", pr.email, err)

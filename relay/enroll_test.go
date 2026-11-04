@@ -51,8 +51,12 @@ func testEnrollServer(t *testing.T) (*httptest.Server, *string) {
 		CADir:       filepath.Join(dir, "ca"),
 		PublicRelay: "relay.example.com:8443",
 		SendMail: func(to, subject, body string) error {
+			// Other mails (the notification of a new device) carry no code and,
+			// sent in the background, must not touch it.
 			re := regexp.MustCompile(`[A-Z2-9]{4}-[A-Z2-9]{4}`)
-			*code = re.FindString(body)
+			if c := re.FindString(body); c != "" {
+				*code = c
+			}
 			return nil
 		},
 	})

@@ -65,8 +65,15 @@ type EnrollConfig struct {
 	// Store, when set, remembers the groups each identity provider reports at
 	// sign-in, which applications with group access use. Pass the Store of the
 	// relay Server.
-	Store  *Store
-	Logger *log.Logger
+	Store *Store
+	// Revoked is the deny list users add their certificates to when they
+	// revoke them themselves (the page at /revoke). nil turns that off. Pass
+	// the list the relay Server consults.
+	Revoked *Revocations
+	// Disconnect, when set, is called after a revocation to cut the
+	// connections that use the revoked certificates (Server.Kick).
+	Disconnect func(email, serial string) int
+	Logger     *log.Logger
 	// SendMail is used by tests; when nil, SMTP is used.
 	SendMail func(to, subject, body string) error
 }
@@ -106,6 +113,7 @@ type Enrollment struct {
 type enrollFile struct {
 	Items []*Enrollment `json:"items"`
 	Users []string      `json:"users"`
+	Certs []*IssuedCert `json:"certs,omitempty"`
 }
 
 // EnrollServer serves the public enrollment API. It is separate from the mTLS
@@ -117,6 +125,10 @@ type EnrollServer struct {
 	items map[string]*Enrollment
 	users map[string]bool
 	rate  map[string][]time.Time
+	// certs is the ledger of certificates issued by this relay; revoke maps
+	// the tokens of the revocation e-mails (hashed) to the address they are for.
+	certs  []*IssuedCert
+	revoke map[string]*revokeToken
 
 	rulesMu sync.RWMutex
 	rules   EnrollRules
@@ -131,11 +143,12 @@ type EnrollServer struct {
 
 func NewEnrollServer(cfg EnrollConfig) (*EnrollServer, error) {
 	s := &EnrollServer{
-		cfg:   cfg,
-		log:   cfg.Logger,
-		items: map[string]*Enrollment{},
-		users: map[string]bool{},
-		rate:  map[string][]time.Time{},
+		cfg:    cfg,
+		log:    cfg.Logger,
+		items:  map[string]*Enrollment{},
+		users:  map[string]bool{},
+		revoke: map[string]*revokeToken{},
+		rate:   map[string][]time.Time{},
 
 		methods:  map[string]*methodEntry{},
 		byState:  map[string]string{},
@@ -190,6 +203,7 @@ func NewEnrollServer(cfg EnrollConfig) (*EnrollServer, error) {
 				for _, u := range f.Users {
 					s.users[u] = true
 				}
+				s.certs = f.Certs
 			}
 		}
 	}
@@ -209,6 +223,9 @@ func (s *EnrollServer) Handler() http.Handler {
 	m.HandleFunc("GET /enroll-auth/{method}/metadata", s.handleSAMLMetadata)
 	m.HandleFunc("GET /enroll/{id}", s.handleStatus)
 	m.HandleFunc("POST /enroll/{id}/confirm", s.handleConfirm)
+	if s.cfg.Revoked.Enabled() && s.cfg.PublicURL != "" {
+		s.mountSelfRevoke(m)
+	}
 	if s.cfg.Admin != nil {
 		s.cfg.Admin.mount(m)
 	}
@@ -228,6 +245,7 @@ func (s *EnrollServer) saveLocked() {
 	for u := range s.users {
 		f.Users = append(f.Users, u)
 	}
+	f.Certs = s.certs
 	b, _ := json.MarshalIndent(f, "", "  ")
 	WriteFileAtomic(s.cfg.StatePath, b, 0o600)
 }
@@ -775,7 +793,7 @@ func (s *EnrollServer) handleConfirm(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	if !approved {
-		signed, err := s.sign(csr, email, it.Device, "email")
+		signed, err := s.sign(csr, email, it.Device, "email", s.clientIP(r))
 		if err != nil {
 			s.log.Printf("enrollment signing for %s failed: %v", email, err)
 			writeError(w, http.StatusInternalServerError, "firma del certificato non riuscita")

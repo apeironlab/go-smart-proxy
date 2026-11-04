@@ -178,7 +178,7 @@ func runServe(args []string) error {
 	caDir := fs.String("ca-dir", "", "directory with ca.pem and ca-key.pem (default: dir of -ca)")
 	enrollState := fs.String("enroll-state", "relay-enroll.json", "pending enrollment state file")
 	certTTL := fs.String("cert-ttl", "90d", "client certificate lifetime (e.g. 90d, 720h)")
-	revoked := fs.String("revoked", "", "revocation list file (e-mail or serial:HEX per line)")
+	revoked := fs.String("revoked", "", "revocation list file, e-mail or serial:HEX per line (default: revoked.txt next to -state)")
 	authConfig := fs.String("auth-config", "", "YAML file with the sign-in methods (password, ldap, oidc, saml)")
 	trustXFF := fs.Bool("trust-forwarded-for", false, "take the client address from X-Forwarded-For (only behind a trusted proxy)")
 	appsFile := fs.String("apps", "", "YAML file with the applications catalog (read-only); without it the interface edits the catalog")
@@ -206,11 +206,13 @@ func runServe(args []string) error {
 		return err
 	}
 	srv := relay.NewServer(store)
-	var rev *relay.Revocations
-	if *revoked != "" {
-		rev = relay.NewRevocations(*revoked)
-		srv.Revoked = rev
+	// Revocation is always on: users revoke their own certificates and the
+	// interface edits the same list.
+	if *revoked == "" {
+		*revoked = filepath.Join(filepath.Dir(*statePath), "revoked.txt")
 	}
+	rev := relay.NewRevocations(*revoked)
+	srv.Revoked = rev
 
 	// Catalog of applications: a file, or the management interface's.
 	var catalog *relay.Catalog
@@ -266,6 +268,7 @@ func runServe(args []string) error {
 			CADir: firstNonEmpty(*caDir, filepath.Dir(*caFile)), PublicRelay: *publicRelay, PublicURL: *publicURL, DownloadURL: *downloadURL,
 			AllowedDomains: splitList(*allowDomains), StatePath: *enrollState, CertTTL: ttl,
 			TrustForwardedFor: *trustXFF, Admin: admin, Store: store,
+			Revoked: rev, Disconnect: srv.Kick,
 		}
 		smtp.apply(&cfg)
 		if pem, err := os.ReadFile(*caFile); err == nil {
