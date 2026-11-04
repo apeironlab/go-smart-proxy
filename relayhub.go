@@ -118,7 +118,9 @@ func (h *relayRegistry) apply(cfg *RelayConfig) *relayClient {
 func (h *relayRegistry) put(name string, c *relayClient) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	c.name = name
+	if c.name != name { // not rewritten when it is right: the client may be running
+		c.name = name
+	}
 	if h.clients[name] == nil {
 		h.order = append(h.order, name)
 	}

@@ -18,6 +18,7 @@ const stateColors: Record<string, string> = {
   done: 'blue',
   failed: 'red',
   closed: 'gray',
+  blocked: 'orange',
 }
 
 const authColors: Record<string, string> = {

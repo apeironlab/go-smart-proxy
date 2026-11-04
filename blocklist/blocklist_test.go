@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -237,5 +238,28 @@ func TestFetcherSizeLimit(t *testing.T) {
 	defer srv.Close()
 	if _, err := (&Fetcher{Dir: t.TempDir()}).Update(context.Background(), Source{URL: srv.URL, Format: Domains}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFetcherThroughAnEnvironmentProxyOnAPrivateAddress(t *testing.T) {
+	// the proxy listens on 127.0.0.1, as a corporate proxy may on a private
+	// address: it must stay usable, while the destination is still checked
+	var asked atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked.Add(1)
+		w.Write([]byte("a.example.com\n"))
+	}))
+	defer proxy.Close()
+	pu, _ := url.Parse(proxy.URL)
+	f := &Fetcher{Dir: t.TempDir(), DenyPrivate: true, Proxy: func(*http.Request) (*url.URL, error) { return pu, nil }}
+	if _, err := f.Update(context.Background(), Source{URL: "http://lists.example.org/l", Format: Domains}); err != nil {
+		t.Fatalf("through the proxy: %v", err)
+	}
+	if asked.Load() == 0 {
+		t.Fatal("the proxy was not used")
+	}
+	// a destination that is a private address is refused even through a proxy
+	if _, err := f.Update(context.Background(), Source{URL: "http://10.1.2.3/l", Format: Domains}); err == nil {
+		t.Fatal("a private destination was requested through the proxy")
 	}
 }

@@ -134,6 +134,40 @@ export interface GatewayIssued {
   caPem: string
 }
 
+export interface PolicyRule {
+  id: string
+  name: string
+  mandatory?: boolean
+  domains?: string[]
+  nets?: string[]
+  disabled?: boolean
+}
+
+export interface PolicyList {
+  id: string
+  name: string
+  url: string
+  format?: string
+  mandatory?: boolean
+  disabled?: boolean
+}
+
+export interface PolicyConfig {
+  rules: PolicyRule[]
+  lists: PolicyList[]
+  allow: string[]
+  refreshHours?: number
+}
+
+export interface PolicyInfo {
+  enabled: boolean
+  readOnly?: boolean
+  config: PolicyConfig
+  lists: { id: string; entries: number; fetched: string; error?: string }[]
+  counts: Record<string, number>
+  recent: { time: string; email: string; host: string; source: string }[]
+}
+
 export interface Rules {
   allowedDomains: string[]
   certTtlHours: number
@@ -215,6 +249,9 @@ export const adminApi = {
   gateways: () => req<GatewayInfo[]>('GET', '/admin/api/gateways'),
   issueGateway: (id: string) => req<GatewayIssued>('POST', '/admin/api/gateways', { id }),
   revokeGateway: (id: string) => req<{ ok: boolean; revoked: number }>('POST', `/admin/api/gateways/${encodeURIComponent(id)}/revoke`),
+  policy: () => req<PolicyInfo>('GET', '/admin/api/policy'),
+  savePolicy: (config: PolicyConfig) => req<PolicyInfo>('PUT', '/admin/api/policy', { config }),
+  refreshPolicy: () => req<PolicyInfo>('POST', '/admin/api/policy/refresh'),
   events: (f: { kind?: string; q?: string; before?: number; limit?: number }) =>
     req<AdminEvent[]>('GET', `/admin/api/events${q(f)}`),
 }

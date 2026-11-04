@@ -229,7 +229,55 @@ export interface AppEntry {
   url: string
 }
 
+export interface BlockList {
+  name: string
+  url: string
+  format: string
+  enabled: boolean
+}
+
+export interface BlockingConfig {
+  enabled: boolean
+  presets: string[]
+  lists: BlockList[]
+  block: string[]
+  allow: string[]
+  relayOff: string[]
+  refreshHours: number
+}
+
+export interface BlockingInfo {
+  config: BlockingConfig
+  presets: { id: string; name: string; description: string; url: string; format: string; enabled: boolean }[]
+  lists: { key: string; name: string; entries: number; fetched: string; error: string }[]
+  relays: { relay: string; mandatory: number; recommended: { id: string; name: string; enabled: boolean }[] }[]
+  updating: boolean
+}
+
+export interface BlockingStats {
+  total: number
+  bySource: Record<string, number>
+  top: { host: string; count: number }[]
+  recent: { time: string; host: string; source: string; client: string }[]
+}
+
+export interface BlockingTest {
+  host: string
+  blocked: boolean
+  mandatory: boolean
+  source?: string
+  rule?: string
+}
+
 export const api = {
+  blocking: () => req<BlockingInfo>('/api/blocking'),
+  saveBlocking: (c: BlockingConfig) => req<BlockingInfo>('/api/blocking', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c),
+  }),
+  refreshBlocking: () => post('/api/blocking/refresh', {}),
+  blockingStats: () => req<BlockingStats>('/api/blocking/stats'),
+  resetBlockingStats: () => post('/api/blocking/stats/reset', {}),
+  testBlocking: (host: string) => req<BlockingTest>(`/api/blocking/test?host=${encodeURIComponent(host)}`),
   apps: () => req<AppEntry[]>('/api/apps'),
   state: () => req<StateInfo>('/api/state'),
   routes: () => req<RouteInfo[]>('/api/routes'),

@@ -185,7 +185,7 @@ func TestRelayRouteEndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		c := &relayClient{approvals: map[int64]*relayApproval{}, file: filepath.Join(dir, email+".json")}
+		c := &relayClient{name: "default", approvals: map[int64]*relayApproval{}, file: filepath.Join(dir, email+".json")}
 		c.start(&RelayConfig{
 			Address:    ln.Addr().String(),
 			CertPEM:    string(certPEM),

@@ -34,6 +34,7 @@ English as fallback; code, comments and this README are in English.
   - [Hosts overrides](#hosts-overrides)
 - [Using the proxy](#using-the-proxy)
 - [Web UI and HTTP API](#web-ui-and-http-api)
+- [Blocking ads, trackers and malicious sites](#blocking-ads-trackers-and-malicious-sites)
 - [System integration](#system-integration)
 - [Relay](#relay)
   - [Relay client](#relay-client)
@@ -611,6 +612,78 @@ trusted (see [Security](#security)).
 
 ---
 
+## Blocking ads, trackers and malicious sites
+
+The proxy can refuse connections to unwanted hosts before any is made, with or
+without a relay. It works on host names, so it covers what goes through the proxy
+(browsers, apps that use it, SOCKS5 clients): a blocked `CONNECT` gets
+`403`, a blocked SOCKS5 request is answered "not allowed by ruleset", and a
+plain HTTP request gets a small "Blocked" page. Every refusal appears in the
+**Connections** list (state *blocked*) and in the counters of the **Protection**
+page. Applications that a relay publishes are never blocked.
+
+**Lists** are what pfBlockerNG uses: hosts files (`0.0.0.0 ads.example.com`),
+plain domain lists, and the host rules of adblock lists (`||ads.example.com^`;
+path and cosmetic rules are ignored). A domain on a list blocks its subdomains
+too. In the **Protection** page you switch on presets (StevenBlack unified
+hosts, Peter Lowe's ad servers, abuse.ch URLhaus), add your own list URLs,
+always-block hosts, addresses or networks, and a never-block list for what a
+list gets wrong. Lists are downloaded with a conditional request (ETag), kept on
+disk (`blocklists/`) so they are there at start-up and offline, refreshed every
+24 hours by default, and a list that fails to download or has nothing usable
+never replaces the copy you have. There is also a *check a host* tool that says
+whether and why a host is blocked.
+
+**The relay can block too.** In the management interface (**Blocking**), or in a
+YAML file (`proxyrelay serve -policy policy.yml`), the administrator writes rules
+(domains, addresses, networks) and subscribes to lists, each marked *required*
+or *recommended*:
+
+```yaml
+rules:
+  - id: social
+    name: Social networks
+    mandatory: true               # users cannot switch it off
+    domains: [facebook.com, tiktok.com]
+lists:
+  - id: malware
+    name: Malware hosts
+    url: https://urlhaus.abuse.ch/downloads/hostfile/
+    format: hosts                 # auto, hosts, domains or abp
+    mandatory: true
+  - id: ads
+    name: Advertising (advice)
+    url: https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext
+allow: [false-positive.example.com]   # never blocked by the relay's rules
+refresh_hours: 24
+```
+
+- **Required** rules are enforced by the relay on every connection that goes
+  through it (a contact's network), so they cannot be avoided, *and* sent to
+  every proxy, which applies them to all its traffic. The user cannot switch
+  them off, and a personal never-block entry does not override them. They are
+  told only that "your organization" blocks a host: the rules and lists are not
+  shown (the Protection page shows how many there are).
+- **Recommended** rules are offered to the proxies, which apply them while the
+  user's blocking is on and let the user turn each one off.
+- The relay's refusals are counted, shown in the interface and written to the
+  audit log (`policy.block`, once per user and host every ten minutes). The
+  relay downloads its lists itself and refuses private addresses when it does,
+  so a typed URL cannot be used to probe its network.
+
+The proxies download the lists themselves from the addresses the relay gives,
+and the relay sends them only when the policy changes. A hosts-file list with
+hundreds of thousands of entries is kept as a lookup table and costs a few tens
+of megabytes of memory.
+
+**Limits.** Blocking is by host name and address, not by URL path or content, so
+it cannot remove an ad served from the same host as the page; and it only sees
+what is sent through the proxy (a program that ignores the proxy, or encrypted
+DNS used by a browser to resolve names itself, is not covered unless it uses the
+proxy for the connection).
+
+---
+
 ## System integration
 
 ### System tray
@@ -872,6 +945,8 @@ Main `serve` flags:
 | `-auth-config` | YAML file with the sign-in methods (see below) |
 | `-trust-forwarded-for` | Take the client address from `X-Forwarded-For` (only behind a trusted proxy) |
 | `-apps` | YAML file with the applications catalog (read-only) |
+| `-policy` | YAML file with the blocking policy (read-only); without it the interface edits it |
+| `-policy-dir` | Where downloaded block lists are kept (default `policy-lists` next to `-state`) |
 | `-admin-db` | Enable the management interface, with this SQLite database |
 | `-admin-groups`, `-admin-emails` | Who may sign in to the interface |
 | `-admin-methods` | Sign-in method ids allowed for administrators (default: all) |
@@ -1600,6 +1675,8 @@ that the `relay` package builds without Node.
 | `webui/admin/` | React app of the relay administration interface (built into `relay/adminui/static`) |
 | `cmd/proxyrelay/` | Relay server CLI |
 | `cmd/proxygateway/` | Application gateway (serves applications published by a relay) |
+| `blocking.go`, `blocking_web.go` | Host blocking: lists, user and relay rules, enforcement and API |
+| `blocklist/` | Block list parsing, matching and safe download |
 | `relayapps.go` | Applications published by relays: automatic routing and `/api/apps` |
 | `webui/` | React management UI |
 | `deploy/` | Kubernetes example |

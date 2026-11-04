@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -48,6 +49,8 @@ type Fetcher struct {
 	// it cannot be pointed at its own network.
 	DenyPrivate bool
 	Client      *http.Client
+	// Proxy chooses the proxy for a request (default: the environment's).
+	Proxy func(*http.Request) (*url.URL, error)
 }
 
 type cacheMeta struct {
@@ -62,34 +65,102 @@ func (f *Fetcher) path(s Source) string {
 	return filepath.Join(f.Dir, hex.EncodeToString(sum[:8]))
 }
 
+// isPrivate reports whether an address is one a fetcher with DenyPrivate must
+// not reach.
+func isPrivate(a netip.Addr) bool {
+	a = a.Unmap()
+	return a.IsPrivate() || a.IsLoopback() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() || a.IsUnspecified() || a.IsMulticast()
+}
+
+// checkPublic refuses a host that names (or resolves to) a private address. It
+// is the check that works when a proxy does the connecting; without a proxy
+// the dialer's own check, made on the address actually used, is the stronger
+// one.
+func checkPublic(ctx context.Context, host string) error {
+	if a, err := netip.ParseAddr(host); err == nil {
+		if isPrivate(a) {
+			return errors.New("refusing to connect to a private address")
+		}
+		return nil
+	}
+	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if err != nil {
+		return nil // the connection will fail with the real reason
+	}
+	for _, a := range ips {
+		if isPrivate(a) {
+			return errors.New("refusing to connect to a private address")
+		}
+	}
+	return nil
+}
+
 func (f *Fetcher) client() *http.Client {
 	if f.Client != nil {
 		return f.Client
 	}
-	d := &net.Dialer{Timeout: 20 * time.Second}
+	plain := &net.Dialer{Timeout: 20 * time.Second}
+	guarded := &net.Dialer{Timeout: 20 * time.Second}
 	if f.DenyPrivate {
-		d.Control = func(_, address string, _ syscall.RawConn) error {
+		guarded.Control = func(_, address string, _ syscall.RawConn) error {
 			host, _, err := net.SplitHostPort(address)
 			if err != nil {
 				return err
 			}
-			if a, err := netip.ParseAddr(host); err == nil {
-				a = a.Unmap()
-				if a.IsPrivate() || a.IsLoopback() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() || a.IsUnspecified() || a.IsMulticast() {
-					return errors.New("refusing to connect to a private address")
-				}
+			if a, err := netip.ParseAddr(host); err == nil && isPrivate(a) {
+				return errors.New("refusing to connect to a private address")
 			}
 			return nil
 		}
 	}
+	// A proxy named in the environment is the operator's choice: it may well be
+	// on a private address. Connections to it are not restricted; what is
+	// asked of it is (see Update).
+	var mu sync.Mutex
+	proxies := map[string]bool{}
 	return &http.Client{
-		Timeout:   3 * time.Minute,
-		Transport: &http.Transport{DialContext: d.DialContext, TLSHandshakeTimeout: 15 * time.Second, Proxy: http.ProxyFromEnvironment},
+		Timeout: 3 * time.Minute,
+		Transport: &http.Transport{
+			Proxy: func(r *http.Request) (*url.URL, error) {
+				proxyFn := f.Proxy
+				if proxyFn == nil {
+					proxyFn = http.ProxyFromEnvironment
+				}
+				u, err := proxyFn(r)
+				if u != nil {
+					host := u.Host
+					if u.Port() == "" {
+						port := map[string]string{"http": "80", "https": "443", "socks5": "1080"}[u.Scheme]
+						host = net.JoinHostPort(u.Hostname(), port)
+					}
+					mu.Lock()
+					proxies[host] = true
+					mu.Unlock()
+				}
+				return u, err
+			},
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				mu.Lock()
+				viaProxy := proxies[addr]
+				mu.Unlock()
+				if viaProxy {
+					return plain.DialContext(ctx, network, addr)
+				}
+				return guarded.DialContext(ctx, network, addr)
+			},
+			TLSHandshakeTimeout: 15 * time.Second,
+		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return errors.New("too many redirects")
 			}
-			return CheckURL(req.URL.String())
+			if err := CheckURL(req.URL.String()); err != nil {
+				return err
+			}
+			if f.DenyPrivate {
+				return checkPublic(req.Context(), req.URL.Hostname())
+			}
+			return nil
 		},
 	}
 }
@@ -111,6 +182,11 @@ func (f *Fetcher) Update(ctx context.Context, s Source) (bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.URL, nil)
 	if err != nil {
 		return false, err
+	}
+	if f.DenyPrivate {
+		if err := checkPublic(ctx, req.URL.Hostname()); err != nil {
+			return false, err
+		}
 	}
 	req.Header.Set("User-Agent", "go-smart-proxy-blocklist")
 	if _, err := os.Stat(base + ".list"); err == nil && meta.URL == s.URL {

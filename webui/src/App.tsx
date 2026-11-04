@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AppShell, Alert, Anchor, Badge, Burger, Code, Group, Menu, NavLink, ScrollArea, ThemeIcon, Title, Tooltip, ActionIcon, useMantineColorScheme } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
-import { IconBell, IconKey, IconLanguage, IconMoon, IconSun, IconNetwork, IconRoute, IconRouteAltRight, IconPlugConnected, IconSettings, IconApps } from '@tabler/icons-react'
+import { IconBell, IconKey, IconLanguage, IconMoon, IconSun, IconNetwork, IconRoute, IconRouteAltRight, IconPlugConnected, IconSettings, IconApps, IconShieldCheck } from '@tabler/icons-react'
 import ConnectionsPage from './pages/ConnectionsPage'
 import CredentialsPage from './pages/CredentialsPage'
 import ConfigPage from './pages/ConfigPage'
 import OnboardingPage from './pages/OnboardingPage'
 import AppsPage from './pages/AppsPage'
+import ProtectionPage from './pages/ProtectionPage'
 import RelayPage from './pages/RelayPage'
 import RulesPage from './pages/RulesPage'
 import { api } from './api'
@@ -54,6 +55,7 @@ export default function App() {
     ...(appCount > 0 ? [{ id: 'apps', label: t('Applications'), icon: IconApps, comp: <AppsPage state={state} />, badge: 0 }] : []),
     { id: 'rules', label: t('Rules'), icon: IconRoute, comp: <RulesPage /> },
     { id: 'relay', label: t('Relay'), icon: IconRouteAltRight, comp: <RelayPage />, badge: pending },
+    { id: 'protection', label: t('Protection'), icon: IconShieldCheck, comp: <ProtectionPage /> },
     { id: 'credentials', label: t('Credentials'), icon: IconKey, comp: <CredentialsPage /> },
     { id: 'config', label: t('Configuration'), icon: IconSettings, comp: <ConfigPage /> },
   ]
