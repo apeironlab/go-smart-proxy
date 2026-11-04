@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,8 @@ import (
 
 type pendingEnrollment struct {
 	Name         string // the relay entry being created or renewed
+	Method       string // "code" (e-mail) or "browser" (sign-in on the provider's page)
+	AuthURL      string // browser sign-in: the page the user was sent to
 	BaseURL      string
 	Email        string
 	Device       string
@@ -69,7 +72,22 @@ var (
 	enrollMu      sync.Mutex
 	enrollPending *pendingEnrollment
 	trustPending  *pendingTrust
+	// enrollResult is how the last enrollment ended, kept for a little while so
+	// that the page, which polls, can tell success from failure.
+	enrollResult *enrollOutcome
 )
+
+type enrollOutcome struct {
+	Name  string // the relay that was configured
+	Error string
+	At    time.Time
+}
+
+func setEnrollResult(name, errText string) {
+	enrollMu.Lock()
+	enrollResult = &enrollOutcome{Name: name, Error: errText, At: time.Now()}
+	enrollMu.Unlock()
+}
 
 type enrollResponse struct {
 	ID           string    `json:"id"`
@@ -266,35 +284,84 @@ func isCertificateError(err error) bool {
 	return false
 }
 
-// relayEnroll generates a CSR for email and asks the relay to send a
-// confirmation code. The private key stays in memory until confirmation.
-// acceptFingerprint is set when the user explicitly accepted an otherwise
-// untrusted server certificate; the connection is then pinned to it.
-func relayEnroll(name, address, email, serverCAPEM, acceptFingerprint string) error {
+// enrollTarget is everything a sign-in method needs to start: the relay being
+// enrolled, a certificate request for the user and a TLS client that trusts the
+// enrollment endpoint (by CA, or by the fingerprint the user accepted).
+type enrollTarget struct {
+	name        string
+	base        *url.URL
+	email       string
+	device      string
+	pin         string
+	serverCAPEM string
+	csrPEM      []byte
+	keyPEM      []byte
+	client      *http.Client
+}
+
+// checkEnrollInputs validates the e-mail and the relay name and normalizes the
+// address of the enrollment endpoint.
+func checkEnrollInputs(name, address, email string) (string, *url.URL, string, error) {
 	name = strings.ToLower(strings.TrimSpace(name))
 	if name != "" && !validRelayName(name) {
-		return errors.New("nome del relay non valido (minuscole, cifre, - e _)")
+		return "", nil, "", errors.New("nome del relay non valido (minuscole, cifre, - e _)")
 	}
 	email, ok := relay.NormalizeEmail(email)
 	if !ok {
-		return errors.New("indirizzo e-mail non valido")
+		return "", nil, "", errors.New("indirizzo e-mail non valido")
 	}
 	base, err := normalizeEnrollURL(address)
 	if err != nil {
-		return err
+		return "", nil, "", err
 	}
+	return name, base, email, nil
+}
 
-	pin := ""
-	if acceptFingerprint != "" {
-		enrollMu.Lock()
-		trust := trustPending
-		enrollMu.Unlock()
-		if trust == nil || time.Now().After(trust.Expires) ||
-			trust.Email != email || trust.BaseURL != base.String() ||
-			normalizeFingerprint(trust.Fingerprint) != normalizeFingerprint(acceptFingerprint) {
-			return errors.New("certificato non più valido: richiedi di nuovo l'enrollment")
+// acceptedPin returns the fingerprint the user accepted, if it is the one just
+// shown for this endpoint and e-mail address and is still fresh.
+func acceptedPin(base *url.URL, email, acceptFingerprint string) (string, error) {
+	if acceptFingerprint == "" {
+		return "", nil
+	}
+	enrollMu.Lock()
+	trust := trustPending
+	enrollMu.Unlock()
+	if trust == nil || time.Now().After(trust.Expires) ||
+		trust.Email != email || trust.BaseURL != base.String() ||
+		normalizeFingerprint(trust.Fingerprint) != normalizeFingerprint(acceptFingerprint) {
+		return "", errors.New("certificato non più valido: richiedi di nuovo l'enrollment")
+	}
+	return trust.Fingerprint, nil
+}
+
+// untrustedOrError turns a failure to verify the endpoint's certificate into
+// the prompt that lets the user inspect and accept its fingerprint.
+func untrustedOrError(base *url.URL, email, pin string, err error) error {
+	if pin == "" && isCertificateError(err) {
+		if info, perr := probeCertificate(base); perr == nil {
+			enrollMu.Lock()
+			trustPending = &pendingTrust{
+				BaseURL:     base.String(),
+				Email:       email,
+				Fingerprint: info.Fingerprint,
+				Expires:     time.Now().Add(5 * time.Minute),
+			}
+			enrollMu.Unlock()
+			return &untrustedCertificateError{Info: info}
 		}
-		pin = trust.Fingerprint
+	}
+	return err
+}
+
+// prepareEnroll gathers what every method needs.
+func prepareEnroll(name, address, email, serverCAPEM, acceptFingerprint string) (*enrollTarget, error) {
+	name, base, email, err := checkEnrollInputs(name, address, email)
+	if err != nil {
+		return nil, err
+	}
+	pin, err := acceptedPin(base, email, acceptFingerprint)
+	if err != nil {
+		return nil, err
 	}
 
 	// The relay being enrolled: the named one (a renewal when it exists, a new
@@ -312,7 +379,7 @@ func relayEnroll(name, address, email, serverCAPEM, acceptFingerprint string) er
 		device = existing.Device
 	} else if len(configuration.Relays) >= maxRelays {
 		configMu.Unlock()
-		return errors.New("troppi relay configurati")
+		return nil, errors.New("troppi relay configurati")
 	} else if len(configuration.Relays) > 0 {
 		device = configuration.Relays[0].Device // same device name on every relay
 	}
@@ -323,66 +390,337 @@ func relayEnroll(name, address, email, serverCAPEM, acceptFingerprint string) er
 
 	csrPEM, keyPEM, err := generateCSR(email)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	client, err := enrollmentClient(serverCAPEM, pin, base.String())
 	if err != nil {
-		return err
+		return nil, err
 	}
-	var res enrollResponse
-	if err := postJSON(client, base.String()+"/enroll", "", map[string]string{
-		"email":  email,
-		"csr":    string(csrPEM),
-		"device": device,
-	}, &res); err != nil {
-		if pin == "" && isCertificateError(err) {
-			if info, perr := probeCertificate(base); perr == nil {
-				enrollMu.Lock()
-				trustPending = &pendingTrust{
-					BaseURL:     base.String(),
-					Email:       email,
-					Fingerprint: info.Fingerprint,
-					Expires:     time.Now().Add(5 * time.Minute),
-				}
-				enrollMu.Unlock()
-				return &untrustedCertificateError{Info: info}
-			}
-		}
-		return err
+	return &enrollTarget{
+		name: name, base: base, email: email, device: device, pin: pin,
+		serverCAPEM: serverCAPEM, csrPEM: csrPEM, keyPEM: keyPEM, client: client,
+	}, nil
+}
+
+func (t *enrollTarget) body(extra map[string]string) map[string]string {
+	m := map[string]string{"email": t.email, "csr": string(t.csrPEM), "device": t.device}
+	for k, v := range extra {
+		m[k] = v
 	}
+	return m
+}
+
+// pending builds the record of an enrollment in progress.
+func (t *enrollTarget) pending(res enrollResponse, method string) (*pendingEnrollment, error) {
 	if res.ID == "" || res.PollToken == "" {
-		return errors.New("risposta del relay non valida")
+		return nil, errors.New("risposta del relay non valida")
 	}
 	if res.RelayAddress == "" {
-		return errors.New("il relay non ha indicato l'indirizzo mTLS")
+		return nil, errors.New("il relay non ha indicato l'indirizzo mTLS")
 	}
 	if _, _, err := net.SplitHostPort(res.RelayAddress); err != nil {
-		return fmt.Errorf("indirizzo relay non valido: %q", res.RelayAddress)
+		return nil, fmt.Errorf("indirizzo relay non valido: %q", res.RelayAddress)
 	}
 	expires := res.ExpiresAt
 	if expires.IsZero() {
 		expires = time.Now().Add(15 * time.Minute)
 	}
-
-	enrollMu.Lock()
-	trustPending = nil
-	enrollPending = &pendingEnrollment{
-		Name:         name,
-		BaseURL:      base.String(),
-		Email:        email,
-		Device:       device,
+	return &pendingEnrollment{
+		Name:         t.name,
+		Method:       method,
+		BaseURL:      t.base.String(),
+		Email:        t.email,
+		Device:       t.device,
 		ID:           res.ID,
 		PollToken:    res.PollToken,
-		CSRPEM:       csrPEM,
-		KeyPEM:       keyPEM,
-		ServerCAPEM:  serverCAPEM,
-		ServerPin:    pin,
+		CSRPEM:       t.csrPEM,
+		KeyPEM:       t.keyPEM,
+		ServerCAPEM:  t.serverCAPEM,
+		ServerPin:    t.pin,
 		RelayCAPEM:   res.RelayCAPEM,
 		RelayAddress: res.RelayAddress,
 		Expires:      expires,
+	}, nil
+}
+
+// enrollBegin is how the first request of an enrollment ended: the relay
+// sent an e-mail code, or it answered 401 with the ways to sign in.
+type enrollBegin struct {
+	CodeSent bool           `json:"codeSent"`
+	Methods  []enrollMethod `json:"methods,omitempty"`
+}
+
+// postJSONStatus is postJSON for answers where the status itself matters: it
+// returns the status and the body whatever they are.
+func postJSONStatus(client *http.Client, endpoint string, in any) (int, []byte, error) {
+	b, err := json.Marshal(in)
+	if err != nil {
+		return 0, nil, err
 	}
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(b))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
+	return resp.StatusCode, body, nil
+}
+
+// relayEnroll generates a CSR for email and makes the first enrollment request.
+//
+// A relay that offers only the e-mail code sends it. A relay that offers
+// several ways to sign in answers 401 with the list, and nothing is sent: the
+// user picks one and relayEnroll is called again with its method ("email" asks
+// for the code). The private key stays in memory until the certificate is
+// issued. acceptFingerprint is set when the user explicitly accepted an
+// otherwise untrusted server certificate; the connection is then pinned to it.
+func relayEnroll(name, address, email, serverCAPEM, acceptFingerprint, method string) (enrollBegin, error) {
+	method = strings.ToLower(strings.TrimSpace(method))
+	if method != "" && method != "email" {
+		return enrollBegin{}, errors.New("questo metodo non si avvia da qui")
+	}
+	t, err := prepareEnroll(name, address, email, serverCAPEM, acceptFingerprint)
+	if err != nil {
+		return enrollBegin{}, err
+	}
+	extra := map[string]string(nil)
+	if method != "" {
+		extra = map[string]string{"method": method}
+	}
+	status, body, err := postJSONStatus(t.client, t.base.String()+"/enroll", t.body(extra))
+	if err != nil {
+		return enrollBegin{}, untrustedOrError(t.base, t.email, t.pin, err)
+	}
+	switch status {
+	case http.StatusOK:
+		var res enrollResponse
+		if err := json.Unmarshal(body, &res); err != nil {
+			return enrollBegin{}, errors.New("risposta del relay non valida")
+		}
+		p, err := t.pending(res, "code")
+		if err != nil {
+			return enrollBegin{}, err
+		}
+		enrollMu.Lock()
+		trustPending = nil
+		enrollPending = p
+		enrollResult = nil
+		enrollMu.Unlock()
+		return enrollBegin{CodeSent: true}, nil
+	case http.StatusUnauthorized:
+		// Authentication is required: the body lists the ways to provide it.
+		var out struct {
+			Error   string         `json:"error"`
+			Methods []enrollMethod `json:"methods"`
+		}
+		if json.Unmarshal(body, &out) != nil {
+			return enrollBegin{}, errors.New("il relay richiede l'accesso ma non indica come")
+		}
+		methods := cleanEnrollMethods(out.Methods)
+		if len(methods) == 0 {
+			if out.Error != "" {
+				return enrollBegin{}, errors.New(out.Error)
+			}
+			return enrollBegin{}, errors.New("il relay non offre nessun metodo di accesso utilizzabile")
+		}
+		return enrollBegin{Methods: methods}, nil
+	default:
+		var e struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(body, &e) == nil && e.Error != "" {
+			return enrollBegin{}, errors.New(e.Error)
+		}
+		return enrollBegin{}, fmt.Errorf("relay ha risposto %d", status)
+	}
+}
+
+// enrollMethod is one way the relay lets a user prove who they are.
+type enrollMethod struct {
+	ID    string `json:"id"`
+	Type  string `json:"type"`
+	Label string `json:"label"`
+	// Flow is "code" (a code sent by e-mail), "form" (user name and password
+	// typed in the proxy) or "browser" (sign in on the provider's page).
+	Flow string `json:"flow"`
+}
+
+var enrollMethodIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,29}$`)
+
+// cleanEnrollMethods keeps the well-formed entries of a list sent by a relay.
+// The list is shown to the user and its ids end up in addresses, so nothing is
+// taken on trust.
+func cleanEnrollMethods(in []enrollMethod) []enrollMethod {
+	var methods []enrollMethod
+	for _, m := range in {
+		if m.ID != "email" && !enrollMethodIDRe.MatchString(m.ID) {
+			continue
+		}
+		if m.Flow != "code" && m.Flow != "form" && m.Flow != "browser" {
+			continue
+		}
+		if (m.ID == "email") != (m.Flow == "code") {
+			continue
+		}
+		if len(m.Label) > 60 {
+			m.Label = m.Label[:60]
+		}
+		if m.Label == "" {
+			m.Label = m.ID
+		}
+		m.Type = strings.ToLower(m.Type)
+		methods = append(methods, m)
+	}
+	return methods
+}
+
+// relayEnrollLogin enrolls with a user name and password typed in the proxy
+// (methods password and ldap): the relay answers with the certificate at once.
+// The password is sent over the verified (or pinned) connection and kept
+// nowhere.
+func relayEnrollLogin(name, address, email, serverCAPEM, acceptFingerprint, method, username, password string) error {
+	if !enrollMethodIDRe.MatchString(method) {
+		return errors.New("metodo non valido")
+	}
+	if strings.TrimSpace(username) == "" || password == "" {
+		return errors.New("indica utente e password")
+	}
+	t, err := prepareEnroll(name, address, email, serverCAPEM, acceptFingerprint)
+	if err != nil {
+		return err
+	}
+	var res confirmResponse
+	endpoint := t.base.String() + "/enroll-auth/" + url.PathEscape(method)
+	if err := postJSON(t.client, endpoint, "", t.body(map[string]string{"username": username, "password": password}), &res); err != nil {
+		return untrustedOrError(t.base, t.email, t.pin, err)
+	}
+	p := &pendingEnrollment{
+		Name: t.name, BaseURL: t.base.String(), Email: t.email, Device: t.device,
+		CSRPEM: t.csrPEM, KeyPEM: t.keyPEM, ServerCAPEM: t.serverCAPEM, ServerPin: t.pin,
+	}
+	enrollMu.Lock()
+	trustPending = nil
 	enrollMu.Unlock()
-	return nil
+	return completeEnrollment(p, res)
+}
+
+// relayEnrollStart begins a sign-in on the identity provider's page (OpenID
+// Connect, SAML). It returns the address the user must open; the proxy then
+// polls the relay until the sign-in is done.
+func relayEnrollStart(name, address, email, serverCAPEM, acceptFingerprint, method string) (string, error) {
+	if !enrollMethodIDRe.MatchString(method) {
+		return "", errors.New("metodo non valido")
+	}
+	t, err := prepareEnroll(name, address, email, serverCAPEM, acceptFingerprint)
+	if err != nil {
+		return "", err
+	}
+	var res struct {
+		enrollResponse
+		AuthURL string `json:"authUrl"`
+	}
+	endpoint := t.base.String() + "/enroll-auth/" + url.PathEscape(method) + "/start"
+	if err := postJSON(t.client, endpoint, "", t.body(nil), &res); err != nil {
+		return "", untrustedOrError(t.base, t.email, t.pin, err)
+	}
+	// The address comes from the relay and will be opened in the browser: only
+	// ordinary web addresses are acceptable.
+	u, perr := url.Parse(res.AuthURL)
+	if perr != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+		return "", errors.New("il relay ha indicato un indirizzo di accesso non valido")
+	}
+	p, err := t.pending(res.enrollResponse, "browser")
+	if err != nil {
+		return "", err
+	}
+	p.AuthURL = res.AuthURL
+	enrollMu.Lock()
+	trustPending = nil
+	enrollPending = p
+	enrollResult = nil
+	enrollMu.Unlock()
+	return res.AuthURL, nil
+}
+
+var enrollPollMu sync.Mutex
+
+// pollBrowserEnrollment asks the relay whether the user has finished signing
+// in and, if so, completes the enrollment. It does nothing for other kinds of
+// enrollment.
+func pollBrowserEnrollment() {
+	enrollPollMu.Lock()
+	defer enrollPollMu.Unlock()
+	enrollMu.Lock()
+	p := enrollPending
+	enrollMu.Unlock()
+	if p == nil || p.Method != "browser" {
+		return
+	}
+	if time.Now().After(p.Expires) {
+		enrollMu.Lock()
+		if enrollPending == p {
+			enrollPending = nil
+		}
+		enrollMu.Unlock()
+		setEnrollResult(p.Name, "l'accesso è scaduto: riprova")
+		return
+	}
+	client, err := enrollmentClient(p.ServerCAPEM, p.ServerPin, p.BaseURL)
+	if err != nil {
+		return
+	}
+	req, err := http.NewRequest(http.MethodGet, p.BaseURL+"/enroll/"+url.PathEscape(p.ID), nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+p.PollToken)
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusGone || resp.StatusCode == http.StatusNotFound {
+		enrollMu.Lock()
+		if enrollPending == p {
+			enrollPending = nil
+		}
+		enrollMu.Unlock()
+		setEnrollResult(p.Name, "l'accesso non è più valido: riprova")
+		return
+	}
+	var st struct {
+		Status       string `json:"status"`
+		CertPEM      string `json:"certPem"`
+		RelayAddress string `json:"relayAddress"`
+		RelayCAPEM   string `json:"relayCAPEM"`
+	}
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 256<<10)).Decode(&st) != nil {
+		return
+	}
+	if st.Status != "approved" || st.CertPEM == "" {
+		return
+	}
+	if err := completeEnrollment(p, confirmResponse{CertPEM: st.CertPEM, RelayAddress: st.RelayAddress, RelayCAPEM: st.RelayCAPEM}); err != nil {
+		log.Printf("Relay %q enrollment could not be completed: %v", p.Name, err)
+		enrollMu.Lock()
+		if enrollPending == p {
+			enrollPending = nil
+		}
+		enrollMu.Unlock()
+		setEnrollResult(p.Name, err.Error())
+	}
+}
+
+// relayEnrollCancel forgets an enrollment in progress.
+func relayEnrollCancel() {
+	enrollMu.Lock()
+	enrollPending, trustPending, enrollResult = nil, nil, nil
+	enrollMu.Unlock()
 }
 
 // relayEnrollConfirm sends the code received by e-mail, stores the issued
@@ -393,6 +731,9 @@ func relayEnrollConfirm(code string) error {
 	enrollMu.Unlock()
 	if p == nil {
 		return errors.New("nessuna richiesta di enrollment in corso")
+	}
+	if p.Method == "browser" {
+		return errors.New("questo accesso si completa nel browser, non con un codice")
 	}
 	if time.Now().After(p.Expires) {
 		return errors.New("codice scaduto: richiedine un altro")
@@ -411,11 +752,21 @@ func relayEnrollConfirm(code string) error {
 	if err := postJSON(client, endpoint, p.PollToken, map[string]string{"code": code}, &res); err != nil {
 		return err
 	}
+	return completeEnrollment(p, res)
+}
+
+// completeEnrollment checks the certificate the relay issued, stores it in the
+// encrypted configuration and starts the relay client. Whatever the method
+// that proved the user's identity, this is the same.
+func completeEnrollment(p *pendingEnrollment, res confirmResponse) error {
 	if res.CertPEM == "" {
 		return errors.New("il relay non ha restituito il certificato")
 	}
 	if res.RelayAddress == "" {
 		res.RelayAddress = p.RelayAddress
+	}
+	if res.RelayAddress == "" {
+		return errors.New("il relay non ha indicato l'indirizzo mTLS")
 	}
 	if _, _, err := net.SplitHostPort(res.RelayAddress); err != nil {
 		return fmt.Errorf("indirizzo relay non valido: %q", res.RelayAddress)
@@ -475,6 +826,7 @@ func relayEnrollConfirm(code string) error {
 		enrollPending = nil
 	}
 	enrollMu.Unlock()
+	setEnrollResult(p.Name, "")
 
 	relayHub.apply(cfg)
 	log.Printf("Relay %q enrollment completed for %s (device %s)", p.Name, p.Email, p.Device)
@@ -485,11 +837,18 @@ func enrollPendingInfo() map[string]any {
 	enrollMu.Lock()
 	defer enrollMu.Unlock()
 	if enrollPending == nil {
-		return map[string]any{"pending": false}
+		info := map[string]any{"pending": false}
+		// How the last enrollment ended, for a couple of minutes.
+		if r := enrollResult; r != nil && time.Since(r.At) < 2*time.Minute {
+			info["result"] = map[string]any{"name": r.Name, "error": r.Error}
+		}
+		return info
 	}
 	return map[string]any{
 		"pending":   true,
 		"name":      enrollPending.Name,
+		"phase":     enrollPending.Method,
+		"authUrl":   enrollPending.AuthURL,
 		"email":     enrollPending.Email,
 		"address":   enrollPending.BaseURL,
 		"expiresAt": enrollPending.Expires,

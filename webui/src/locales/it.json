@@ -346,5 +346,21 @@
   "No relay is configured yet. Add one here, or use the Relay page to get a certificate by e-mail.": "Nessun relay configurato. Aggiungine uno qui, oppure usa la pagina Relay per ottenere un certificato via e-mail.",
   "Relay name": "Nome del relay",
   "Remove relay": "Rimuovi relay",
-  "Remove the relay \"{{name}}\"? Its contacts and approvals on this computer are forgotten; nothing changes on the relay server.": "Rimuovere il relay \"{{name}}\"? Contatti e approvazioni su questo computer vengono dimenticati; sul server del relay non cambia nulla."
+  "Remove the relay \"{{name}}\"? Its contacts and approvals on this computer are forgotten; nothing changes on the relay server.": "Rimuovere il relay \"{{name}}\"? Contatti e approvazioni su questo computer vengono dimenticati; sul server del relay non cambia nulla.",
+  "A new tab opened with the sign-in page of your organization. When you are done, come back here: this page continues by itself.": "Si è aperta una nuova scheda con la pagina di accesso della tua organizzazione. Quando hai finito torna qui: questa pagina prosegue da sola.",
+  "Continue": "Continua",
+  "E-mail code": "Codice via e-mail",
+  "Enter the enrollment endpoint address and your email. The relay then tells you how you can sign in (an e-mail code, your company login, single sign-on...). The certificate is created locally and signed by the relay.": "Indica l'indirizzo dell'endpoint di enrollment e la tua e-mail. Il relay ti dice poi come puoi accedere (codice via e-mail, login aziendale, single sign-on...). Il certificato viene creato localmente e firmato dal relay.",
+  "Enter the user name and password of your account. They are sent only to the relay, over a verified connection, and are not stored.": "Inserisci utente e password del tuo account. Vengono inviati solo al relay, su una connessione verificata, e non vengono salvati.",
+  "Finish signing in in your browser": "Completa l'accesso nel browser",
+  "How do you want to sign in?": "Come vuoi accedere?",
+  "Open the sign-in page again": "Riapri la pagina di accesso",
+  "Opens the sign-in page of your organization": "Apre la pagina di accesso della tua organizzazione",
+  "Sign in": "Accedi",
+  "Signing in proves who you are to {{address}}. The relay then issues the certificate of this device, which is created here and never leaves it.": "L'accesso dimostra chi sei a {{address}}. Il relay emette poi il certificato di questo dispositivo, che viene creato qui e non esce da qui.",
+  "The sign-in did not complete. Try again.": "L'accesso non si è concluso. Riprova.",
+  "User name": "Utente",
+  "User name and password, typed here": "Utente e password, digitati qui",
+  "Waiting for the sign-in...": "In attesa dell'accesso...",
+  "We send a code to {{email}}": "Inviamo un codice a {{email}}"
 }

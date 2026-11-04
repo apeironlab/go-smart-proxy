@@ -143,6 +143,36 @@ export interface CredentialForm {
   password: string
 }
 
+// One way a relay lets users sign in. Flow: "code" (a code sent by e-mail),
+// "form" (user name and password typed here) or "browser" (the provider's page).
+export interface EnrollMethod {
+  id: string
+  type: string
+  label: string
+  flow: 'code' | 'form' | 'browser'
+}
+
+export interface EnrollRequest {
+  name: string
+  address: string
+  email: string
+  caPem: string
+  acceptFingerprint: string
+  method: string
+}
+
+export interface EnrollStatus {
+  pending: boolean
+  name?: string
+  phase?: string // "code" or "browser"
+  authUrl?: string
+  email?: string
+  address?: string
+  expiresAt?: string
+  // How the last enrollment ended, for a couple of minutes.
+  result?: { name: string; error: string }
+}
+
 export interface CertificatePrompt {
   subject: string
   issuer: string
@@ -219,9 +249,17 @@ export const api = {
   saveRelayConfig: (form: RelayConfigForm, relay?: string) =>
     post<RelayConfigInfo>('/api/relay/config' + rq(relay), { ...form, name: relay ?? '' }),
   deleteRelay: (relay: string) => req('/api/relay/config' + rq(relay), { method: 'DELETE' }),
-  relayEnroll: (address: string, email: string, caPem: string, acceptFingerprint = '', name = '') =>
-    post('/api/relay/enroll', { name, address, email, caPem, acceptFingerprint }),
-  relayEnrollStatus: () => req<{ pending: boolean; name?: string; email?: string; address?: string; expiresAt?: string }>('/api/relay/enroll'),
+  // The first request of an enrollment. The relay either sends an e-mail code
+  // ("code_sent") or, when it offers several ways to sign in, answers 401 with
+  // the list ("auth_required"). method "email" asks for the code by name.
+  relayEnroll: (address: string, email: string, caPem: string, acceptFingerprint = '', name = '', method = '') =>
+    post<{ status: 'code_sent' | 'auth_required'; methods?: EnrollMethod[] }>('/api/relay/enroll', { name, address, email, caPem, acceptFingerprint, method }),
+  relayEnrollStatus: () => req<EnrollStatus>('/api/relay/enroll'),
+  // User name and password typed in the proxy (methods password and ldap).
+  relayEnrollLogin: (b: EnrollRequest & { username: string; password: string }) => post('/api/relay/enroll/login', b),
+  // Sign-in on the provider's page (OpenID Connect, SAML): returns the page to open.
+  relayEnrollStart: (b: EnrollRequest) => post<{ authUrl: string }>('/api/relay/enroll/start', b),
+  relayEnrollCancel: () => req('/api/relay/enroll', { method: 'DELETE' }),
   relayConfirm: (code: string) => post('/api/relay/enroll/confirm', { code }),
   relayRequest: (email: string, relay?: string) => post('/api/relay/contacts' + rq(relay), { email }),
   // Measures the round trip to the relay (empty email) or to a contact's device.

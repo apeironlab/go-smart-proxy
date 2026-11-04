@@ -429,40 +429,60 @@ func registerRelayRoutes(m *http.ServeMux) {
 		c.SetDevice(device)
 		writeJSON(w, map[string]string{"status": "ok", "device": device})
 	})
+	// Enrollment: the e-mail code, or one of the sign-in methods the relay
+	// offers. All of them end with a certificate and a configured relay.
 	m.HandleFunc("POST /api/relay/enroll", func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Name              string `json:"name"`
-			Address           string `json:"address"`
-			Email             string `json:"email"`
-			CAPEM             string `json:"caPem"`
-			AcceptFingerprint string `json:"acceptFingerprint"`
-		}
-		if err := readJSON(r, &body); err != nil {
-			writeAPIError(w, http.StatusBadRequest, "invalid body")
+		body, ok := readEnrollBody(w, r)
+		if !ok {
 			return
 		}
-		name := strings.ToLower(strings.TrimSpace(body.Name))
-		if name == "" {
-			name = relayQuery(r)
-		}
-		if err := relayEnroll(name, body.Address, body.Email, body.CAPEM, body.AcceptFingerprint); err != nil {
-			var untrusted *untrustedCertificateError
-			if errors.As(err, &untrusted) {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusConflict)
-				writeJSON(w, map[string]any{
-					"error":       untrusted.Error(),
-					"certificate": untrusted.Info,
-				})
-				return
-			}
-			writeAPIError(w, http.StatusBadGateway, err.Error())
+		// The first request. The relay either sends an e-mail code or, when it
+		// offers several ways to sign in, answers 401 with the list: that is not
+		// an error for the page, it is the next step.
+		begin, err := relayEnroll(body.name(r), body.Address, body.Email, body.CAPEM, body.AcceptFingerprint, body.Method)
+		if err != nil {
+			writeEnrollError(w, err)
 			return
 		}
-		writeJSON(w, map[string]string{"status": "code_sent"})
+		if begin.CodeSent {
+			writeJSON(w, map[string]string{"status": "code_sent"})
+			return
+		}
+		writeJSON(w, map[string]any{"status": "auth_required", "methods": begin.Methods})
+	})
+	// User name and password typed in the proxy (methods password and ldap).
+	m.HandleFunc("POST /api/relay/enroll/login", func(w http.ResponseWriter, r *http.Request) {
+		body, ok := readEnrollBody(w, r)
+		if !ok {
+			return
+		}
+		if err := relayEnrollLogin(body.name(r), body.Address, body.Email, body.CAPEM, body.AcceptFingerprint, body.Method, body.Username, body.Password); err != nil {
+			writeEnrollError(w, err)
+			return
+		}
+		writeJSON(w, map[string]string{"status": "ok"})
+	})
+	// Sign-in on the provider's page (methods oidc and saml): returns the
+	// address to open; GET /api/relay/enroll then reports when it is done.
+	m.HandleFunc("POST /api/relay/enroll/start", func(w http.ResponseWriter, r *http.Request) {
+		body, ok := readEnrollBody(w, r)
+		if !ok {
+			return
+		}
+		authURL, err := relayEnrollStart(body.name(r), body.Address, body.Email, body.CAPEM, body.AcceptFingerprint, body.Method)
+		if err != nil {
+			writeEnrollError(w, err)
+			return
+		}
+		writeJSON(w, map[string]string{"status": "started", "authUrl": authURL})
 	})
 	m.HandleFunc("GET /api/relay/enroll", func(w http.ResponseWriter, r *http.Request) {
+		pollBrowserEnrollment() // a sign-in in the browser may have finished
 		writeJSON(w, enrollPendingInfo())
+	})
+	m.HandleFunc("DELETE /api/relay/enroll", func(w http.ResponseWriter, r *http.Request) {
+		relayEnrollCancel()
+		writeJSON(w, map[string]string{"status": "ok"})
 	})
 	m.HandleFunc("POST /api/relay/enroll/confirm", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
@@ -478,6 +498,52 @@ func registerRelayRoutes(m *http.ServeMux) {
 		}
 		writeJSON(w, map[string]string{"status": "ok"})
 	})
+}
+
+// enrollBody is what the pages send to start or continue an enrollment.
+type enrollBody struct {
+	Name              string `json:"name"`
+	Address           string `json:"address"`
+	Email             string `json:"email"`
+	CAPEM             string `json:"caPem"`
+	AcceptFingerprint string `json:"acceptFingerprint"`
+	Method            string `json:"method"`
+	Username          string `json:"username"`
+	Password          string `json:"password"`
+}
+
+// name is the relay being enrolled: the body's, else the query's.
+func (b enrollBody) name(r *http.Request) string {
+	if n := strings.ToLower(strings.TrimSpace(b.Name)); n != "" {
+		return n
+	}
+	return relayQuery(r)
+}
+
+func readEnrollBody(w http.ResponseWriter, r *http.Request) (enrollBody, bool) {
+	var body enrollBody
+	if err := readJSON(r, &body); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid body")
+		return body, false
+	}
+	return body, true
+}
+
+// writeEnrollError answers a failed enrollment step. An untrusted server
+// certificate is not an error to show but a question to ask: its details are
+// sent so that the user can check the fingerprint.
+func writeEnrollError(w http.ResponseWriter, err error) {
+	var untrusted *untrustedCertificateError
+	if errors.As(err, &untrusted) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		writeJSON(w, map[string]any{
+			"error":       untrusted.Error(),
+			"certificate": untrusted.Info,
+		})
+		return
+	}
+	writeAPIError(w, http.StatusBadGateway, err.Error())
 }
 
 func relayCommand(w http.ResponseWriter, r *http.Request, typ string) {

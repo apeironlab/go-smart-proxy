@@ -8,7 +8,7 @@ config.yml.enc.tmp
 config.key.dpapi
 config.key.dpapi.tmp
 webui/node_modules
-proxyrelay
+/proxyrelay
 relay_state.json
 relay-pki
 relay-certs

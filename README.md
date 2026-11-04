@@ -927,6 +927,133 @@ proxyrelay invite \
 
 SMTP credentials can also come from `PROXYRELAY_SMTP_*` environment variables.
 
+### Sign-in methods for enrollment (optional)
+
+The e-mail code proves that you own an address. A relay can add stronger or
+more convenient ways to prove it, all optional and all ending in the same
+certificate:
+
+| Method | Where the user types | Proves |
+|---|---|---|
+| `password` | a form in the proxy | local users with bcrypt hashes (file) |
+| `ldap` | a form in the proxy | an account of a directory (OpenLDAP, Active Directory, FreeIPA) |
+| `oidc` | the provider's page, in the browser | OpenID Connect (Entra ID, Okta, Keycloak, Google...) |
+| `saml` | the provider's page, in the browser | SAML 2.0 |
+
+Whatever the method, its only job is to establish **the e-mail address** of the
+user and, if you want, **the groups** they belong to. Nothing else changes: the
+certificate is issued for that address, the allowed-domain list still applies,
+and everything after enrollment works exactly as before. A relay without this
+configuration offers only the e-mail code, as it always did.
+
+Describe the methods in a YAML file (`${VAR}` is replaced with the environment
+variable, so secrets need not be written in it):
+
+```yaml
+disable_email: false          # true removes the e-mail code
+methods:
+  - id: corp                  # lowercase letters, digits, - and _
+    type: oidc
+    label: Company sign-in
+    oidc:
+      issuer: https://login.microsoftonline.com/<tenant>/v2.0
+      client_id: 1234-abcd
+      client_secret: ${OIDC_SECRET}      # optional for a public client (PKCE is always used)
+      require_groups: [vpn-users]        # any of these; groups come from the "groups" claim
+      # redirect_url, scopes, email_claim, groups_claim, allow_unverified_email
+  - id: directory
+    type: ldap
+    label: Directory password
+    ldap:
+      url: ldaps://ldap.example.com:636  # or ldap:// with start_tls: true
+      bind_dn: cn=relay,ou=services,dc=example,dc=com
+      bind_password: ${LDAP_BIND_PASSWORD}
+      base_dn: ou=people,dc=example,dc=com
+      user_filter: "(uid=%s)"            # AD: (&(objectClass=user)(sAMAccountName=%s))
+      require_groups: [vpn-users]        # a group name or the CN of a memberOf entry
+      # ca_file, email_attr (mail), group_attr (memberOf)
+  - id: local
+    type: password
+    label: Local account
+    password:
+      users_file: /data/users.txt        # username:bcrypt[:e-mail[:group,group]]
+  - id: sso
+    type: saml
+    label: SAML sign-on
+    saml:
+      idp_metadata_url: https://idp.example.com/metadata
+      email_attribute: mail              # default: the NameID, when it is an address
+      groups_attribute: groups
+      require_groups: [vpn-users]
+```
+
+**Wiring.** The enrollment server takes it as `EnrollConfig.Auth`:
+
+```go
+auth, err := relay.LoadAuthConfig("/data/auth.yml") // e.g. a new -auth-config flag
+// ...
+relay.NewEnrollServer(relay.EnrollConfig{ /* as before */, Auth: auth, PublicURL: "https://proxy.intra.example.com" })
+```
+
+`PublicURL` (`-public-url`) must be the address users and identity providers
+reach the enrollment endpoint at: it builds the return addresses
+`<public-url>/enroll-auth/<id>/callback` (OpenID Connect, register it at the
+provider) and `.../acs` plus `.../metadata` (SAML, give the metadata to the
+identity provider's administrator). With `disable_email: true` SMTP is not
+needed. Local users are managed with `relay.AddPasswordUser(file, user,
+password, email, groups...)` (the file is re-read when it changes).
+
+**What the relay guarantees**
+- The user signs in as the address the certificate is requested for; signing in
+  as anyone else is refused, even with valid credentials.
+- `require_groups` is any-of, case-insensitive; an LDAP `memberOf` entry matches
+  by its CN. A user outside the groups gets no certificate.
+- OpenID Connect uses the authorization code flow with PKCE, a one-time `state`
+  and a nonce; the ID token's signature, issuer, audience and expiry are
+  verified, and an unverified e-mail is refused unless `allow_unverified_email`.
+- SAML requires a response signed by a key in the identity provider's metadata,
+  addressed to this service, and answering the request that was actually made
+  (`InResponseTo`); a response replayed or handed over with another state is
+  refused.
+- Passwords are checked with bcrypt (an unknown user takes as long as a wrong
+  password), LDAP user names are escaped (no filter injection), an empty LDAP
+  password is never sent (it would be an anonymous bind), and an ambiguous
+  search is refused. A directory over plain `ldap://` needs `start_tls` (or
+  `allow_plaintext` for a lab).
+- Guessing is rate-limited per account (10 per 10 minutes) and per address.
+  A failed sign-in always says the same ("user or password not valid"); the
+  reason is only in the relay's log, which never contains passwords.
+
+**How the client learns the methods.** There is no separate discovery call. The
+client makes the normal `POST /enroll` (e-mail, CSR, device) with no `method`:
+
+- a relay that offers **only the e-mail code** (no auth configuration) sends it
+  and answers `200`, exactly as before;
+- a relay that offers **several ways** answers **`401 Unauthorized`** and sends
+  nothing. The body lists the methods (`{"error": ..., "methods": [{"id",
+  "type", "label", "flow"}]}`) and there is one `WWW-Authenticate` header per
+  method, with the scheme telling the client what to do:
+  `GSP-Code id="email", type="email", realm="E-mail"` (a code by e-mail),
+  `GSP-Form id="local", type="password", realm="Company password"` (user name and
+  password typed in the proxy), `GSP-Browser id="corp", type="oidc", realm="..."`
+  (the provider's page);
+- the client then goes on with the chosen method: `POST /enroll` with
+  `"method": "email"` for the code, `POST /enroll-auth/<id>` with `username` and
+  `password` for a form method (a wrong password is again `401` with that
+  method's challenge), `POST /enroll-auth/<id>/start` for a browser method
+  (the answer carries the page to open; the client polls `GET /enroll/<id>`).
+
+A client that does not know about methods and enrolls on a relay that requires
+one gets the `401` and its message; it needs updating. A relay without the new
+configuration keeps working with any client.
+
+**In the proxy.** Enrollment first asks the relay how you can sign in and shows
+the choices. With a password or LDAP method the proxy shows a form (the password
+goes only to the relay, over the verified or pinned connection, and is not
+stored); with OpenID Connect or SAML a new tab opens the provider's page and the
+proxy continues by itself when you are done. Relays that predate this feature
+simply offer the e-mail code.
+
 ### Kubernetes deployment
 
 [`deploy/relay-k8s.example.yaml`](deploy/relay-k8s.example.yaml) contains an

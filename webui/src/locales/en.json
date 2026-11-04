@@ -346,5 +346,21 @@
   "No relay is configured yet. Add one here, or use the Relay page to get a certificate by e-mail.": "No relay is configured yet. Add one here, or use the Relay page to get a certificate by e-mail.",
   "Relay name": "Relay name",
   "Remove relay": "Remove relay",
-  "Remove the relay \"{{name}}\"? Its contacts and approvals on this computer are forgotten; nothing changes on the relay server.": "Remove the relay \"{{name}}\"? Its contacts and approvals on this computer are forgotten; nothing changes on the relay server."
+  "Remove the relay \"{{name}}\"? Its contacts and approvals on this computer are forgotten; nothing changes on the relay server.": "Remove the relay \"{{name}}\"? Its contacts and approvals on this computer are forgotten; nothing changes on the relay server.",
+  "A new tab opened with the sign-in page of your organization. When you are done, come back here: this page continues by itself.": "A new tab opened with the sign-in page of your organization. When you are done, come back here: this page continues by itself.",
+  "Continue": "Continue",
+  "E-mail code": "E-mail code",
+  "Enter the enrollment endpoint address and your email. The relay then tells you how you can sign in (an e-mail code, your company login, single sign-on...). The certificate is created locally and signed by the relay.": "Enter the enrollment endpoint address and your email. The relay then tells you how you can sign in (an e-mail code, your company login, single sign-on...). The certificate is created locally and signed by the relay.",
+  "Enter the user name and password of your account. They are sent only to the relay, over a verified connection, and are not stored.": "Enter the user name and password of your account. They are sent only to the relay, over a verified connection, and are not stored.",
+  "Finish signing in in your browser": "Finish signing in in your browser",
+  "How do you want to sign in?": "How do you want to sign in?",
+  "Open the sign-in page again": "Open the sign-in page again",
+  "Opens the sign-in page of your organization": "Opens the sign-in page of your organization",
+  "Sign in": "Sign in",
+  "Signing in proves who you are to {{address}}. The relay then issues the certificate of this device, which is created here and never leaves it.": "Signing in proves who you are to {{address}}. The relay then issues the certificate of this device, which is created here and never leaves it.",
+  "The sign-in did not complete. Try again.": "The sign-in did not complete. Try again.",
+  "User name": "User name",
+  "User name and password, typed here": "User name and password, typed here",
+  "Waiting for the sign-in...": "Waiting for the sign-in...",
+  "We send a code to {{email}}": "We send a code to {{email}}"
 }

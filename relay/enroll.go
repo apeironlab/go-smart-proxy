@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -53,25 +54,36 @@ type EnrollConfig struct {
 	// entry (the one appended by a trusted reverse proxy) as the client IP.
 	// Leave it off unless the endpoint is only reachable through that proxy.
 	TrustForwardedFor bool
-	Logger            *log.Logger
+	// Auth adds sign-in methods (password, LDAP, OpenID Connect, SAML) to the
+	// e-mail code. nil offers only the e-mail code.
+	Auth   *AuthConfig
+	Logger *log.Logger
 	// SendMail is used by tests; when nil, SMTP is used.
 	SendMail func(to, subject, body string) error
 }
 
 // Enrollment is a pending certificate request.
 type Enrollment struct {
-	ID       string    `json:"id"`
-	Email    string    `json:"email"`
-	Device   string    `json:"device,omitempty"`
-	CSRPEM   string    `json:"csr"`
-	CodeHash string    `json:"codeHash"`
-	PollHash string    `json:"pollHash"`
-	Created  time.Time `json:"created"`
-	Expires  time.Time `json:"expires"`
-	Attempts int       `json:"attempts"`
-	Approved bool      `json:"approved"`
-	CertPEM  string    `json:"certPem,omitempty"`
-	Known    bool      `json:"known"`
+	ID       string `json:"id"`
+	Email    string `json:"email"`
+	Device   string `json:"device,omitempty"`
+	CSRPEM   string `json:"csr"`
+	CodeHash string `json:"codeHash"`
+	// Method is how the user proves who they are: "" or "email" (the code
+	// sent by e-mail) or the id of an authentication method.
+	Method string `json:"method,omitempty"`
+	// Browser sign-in state: kept in memory only.
+	State         string    `json:"-"`
+	Nonce         string    `json:"-"`
+	Verifier      string    `json:"-"`
+	SAMLRequestID string    `json:"-"`
+	PollHash      string    `json:"pollHash"`
+	Created       time.Time `json:"created"`
+	Expires       time.Time `json:"expires"`
+	Attempts      int       `json:"attempts"`
+	Approved      bool      `json:"approved"`
+	CertPEM       string    `json:"certPem,omitempty"`
+	Known         bool      `json:"known"`
 }
 
 type enrollFile struct {
@@ -90,6 +102,10 @@ type EnrollServer struct {
 	rate  map[string][]time.Time
 	// lastPrune is the last time expired state was swept.
 	lastPrune time.Time
+
+	methods     map[string]*methodEntry // by id
+	methodOrder []string
+	byState     map[string]string // browser sign-in state -> enrollment id
 }
 
 func NewEnrollServer(cfg EnrollConfig) (*EnrollServer, error) {
@@ -99,6 +115,9 @@ func NewEnrollServer(cfg EnrollConfig) (*EnrollServer, error) {
 		items: map[string]*Enrollment{},
 		users: map[string]bool{},
 		rate:  map[string][]time.Time{},
+
+		methods: map[string]*methodEntry{},
+		byState: map[string]string{},
 	}
 	if s.log == nil {
 		s.log = log.Default()
@@ -109,10 +128,11 @@ func NewEnrollServer(cfg EnrollConfig) (*EnrollServer, error) {
 	if _, _, err := loadCA(cfg.CADir); err != nil {
 		return nil, fmt.Errorf("enrollment CA: %w", err)
 	}
-	if cfg.SMTPAddr == "" && cfg.SendMail == nil {
+	emailOff := cfg.Auth != nil && cfg.Auth.DisableEmail
+	if cfg.SMTPAddr == "" && cfg.SendMail == nil && !emailOff {
 		return nil, errors.New("enrollment: SMTP is not configured")
 	}
-	if cfg.SMTPFrom == "" && cfg.SendMail == nil {
+	if cfg.SMTPFrom == "" && cfg.SendMail == nil && !emailOff {
 		return nil, errors.New("enrollment: SMTP from address is not configured")
 	}
 	if cfg.PublicRelay == "" {
@@ -120,6 +140,9 @@ func NewEnrollServer(cfg EnrollConfig) (*EnrollServer, error) {
 	}
 	if u, err := url.Parse(cfg.PublicRelay); err == nil && u.Host != "" {
 		cfg.PublicRelay = u.Host
+	}
+	if err := s.buildMethods(); err != nil {
+		return nil, err
 	}
 	if len(cfg.AllowedDomains) == 0 {
 		s.log.Printf("WARNING: enrollment is open to every e-mail domain (set -allow-domains to restrict it)")
@@ -145,6 +168,13 @@ func NewEnrollServer(cfg EnrollConfig) (*EnrollServer, error) {
 func (s *EnrollServer) Handler() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("POST /enroll", s.handleEnroll)
+	// Sign-in methods. They live under their own prefix: /enroll/{id}/confirm
+	// would otherwise clash with /enroll/<x>/<y>.
+	m.HandleFunc("POST /enroll-auth/{method}", s.handleLogin)
+	m.HandleFunc("POST /enroll-auth/{method}/start", s.handleBrowserStart)
+	m.HandleFunc("GET /enroll-auth/{method}/callback", s.handleCallback)
+	m.HandleFunc("POST /enroll-auth/{method}/acs", s.handleACS)
+	m.HandleFunc("GET /enroll-auth/{method}/metadata", s.handleSAMLMetadata)
 	m.HandleFunc("GET /enroll/{id}", s.handleStatus)
 	m.HandleFunc("POST /enroll/{id}/confirm", s.handleConfirm)
 	return m
@@ -197,6 +227,11 @@ func (s *EnrollServer) pruneLocked(now, cut time.Time) {
 	for id, it := range s.items {
 		if now.After(it.Expires.Add(time.Hour)) {
 			delete(s.items, id)
+		}
+	}
+	for st, id := range s.byState {
+		if _, ok := s.items[id]; !ok {
+			delete(s.byState, st)
 		}
 	}
 	for k, times := range s.rate {
@@ -290,40 +325,56 @@ func (s *EnrollServer) clientIP(r *http.Request) string {
 	return host
 }
 
-func (s *EnrollServer) handleEnroll(w http.ResponseWriter, r *http.Request) {
+// enrollRequest is a validated enrollment request.
+type enrollRequest struct {
+	email  string
+	device string
+	csr    string // PEM
+}
+
+// parseEnrollRequest reads and checks what every enrollment method starts
+// with: the e-mail address, the device code and a certificate request that is
+// for that address. extra receives the remaining fields of the body.
+func (s *EnrollServer) parseEnrollRequest(w http.ResponseWriter, r *http.Request, extra any) (*enrollRequest, bool) {
 	var req struct {
 		Email  string `json:"email"`
 		CSR    string `json:"csr"`
 		Device string `json:"device"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10)).Decode(&req); err != nil {
+	body := http.MaxBytesReader(w, r.Body, 128<<10)
+	raw, err := io.ReadAll(body)
+	if err != nil || json.Unmarshal(raw, &req) != nil {
 		writeError(w, http.StatusBadRequest, "richiesta non valida")
-		return
+		return nil, false
+	}
+	if extra != nil && json.Unmarshal(raw, extra) != nil {
+		writeError(w, http.StatusBadRequest, "richiesta non valida")
+		return nil, false
 	}
 	email, ok := NormalizeEmail(req.Email)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "indirizzo e-mail non valido")
-		return
+		return nil, false
 	}
 	if !allowedDomain(email, s.cfg.AllowedDomains) {
 		writeError(w, http.StatusForbidden, "dominio non abilitato")
-		return
+		return nil, false
 	}
 	device, ok := NormalizeDevice(req.Device)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "codice dispositivo non valido")
-		return
+		return nil, false
 	}
-	// Validate the CSR before creating state or sending email.
+	// Validate the CSR before creating state or contacting anyone.
 	block, _ := pem.Decode([]byte(req.CSR))
 	if block == nil || block.Type != "CERTIFICATE REQUEST" {
 		writeError(w, http.StatusBadRequest, "CSR non valida")
-		return
+		return nil, false
 	}
 	csr, err := x509.ParseCertificateRequest(block.Bytes)
 	if err != nil || csr.CheckSignature() != nil {
 		writeError(w, http.StatusBadRequest, "CSR non valida")
-		return
+		return nil, false
 	}
 	identity := false
 	for _, e := range csr.EmailAddresses {
@@ -333,8 +384,36 @@ func (s *EnrollServer) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 	if !identity {
 		writeError(w, http.StatusBadRequest, "la CSR non corrisponde all'e-mail")
+		return nil, false
+	}
+	return &enrollRequest{email: email, device: device, csr: req.CSR}, true
+}
+
+func (s *EnrollServer) handleEnroll(w http.ResponseWriter, r *http.Request) {
+	var extra struct {
+		// Method is how the user wants to prove who they are. Without one, a
+		// relay that offers several ways answers 401 and lists them.
+		Method string `json:"method"`
+	}
+	pr, ok := s.parseEnrollRequest(w, r, &extra)
+	if !ok {
 		return
 	}
+	method := strings.ToLower(strings.TrimSpace(extra.Method))
+	if method == "" && s.authRequired() {
+		s.challenge(w)
+		return
+	}
+	if method != "" && method != "email" {
+		writeError(w, http.StatusBadRequest, "questo metodo non usa /enroll: vedi l'elenco restituito dal relay")
+		return
+	}
+	if s.cfg.Auth != nil && s.cfg.Auth.DisableEmail {
+		writeError(w, http.StatusForbidden, "il codice via e-mail non è abilitato: usa uno degli altri metodi")
+		return
+	}
+	email, device := pr.email, pr.device
+	req := struct{ CSR string }{CSR: pr.csr}
 
 	ip := s.clientIP(r)
 	if !s.allow("email:"+email, 4) || !s.allow("ip:"+ip, 12) {
@@ -614,6 +693,10 @@ func (s *EnrollServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 func (s *EnrollServer) handleConfirm(w http.ResponseWriter, r *http.Request) {
 	it, _, ok := s.find(w, r)
 	if !ok {
+		return
+	}
+	if it.Method != "" && it.Method != "email" {
+		writeError(w, http.StatusBadRequest, "questa richiesta non usa il codice via e-mail")
 		return
 	}
 	var req struct {

@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ActionIcon, Alert, Badge, Button, Code, Group, Modal, Stack, Table, Text, Textarea, TextInput,
+  ActionIcon, Alert, Badge, Button, Card, Code, Group, Loader, Modal, PasswordInput, Stack, Table, Text, Textarea, TextInput, ThemeIcon,
 } from '@mantine/core'
-import { IconCheck, IconPencil, IconPlus, IconRouteAltRight, IconTrash, IconUsers, IconX } from '@tabler/icons-react'
+import {
+  IconBuildingSkyscraper, IconCheck, IconExternalLink, IconKey, IconLock, IconMail, IconPencil, IconPlus, IconRouteAltRight, IconShieldCheck,
+  IconTrash, IconUsers, IconX,
+} from '@tabler/icons-react'
 import { useTranslation } from 'react-i18next'
 import { api, ApiError } from '../api'
-import type { CertificatePrompt, RelayStatus } from '../api'
+import type { CertificatePrompt, EnrollMethod, RelayStatus } from '../api'
 import { Dot, EmptyState, PageHeader, Section } from '../components/ui'
 import { ContextBadges } from '../components/contextBadges'
 import { ProbeBadge, bestProbe, qualityOf } from '../components/linkQuality'
@@ -38,7 +41,14 @@ export default function RelayPage() {
   const [enrollEmail, setEnrollEmail] = useState('')
   const [enrollCA, setEnrollCA] = useState('')
   const [enrollCode, setEnrollCode] = useState('')
-  const [enrollPhase, setEnrollPhase] = useState<'form' | 'code'>('form')
+  const [enrollPhase, setEnrollPhase] = useState<'form' | 'method' | 'credentials' | 'browser' | 'code'>('form')
+  const [methods, setMethods] = useState<EnrollMethod[]>([])
+  const [chosen, setChosen] = useState<EnrollMethod | null>(null)
+  const [enrollUser, setEnrollUser] = useState('')
+  const [enrollPass, setEnrollPass] = useState('')
+  const [enrollFp, setEnrollFp] = useState('')
+  const [authUrl, setAuthUrl] = useState('')
+  const browserWaiting = useRef(false)
   const [showEnroll, setShowEnroll] = useState(false)
   const [busy, setBusy] = useState(false)
   const [probes, setProbes] = useState<Record<string, Probe>>({})
@@ -59,11 +69,32 @@ export default function RelayPage() {
         if (s.name) selectRelay(s.name)
         setEnrollEmail(s.email)
         setEnrollAddress(s.address ?? '')
-        setEnrollPhase('code')
+        if (s.phase === 'browser') {
+          browserWaiting.current = true
+          setAuthUrl(s.authUrl ?? '')
+          setEnrollPhase('browser')
+        } else {
+          setEnrollPhase('code')
+        }
         setShowEnroll(true)
+      } else if (browserWaiting.current && !s.pending) {
+        // The sign-in in the browser is over: it worked or it did not.
+        browserWaiting.current = false
+        if (s.result && !s.result.error) {
+          setEnrollPhase('form')
+          setShowEnroll(false)
+          setAddingNew(false)
+          setMethods([])
+          setChosen(null)
+          if (s.result.name) selectRelay(s.result.name)
+          api.relays().then(setAll).catch(() => {})
+        } else {
+          setError(s.result?.error || t('The sign-in did not complete. Try again.'))
+          setEnrollPhase(methods.length > 0 ? 'method' : 'form')
+        }
       }
     }).catch(() => {})
-  }, [selectRelay])
+  }, [selectRelay, methods.length, t])
 
   useEffect(() => {
     load()
@@ -86,25 +117,115 @@ export default function RelayPage() {
     setDeviceOpen(false)
   }
 
-  const requestEnrollment = async (acceptFingerprint = '') => {
+  const askAboutCertificate = (e: unknown): boolean => {
+    if (e instanceof ApiError) {
+      const cert = (e.payload as { certificate?: CertificatePrompt } | undefined)?.certificate
+      if (cert) {
+        setCertPrompt(cert)
+        return true
+      }
+    }
+    return false
+  }
+
+  // The first request of an enrollment. A relay that offers only the e-mail
+  // code sends it; one that offers several ways to sign in answers 401 with the
+  // list, and the user picks. Asking again with method "email" requests the code.
+  const beginEnrollment = async (acceptFingerprint: string, method = '') => {
     setBusy(true)
     try {
       setError(null)
-      await api.relayEnroll(enrollAddress.trim(), enrollEmail.trim(), enrollCA.trim(), acceptFingerprint, enrollName.trim())
+      const r = await api.relayEnroll(enrollAddress.trim(), enrollEmail.trim(), enrollCA.trim(), acceptFingerprint, enrollName.trim(), method)
       setCertPrompt(null)
-      setEnrollPhase('code')
-    } catch (e) {
-      if (e instanceof ApiError) {
-        const cert = (e.payload as { certificate?: CertificatePrompt } | undefined)?.certificate
-        if (cert) {
-          setCertPrompt(cert)
-          return
-        }
+      setEnrollFp(acceptFingerprint)
+      if (r.status === 'auth_required') {
+        setMethods(r.methods ?? [])
+        setEnrollPhase('method')
+      } else {
+        setEnrollPhase('code')
       }
+    } catch (e) {
+      if (askAboutCertificate(e)) return
       setError(String(e))
     } finally {
       setBusy(false)
     }
+  }
+
+  const enrollRequest = (method: string, acceptFingerprint = enrollFp) => ({
+    name: enrollName.trim(), address: enrollAddress.trim(), email: enrollEmail.trim(),
+    caPem: enrollCA.trim(), acceptFingerprint, method,
+  })
+
+  const finishEnrollment = (relayToSelect?: string) => {
+    browserWaiting.current = false
+    setEnrollPhase('form')
+    setShowEnroll(false)
+    setAddingNew(false)
+    setEnrollCode('')
+    setEnrollUser('')
+    setEnrollPass('')
+    setMethods([])
+    setChosen(null)
+    setEnrollFp('')
+    if (relayToSelect) selectRelay(relayToSelect)
+    load()
+  }
+
+  const continueEnrollment = (acceptFingerprint = '') => beginEnrollment(acceptFingerprint)
+
+  const startBrowserSignIn = async (m: EnrollMethod) => {
+    setBusy(true)
+    try {
+      setError(null)
+      const { authUrl: url } = await api.relayEnrollStart(enrollRequest(m.id))
+      setAuthUrl(url)
+      browserWaiting.current = true
+      setEnrollPhase('browser')
+      // The page of the identity provider opens in a new tab; the link stays
+      // on screen in case the browser blocks it.
+      window.open(url, '_blank', 'noopener,noreferrer')
+    } catch (e) {
+      if (askAboutCertificate(e)) return
+      setError(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const chooseMethod = (m: EnrollMethod) => {
+    setChosen(m)
+    setError(null)
+    if (m.flow === 'code') beginEnrollment(enrollFp, 'email')
+    else if (m.flow === 'form') setEnrollPhase('credentials')
+    else startBrowserSignIn(m)
+  }
+
+  const submitCredentials = async () => {
+    if (!chosen) return
+    setBusy(true)
+    const password = enrollPass
+    setEnrollPass('') // never keep it longer than the request
+    try {
+      setError(null)
+      await api.relayEnrollLogin({ ...enrollRequest(chosen.id), username: enrollUser.trim(), password })
+      finishEnrollment(enrollName.trim() || undefined)
+    } catch (e) {
+      if (askAboutCertificate(e)) return
+      setError(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const cancelEnrollment = async () => {
+    browserWaiting.current = false
+    try {
+      await api.relayEnrollCancel()
+    } catch {
+      /* ignore */
+    }
+    setEnrollPhase(methods.length > 0 ? 'method' : 'form')
   }
 
   const confirmEnrollment = async () => {
@@ -112,12 +233,7 @@ export default function RelayPage() {
     try {
       setError(null)
       await api.relayConfirm(enrollCode.trim())
-      setEnrollPhase('form')
-      setShowEnroll(false)
-      setAddingNew(false)
-      setEnrollCode('')
-      if (enrollName.trim()) selectRelay(enrollName.trim())
-      load()
+      finishEnrollment(enrollName.trim() || undefined)
     } catch (e) {
       setError(String(e))
     } finally {
@@ -192,7 +308,7 @@ export default function RelayPage() {
         {enrollPhase === 'form' ? (
           <Section
             title={t('Connect this device to the relay')}
-            description={t('Enter the enrollment endpoint address and your email. The relay will send a confirmation code; the certificate will be created locally and signed by the relay.')}
+            description={t('Enter the enrollment endpoint address and your email. The relay then tells you how you can sign in (an e-mail code, your company login, single sign-on...). The certificate is created locally and signed by the relay.')}
           >
             <Stack gap="sm">
               {addingNew && (
@@ -210,12 +326,82 @@ export default function RelayPage() {
                 minRows={3} value={enrollCA} onChange={(e) => setEnrollCA(e.currentTarget.value)} />
               <Group justify="flex-end">
                 {st.enabled && <Button variant="subtle" onClick={() => { setShowEnroll(false); setAddingNew(false) }}>{t('Cancel')}</Button>}
-                <Button onClick={() => requestEnrollment()} loading={busy}
+                <Button onClick={() => continueEnrollment()} loading={busy}
                   disabled={!enrollAddress.trim() || !enrollEmail.trim() || (addingNew && !/^[a-z0-9][a-z0-9_-]{0,29}$/.test(enrollName))}>
-                  {t('Send request')}
+                  {t('Continue')}
                 </Button>
               </Group>
             </Stack>
+          </Section>
+        ) : enrollPhase === 'method' ? (
+          <Section
+            title={t('How do you want to sign in?')}
+            description={t('Signing in proves who you are to {{address}}. The relay then issues the certificate of this device, which is created here and never leaves it.', { address: enrollAddress })}
+          >
+            <Stack gap="xs">
+              {methods.map((m) => {
+                const Icon = m.type === 'email' ? IconMail : m.type === 'password' ? IconLock
+                  : m.type === 'ldap' ? IconBuildingSkyscraper : m.type === 'oidc' ? IconShieldCheck : IconKey
+                return (
+                  <Card key={m.id} withBorder padding="sm" radius="md" component="button" type="button"
+                    onClick={() => chooseMethod(m)} disabled={busy}
+                    style={{ cursor: 'pointer', textAlign: 'left', background: 'transparent' }}>
+                    <Group gap="md" wrap="nowrap">
+                      <ThemeIcon variant="light" size={38} radius="md"><Icon size={20} /></ThemeIcon>
+                      <div style={{ flex: 1 }}>
+                        <Text fw={600} size="sm">{m.type === 'email' ? t('E-mail code') : m.label}</Text>
+                        <Text size="xs" c="dimmed">
+                          {m.flow === 'code' && t('We send a code to {{email}}', { email: enrollEmail })}
+                          {m.flow === 'form' && t('User name and password, typed here')}
+                          {m.flow === 'browser' && t('Opens the sign-in page of your organization')}
+                        </Text>
+                      </div>
+                      {m.flow === 'browser' && <IconExternalLink size={16} />}
+                    </Group>
+                  </Card>
+                )
+              })}
+              <Group justify="flex-start" mt="xs">
+                <Button variant="subtle" onClick={() => setEnrollPhase('form')}>{t('Back')}</Button>
+              </Group>
+            </Stack>
+          </Section>
+        ) : enrollPhase === 'credentials' && chosen ? (
+          <Section
+            title={chosen.label}
+            description={t('Enter the user name and password of your account. They are sent only to the relay, over a verified connection, and are not stored.')}
+          >
+            <form onSubmit={(ev) => { ev.preventDefault(); if (enrollUser.trim() && enrollPass) submitCredentials() }}>
+              <Stack gap="sm" maw={420}>
+                <TextInput label={t('User name')} autoComplete="username" autoFocus
+                  value={enrollUser} onChange={(e) => setEnrollUser(e.currentTarget.value)} />
+                <PasswordInput label={t('Password')} autoComplete="current-password"
+                  value={enrollPass} onChange={(e) => setEnrollPass(e.currentTarget.value)} />
+                <Group justify="flex-end">
+                  <Button variant="subtle" type="button" onClick={() => { setEnrollPass(''); setEnrollPhase('method') }}>{t('Back')}</Button>
+                  <Button type="submit" loading={busy} disabled={!enrollUser.trim() || !enrollPass}>{t('Sign in')}</Button>
+                </Group>
+              </Stack>
+            </form>
+          </Section>
+        ) : enrollPhase === 'browser' ? (
+          <Section
+            title={t('Finish signing in in your browser')}
+            description={t('A new tab opened with the sign-in page of your organization. When you are done, come back here: this page continues by itself.')}
+          >
+            <Group gap="md" wrap="nowrap" align="center">
+              <Loader size="sm" />
+              <Text size="sm">{t('Waiting for the sign-in...')}</Text>
+            </Group>
+            <Group mt="md" gap="sm">
+              {authUrl && (
+                <Button variant="light" component="a" href={authUrl} target="_blank" rel="noopener noreferrer"
+                  leftSection={<IconExternalLink size={14} />}>
+                  {t('Open the sign-in page again')}
+                </Button>
+              )}
+              <Button variant="subtle" color="gray" onClick={cancelEnrollment}>{t('Cancel')}</Button>
+            </Group>
           </Section>
         ) : (
           <Section
@@ -227,7 +413,7 @@ export default function RelayPage() {
                 onChange={(e) => setEnrollCode(e.currentTarget.value)}
                 onKeyDown={(e) => e.key === 'Enter' && enrollCode.trim() && confirmEnrollment()} />
               <Button onClick={confirmEnrollment} loading={busy} disabled={!enrollCode.trim()}>{t('Confirm')}</Button>
-              <Button variant="subtle" onClick={() => setEnrollPhase('form')}>{t('Back')}</Button>
+              <Button variant="subtle" onClick={() => setEnrollPhase(methods.length > 1 ? 'method' : 'form')}>{t('Back')}</Button>
             </Group>
           </Section>
         )}
@@ -260,7 +446,7 @@ export default function RelayPage() {
               )}
               <Group justify="flex-end">
                 <Button variant="default" onClick={() => setCertPrompt(null)}>{t('Cancel')}</Button>
-                <Button color="orange" onClick={() => requestEnrollment(certPrompt.fingerprint)} loading={busy}>
+                <Button color="orange" onClick={() => continueEnrollment(certPrompt.fingerprint)} loading={busy}>
                   {t('Accept and continue')}
                 </Button>
               </Group>

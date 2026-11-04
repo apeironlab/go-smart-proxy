@@ -40,7 +40,7 @@ func TestRelayEnrollmentTOFU(t *testing.T) {
 	})
 
 	email := "alice@example.com"
-	err = relayEnroll("", ts.URL, email, "", "")
+	_, err = relayEnroll("", ts.URL, email, "", "", "")
 	var untrusted *untrustedCertificateError
 	if !errors.As(err, &untrusted) {
 		t.Fatalf("expected an untrusted certificate prompt, got %v", err)
@@ -49,7 +49,7 @@ func TestRelayEnrollmentTOFU(t *testing.T) {
 		t.Fatalf("incomplete certificate info: %+v", untrusted.Info)
 	}
 
-	if err := relayEnroll("", ts.URL, email, "", untrusted.Info.Fingerprint); err != nil {
+	if _, err := relayEnroll("", ts.URL, email, "", untrusted.Info.Fingerprint, ""); err != nil {
 		t.Fatalf("enrollment after accepting the fingerprint failed: %v", err)
 	}
 	if !mailSent {
@@ -64,7 +64,7 @@ func TestRelayEnrollmentTOFU(t *testing.T) {
 	if p.Name != defaultRelayName {
 		t.Fatalf("with no relay configured the enrollment creates %q, got %q", defaultRelayName, p.Name)
 	}
-	if err := relayEnroll("Bad Name", ts.URL, email, "", untrusted.Info.Fingerprint); err == nil {
+	if _, err := relayEnroll("Bad Name", ts.URL, email, "", untrusted.Info.Fingerprint, ""); err == nil {
 		t.Fatal("an invalid relay name must be refused before anything is sent")
 	}
 }
