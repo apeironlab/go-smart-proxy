@@ -46,6 +46,7 @@ English as fallback; code, comments and this README are in English.
   - [Applications (remote access to protected apps)](#applications-remote-access-to-protected-apps)
   - [Notifications and self-service revocation](#notifications-and-self-service-revocation)
   - [Device certificates and automatic renewal](#device-certificates-and-automatic-renewal)
+  - [Health, metrics and logs](#health-metrics-and-logs)
   - [Relay administration interface (optional)](#relay-administration-interface-optional)
   - [Kubernetes deployment](#kubernetes-deployment)
 - [Security](#security)
@@ -943,6 +944,8 @@ Main `serve` flags:
 | `-smtp-tls` | `starttls` (default), `tls`, or `none` |
 | `-smtp-auth` | `auto` (default), `plain`, `login`, or `none` |
 | `-max-renew-age` | How long a certificate may be renewed without signing in again (default `365d`) |
+| `-metrics-listen`, `-metrics-token` | Serve `/healthz`, `/readyz`, `/metrics` on their own listener |
+| `-log-format` | `text` (default) or `json` |
 | `-revoked` | Revocation list file (e-mail or `serial:HEX` per line); needed by the management interface |
 | `-auth-config` | YAML file with the sign-in methods (see below) |
 | `-trust-forwarded-for` | Take the client address from `X-Forwarded-For` (only behind a trusted proxy) |
@@ -1319,6 +1322,43 @@ six hours while connected, switches only to a certificate that matches its key,
 address and device, and saves it in the encrypted configuration before
 reconnecting. A relay that predates renewal just closes the stream: the proxy
 logs it and keeps its certificate.
+
+### Health, metrics and logs
+
+`proxyrelay serve -metrics-listen 127.0.0.1:9100` serves, on its own listener
+(not the public enrollment one):
+
+| Path | What |
+|---|---|
+| `/healthz` | `200` while the process runs (liveness) |
+| `/readyz` | `200` when the mTLS listener is accepting and, with the management interface, its database answers; `503` and the reason otherwise (readiness) |
+| `/metrics` | Prometheus text format; protected by `-metrics-token` / `PROXYRELAY_METRICS_TOKEN` (bearer token) when set |
+
+The health paths say nothing about users. `/metrics` is only ever numbers, with
+no addresses or names. Without a token, bind it to loopback or a pod-local
+address; the relay warns if it is open on another interface. Besides Go runtime
+figures:
+
+- gauges: `gsp_relay_devices_online`, `gsp_relay_users_online`,
+  `gsp_relay_gateways_online`, `gsp_relay_ready`, `gsp_relay_applications`,
+  `gsp_relay_enrollments_pending`, `gsp_relay_certificates_active`,
+  `gsp_relay_policy_list_entries{list}`, `gsp_relay_uptime_seconds`,
+  `gsp_relay_build_info{version,go}`;
+- counters: `gsp_relay_events_total{kind}` (every audited event: `enroll.issued`,
+  `cert.renew`, `session.refused`, `policy.block`, `user.revoke`, `admin.login`,
+  `admin.denied`, ... the same kinds as the audit log),
+  `gsp_relay_connections_total{result}` (`handshake_failed`, `revoked`),
+  `gsp_relay_dials_total{kind,result}` (contact or app; ok, failed, denied,
+  blocked), `gsp_relay_enrollments_total{method}`, `gsp_relay_mail_total{result}`,
+  `gsp_relay_policy_fetch_total{result}`.
+
+A useful alert is a rise of `gsp_relay_events_total{kind="admin.denied"}` or
+`session.refused`, or `gsp_relay_mail_total{result="failed"}`.
+
+`-log-format json` (or `PROXYRELAY_LOG_FORMAT=json`) writes one JSON object per
+line on standard error (`time`, `level`, `msg`), and every audited event as an
+`event` record with `kind`, `actor`, `subject` and `detail` fields, ready for a
+log pipeline. The default stays plain text.
 
 ### Relay administration interface (optional)
 

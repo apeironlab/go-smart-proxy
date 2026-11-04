@@ -394,6 +394,9 @@ func (p *Policy) Refresh(ctx context.Context) {
 		cancel()
 		if err != nil {
 			errs[l.ID] = err.Error()
+			CounterInc("gsp_relay_policy_fetch_total", "result", "failed")
+		} else {
+			CounterInc("gsp_relay_policy_fetch_total", "result", "ok")
 		}
 	}
 	p.mu.Lock()

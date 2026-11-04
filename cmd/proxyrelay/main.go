@@ -192,6 +192,9 @@ func runServe(args []string) error {
 	appsFile := fs.String("apps", "", "YAML file with the applications catalog (read-only); without it the interface edits the catalog")
 	policyFile := fs.String("policy", "", "YAML file with the blocking policy (read-only); without it the interface edits the policy")
 	policyDir := fs.String("policy-dir", "", "where downloaded block lists are kept (default: policy-lists next to -state)")
+	metricsListen := fs.String("metrics-listen", "", "serve /healthz, /readyz and /metrics here (e.g. 127.0.0.1:9100); empty disables")
+	metricsToken := fs.String("metrics-token", env("PROXYRELAY_METRICS_TOKEN", ""), "bearer token required for /metrics (prefer PROXYRELAY_METRICS_TOKEN)")
+	logFormat := fs.String("log-format", env("PROXYRELAY_LOG_FORMAT", "text"), "text or json")
 	adminDB := fs.String("admin-db", "", "enable the management interface (/admin/) with this SQLite database")
 	adminGroups := fs.String("admin-groups", "", "groups whose members are administrators")
 	adminEmails := fs.String("admin-emails", "", "e-mail addresses that are administrators")
@@ -202,6 +205,9 @@ func runServe(args []string) error {
 
 	if *certFile == "" || *keyFile == "" || *caFile == "" {
 		return errors.New("serve needs -cert, -key and -ca")
+	}
+	if err := setupLogging(*logFormat); err != nil {
+		return err
 	}
 	ttl, err := parseTTL(*certTTL)
 	if err != nil {
@@ -298,6 +304,7 @@ func runServe(args []string) error {
 	}()
 
 	var enrollSrv *http.Server
+	var enrollForMetrics *relay.EnrollServer
 	if *enrollListen != "" {
 		cfg := relay.EnrollConfig{
 			CADir: firstNonEmpty(*caDir, filepath.Dir(*caFile)), PublicRelay: *publicRelay, PublicURL: *publicURL, DownloadURL: *downloadURL,
@@ -324,6 +331,7 @@ func runServe(args []string) error {
 			}
 		} else {
 			srv.SetRenewer(es.RenewCertificate)
+			enrollForMetrics = es
 			enrollSrv = &http.Server{
 				Addr: *enrollListen, Handler: es.Handler(),
 				ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
@@ -353,6 +361,21 @@ func runServe(args []string) error {
 		}
 	} else if admin != nil {
 		log.Printf("WARNING: -admin-db needs -enroll-listen: the interface is served by the enrollment listener")
+	}
+
+	if *metricsListen != "" {
+		obs := &relay.Observer{Server: srv, Enroll: enrollForMetrics, Admin: admin, Policy: policy, Token: *metricsToken, Started: time.Now(), Version: buildVersion()}
+		ms := &http.Server{Addr: *metricsListen, Handler: obs.Handler(), ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			log.Printf("metrics and health listening on %s", *metricsListen)
+			if err := ms.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Fatalf("metrics: %v", err)
+			}
+		}()
+		defer ms.Close()
+		if *metricsToken == "" && !isLoopbackAddr(*metricsListen) {
+			log.Printf("WARNING: /metrics is open on %s: set -metrics-token or listen on 127.0.0.1", *metricsListen)
+		}
 	}
 
 	<-ctx.Done()

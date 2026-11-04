@@ -96,6 +96,9 @@ spec:
             - -allow-domains=example.com,external.example.com
             - -ca-dir=/ca
             - -enroll-state=/data/relay-enroll.json
+            # Health and metrics on a pod-local port (add -metrics-token or keep it cluster-internal):
+            # - -metrics-listen=:9100
+            # - -log-format=json
             # Optional download link for invitation emails:
             # - -download-url=https://...
           envFrom:

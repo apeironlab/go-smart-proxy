@@ -196,7 +196,9 @@ func (s *Server) handleGatewayConn(c net.Conn, cert *x509.Certificate, id string
 // the catalog, and the gateway that serves it must be connected. The user does
 // not say where to connect; the gateway uses the catalog's target.
 func (s *Server) handleAppDial(sess *session, st net.Conn, br *bufio.Reader, req DialReq, fromDevice string) {
+	result := "failed"
 	fail := func(msg string) {
+		CounterInc("gsp_relay_dials_total", "kind", "app", "result", result)
 		WriteLine(st, DialResp{Error: msg})
 		st.Close()
 	}
@@ -211,6 +213,7 @@ func (s *Server) handleAppDial(sess *session, st net.Conn, br *bufio.Reader, req
 		if ok {
 			s.audit("app.denied", sess.email, app.ID, "")
 		}
+		result = "denied"
 		fail("unknown application")
 		return
 	}
@@ -252,6 +255,7 @@ func (s *Server) handleAppDial(sess *session, st net.Conn, br *bufio.Reader, req
 	}
 	s.Log.Printf("%s/%s -> app %s via gateway %s", sess.email, fromDevice, app.ID, app.Gateway)
 	s.audit("app.open", sess.email, app.ID, fromDevice)
+	CounterInc("gsp_relay_dials_total", "kind", "app", "result", "ok")
 	Pipe(st, br, ps, pbr)
 }
 

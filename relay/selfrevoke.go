@@ -74,6 +74,20 @@ func (s *EnrollServer) activeCerts(email string) []IssuedCert {
 	return out
 }
 
+// activeCertCount is the number of certificates in the ledger that are valid.
+func (s *EnrollServer) activeCertCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	n := 0
+	for _, c := range s.certs {
+		if !c.Revoked && now.Before(c.Expires) {
+			n++
+		}
+	}
+	return n
+}
+
 func (s *EnrollServer) canMail() bool {
 	return s.cfg.SendMail != nil || s.Rules().SMTP.Addr != ""
 }

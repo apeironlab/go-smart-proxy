@@ -106,6 +106,9 @@ func NewAdmin(cfg AdminConfig) (*Admin, error) {
 	return a, nil
 }
 
+// Ping checks that the database answers.
+func (a *Admin) Ping() error { return a.db.db.Ping() }
+
 // Close closes the database.
 func (a *Admin) Close() error { return a.db.Close() }
 
@@ -115,7 +118,7 @@ func (a *Admin) SetServer(s *Server) {
 	a.mu.Lock()
 	a.server = s
 	a.mu.Unlock()
-	s.SetAudit(a.Record)
+	s.SetAudit(a.store)
 }
 
 const appsSetting = "apps"
@@ -207,6 +210,13 @@ func firstNonEmpty(a, b string) string {
 
 // Record adds an entry to the audit log.
 func (a *Admin) Record(kind, actor, subject, detail string) {
+	emitEvent(kind, actor, subject, detail)
+	a.store(kind, actor, subject, detail)
+}
+
+// store writes an event to the audit log without announcing it again (the
+// caller already did).
+func (a *Admin) store(kind, actor, subject, detail string) {
 	if err := a.db.addEvent(kind, actor, subject, detail); err != nil {
 		a.log.Printf("admin: audit log: %v", err)
 		return

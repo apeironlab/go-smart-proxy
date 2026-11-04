@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/yamux"
@@ -45,7 +46,11 @@ type Server struct {
 	mu       sync.Mutex
 	sessions map[string]*session
 	gateways map[string]*session // application gateways by id
+	serving  atomic.Bool
 }
+
+// Serving reports whether Serve is accepting connections.
+func (s *Server) Serving() bool { return s.serving.Load() }
 
 type session struct {
 	email  string
@@ -72,6 +77,7 @@ func (s *Server) SetAudit(fn func(kind, actor, subject, detail string)) {
 }
 
 func (s *Server) audit(kind, actor, subject, detail string) {
+	emitEvent(kind, actor, subject, detail)
 	s.mu.Lock()
 	fn := s.Audit
 	s.mu.Unlock()
@@ -149,6 +155,8 @@ func TLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
 
 // Serve accepts connections on ln (already wrapped with TLS) until it fails.
 func (s *Server) Serve(ln net.Listener) error {
+	s.serving.Store(true)
+	defer s.serving.Store(false)
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -166,6 +174,7 @@ func (s *Server) handleConn(c net.Conn) {
 	}
 	c.SetDeadline(time.Now().Add(firstLineTimeout))
 	if err := tc.Handshake(); err != nil {
+		CounterInc("gsp_relay_connections_total", "result", "handshake_failed")
 		s.Log.Printf("handshake from %s failed: %v", c.RemoteAddr(), err)
 		c.Close()
 		return
@@ -177,6 +186,7 @@ func (s *Server) handleConn(c net.Conn) {
 		return
 	}
 	if s.Revoked.Revoked(peers[0]) {
+		CounterInc("gsp_relay_connections_total", "result", "revoked")
 		s.Log.Printf("revoked certificate from %s refused", c.RemoteAddr())
 		if e, ok := EmailFromCert(peers[0]); ok {
 			s.audit("session.refused", e, "", "revoked certificate from "+c.RemoteAddr().String())
@@ -605,7 +615,9 @@ func validTarget(t string) bool {
 }
 
 func (s *Server) handleDial(sess *session, st net.Conn, br *bufio.Reader, req DialReq) {
+	result := "failed"
 	fail := func(msg string) {
+		CounterInc("gsp_relay_dials_total", "kind", "contact", "result", result)
 		WriteLine(st, DialResp{Error: msg})
 		st.Close()
 	}
@@ -638,6 +650,7 @@ func (s *Server) handleDial(sess *session, st net.Conn, br *bufio.Reader, req Di
 			if s.Policy.record(sess.email, host, hit.Source) {
 				s.audit("policy.block", sess.email, host, hit.Source+" ("+hit.Rule+")")
 			}
+			result = "blocked"
 			fail("blocked by the organization's policy")
 			return
 		}
@@ -679,6 +692,7 @@ func (s *Server) handleDial(sess *session, st net.Conn, br *bufio.Reader, req Di
 		st.Close()
 		return
 	}
+	CounterInc("gsp_relay_dials_total", "kind", "contact", "result", "ok")
 	s.Log.Printf("%s/%s -> %s/%s -> %s", sess.email, fromDevice, via, viaDevice, req.Target)
 	Pipe(st, br, ps, pbr)
 }

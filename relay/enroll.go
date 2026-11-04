@@ -571,10 +571,18 @@ func SendInvite(cfg EnrollConfig, to string) error {
 }
 
 func (s *EnrollServer) send(to, subject, body string) error {
+	var err error
 	if s.cfg.SendMail != nil {
-		return s.cfg.SendMail(to, subject, body)
+		err = s.cfg.SendMail(to, subject, body)
+	} else {
+		err = sendSMTP(s.mailConfig(), to, subject, body)
 	}
-	return sendSMTP(s.mailConfig(), to, subject, body)
+	if err != nil {
+		CounterInc("gsp_relay_mail_total", "result", "failed")
+	} else {
+		CounterInc("gsp_relay_mail_total", "result", "sent")
+	}
+	return err
 }
 
 // smtpAuth chooses the authentication mechanism. In auto mode it prefers

@@ -255,6 +255,7 @@ func (s *EnrollServer) signFor(csr []byte, email, device, method, ip string, ori
 		}
 	}
 	s.audit("enroll.issued", email, serial, method)
+	CounterInc("gsp_relay_enrollments_total", "method", method)
 	if serial != "" {
 		s.recordIssued(&IssuedCert{Serial: serial, Email: email, Device: device, Method: method, IP: ip, Issued: time.Now(), Expires: notAfter, Origin: origin})
 	}
@@ -266,7 +267,8 @@ func (s *EnrollServer) signFor(csr []byte, email, device, method, ip string, ori
 
 // audit writes an entry to the management interface's log, if it is enabled.
 func (s *EnrollServer) audit(kind, actor, subject, detail string) {
+	emitEvent(kind, actor, subject, detail)
 	if s.cfg.Admin != nil {
-		s.cfg.Admin.Record(kind, actor, subject, detail)
+		s.cfg.Admin.store(kind, actor, subject, detail)
 	}
 }
