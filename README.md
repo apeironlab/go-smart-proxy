@@ -78,7 +78,25 @@ English as fallback; code, comments and this README are in English.
 - **Relay**: mTLS-authenticated rendezvous relay, contact address book, explicit
   route approvals scoped per device, multiple devices per user (your own devices
   are listed and usable without an invitation), and desktop notifications.
-- **Encrypted configuration** with a master password (PBKDF2 + AES-256-GCM).
+- **Several relays at once**, each with its own identity and address book, and
+  network context (a label and VPN flag) shared with contacts and usable in
+  routes and rules.
+- **Sign-in methods for enrollment**: e-mail code, local passwords, LDAP, OpenID
+  Connect (public client with PKCE) and SAML, with a device confirmation code
+  against sign-in-link phishing.
+- **Applications**: a relay can publish web apps and network services behind
+  gateways; users see their catalog and the proxy routes to it by itself.
+- **Blocking** of ads, trackers and malware (hosts, domain and adblock lists),
+  with or without a relay; a relay can impose required rules.
+- **Relay administration interface** (optional): overview, users, devices and
+  certificates, invitations, access rules, applications, blocking, audit log;
+  SQLite, PostgreSQL or MySQL/MariaDB.
+- **Certificates per device, renewed automatically**; users are told by e-mail
+  of every new device and can revoke their own certificates.
+- **Several relays behind a load balancer** sharing a PostgreSQL/MySQL database,
+  with health, Prometheus metrics and JSON logs.
+- **Encrypted configuration** with a master password (PBKDF2 + AES-256-GCM),
+  changeable, with a recovery key; optional access token for the local interface.
   On macOS the derived key can be stored in the Keychain and unlocked with
   Touch ID; on Windows it is protected with DPAPI.
 - **Complete web configuration**: listeners, SOCKS5, system integration, static
@@ -89,8 +107,9 @@ English as fallback; code, comments and this README are in English.
   manually from the header menu, with English as fallback.
 - **System tray** with dynamic route selection and a web UI for configuration,
   rules, credentials, connections, and relay management.
-- **macOS integration**: system proxy configuration (including VPN-overridden
-  proxies) and Chrome policy enforcement.
+- **System integration**: system proxy configuration and Chrome policy on macOS
+  (including VPN-overridden proxies) and on Windows (untested there), desktop
+  notifications on macOS, Linux and Windows.
 - **PAC caching**: PAC files are fetched directly, cached, and never block
   request handling.
 - **Connection registry**: live connection log, byte counters, and fail-fast
@@ -121,14 +140,21 @@ flowchart LR
     RS -->|contact approved route| CONTACT[Contact's proxy]
     CONTACT --> T[Target host]
 
+    P -->|blocked host| BL[Blocked: ads, trackers, malware]
+    P -->|application of a relay| REL
+    RS -->|gateway| APP[Application]
+
     P --- UI[Embedded web UI / API]
     P --- TRAY[System tray]
     P --- CFG[(config.yml.enc)]
 ```
 
 The proxy listens on one HTTP address (also serving the web UI and API on
-loopback) and optionally on a SOCKS5 address. Every outgoing connection is
-resolved through the route/rules engine.
+loopback) and optionally on a SOCKS5 address. Every outgoing connection is first
+checked against the blocking lists, then resolved through the route/rules engine;
+the hosts of applications a relay publishes go to that relay by themselves. Several
+relay servers can run behind a load balancer sharing one database (see *Several
+relays*).
 
 ---
 
@@ -604,7 +630,12 @@ Pages:
   (an empty field keeps the current password).
 - **Connessioni** — live/recent connections, routes, bytes, errors, events.
 - **Relay** — connection status, contacts, approved routes, device code,
-  enrollment/reconfiguration.
+  enrollment/reconfiguration, link latency.
+- **Applicazioni** — the catalog the relays publish to you (shown when there is one).
+- **Protezione** — ad/tracker/malware blocking: lists, own rules, what your
+  relays require, a host checker, counters.
+- **Configurazione → Sicurezza** — change the master password, recovery key,
+  access token for this interface.
 
 The **Configurazione** page is the single place for proxy-wide settings:
 listeners, SOCKS5, system proxy, Chrome policy, static hosts, relay
@@ -627,8 +658,11 @@ and device renaming remain on the Relay page.
 | Relay enrollment, device name, contacts, approvals | Relay |
 | Live connections and DNS cache | Connessioni / Configurazione |
 
-The API is intentionally unauthenticated and **loopback-only**; do not expose
-the listener to untrusted networks. A non-exhaustive endpoint list:
+The API is **loopback-only**. By default it has no authentication beyond the
+Host/Origin/Content-Type checks that stop web pages from using it; an optional
+access token protects it on shared computers (see *Access token for the local
+interface*). Do not expose the listener to untrusted networks. A non-exhaustive
+endpoint list:
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -654,6 +688,18 @@ the listener to untrusted networks. A non-exhaustive endpoint list:
 | POST | `/api/relay/device` | Rename this device |
 | POST | `/api/relay/enroll` | Start email enrollment |
 | POST | `/api/relay/enroll/confirm` | Confirm the email code |
+| GET | `/api/apps` | The applications the relays publish to this user |
+| GET/PUT | `/api/blocking` | Blocking configuration and status (lists, presets, relay rules) |
+| POST | `/api/blocking/refresh` | Download the lists again |
+| GET | `/api/blocking/test?host=...` | Whether and why a host is blocked |
+| GET/POST | `/api/blocking/stats`, `/api/blocking/stats/reset` | Counters of what was blocked |
+| GET | `/api/security` | Recovery key and recovered-session status |
+| POST | `/api/security/password` | Change the master password |
+| POST | `/api/security/recovery`, `/api/security/recovery/remove` | Make or remove the recovery key |
+| GET | `/api/auth/info` | Whether the access token is required (needs no token) |
+| POST | `/api/auth/login`, `/api/auth/logout` | Sign in with the token / out |
+| PUT | `/api/auth/config` | Switch the access token on or off |
+| POST | `/api/auth/rotate` | Make a new token |
 
 Credential passwords are never sent to the UI. The enrollment API may return a
 certificate prompt when the TLS certificate of the enrollment endpoint is not
@@ -889,9 +935,9 @@ an exit by its network and not only by whether it is online:
   right now and which entry matched, and the label is republished whenever the
   network changes.
 - **Per relay**: the table is part of the relay's own configuration, so each
-  relay shows its contacts the labels you set for it. Today there is one relay;
-  when several can be connected, each will carry its own table and the same
-  network can be named differently for different groups of contacts.
+  relay shows its contacts the labels you set for it. Each of the relays you are
+  connected to carries its own table, so the same network can be named
+  differently for different groups of contacts.
 - **Who sees it**: only your approved contacts and your own devices, never
   strangers. It is pushed again whenever the device's network changes, for
   instance when it connects to a VPN.
@@ -1699,18 +1745,23 @@ rather than keeping the CA key in the cluster.
   service.
 - The relay exit side must approve routes; rules are per contact and
   destination. `AllowLocal` is off by default.
-- Device codes are routing labels, not per-device credentials. Devices sharing a
-  certificate authenticate as the same user.
+- A certificate is bound to one device (its code is in the certificate and the
+  relay takes the device from it); certificates issued before that, or by hand,
+  are not bound and their holder can claim any device code.
 - Enrollment TLS trust can be established by the system roots, an explicitly
   pasted CA, or the explicit fingerprint confirmation (TOFU). Always verify the
   fingerprint out-of-band when prompted.
-- Certificate renewal is not automated. Certificates are short-lived (90 days
-  by default); use **Riconfigura** to enroll again.
-- Revocation: the server consults a deny-list file (`relay.NewRevocations`,
-  assigned to `Server.Revoked`). Each line is an e-mail address (all its
-  certificates) or `serial:<hex>`; the file is re-read when it changes, so
-  revoked clients are refused at their next connection without restarting the
-  relay. `relay.Revoke(path, entry)` appends an entry. There is no CRL/OCSP.
+- Certificates are short-lived (90 days by default) and renewed by the proxy
+  over its own connection, within limits (see *Device certificates and automatic
+  renewal*); **Riconfigura** enrolls again with a new sign-in.
+- Revocation: the server consults a deny list (a file, or the shared database).
+  Each entry is an e-mail address (all its certificates) or `serial:<hex>`;
+  changes apply to new connections at once and close open ones within a few
+  seconds. Administrators edit it in the interface or with `proxyrelay revoke`;
+  users revoke their own certificates by e-mail confirmation. There is no
+  CRL/OCSP.
+- The relay e-mails the owner of an address whenever a device is associated or a
+  certificate renewed.
 - The relay exit side caps the approval requests waiting for an answer (20 in
   total, 5 per contact), so a contact cannot flood you with prompts.
 - E-mail addresses must contain exactly one `@`, which keeps the domain
@@ -1745,6 +1796,14 @@ rather than keeping the CA key in the cluster.
 | `PROXYRELAY_SMTP_FROM` | relay | From address |
 | `PROXYRELAY_SMTP_TLS` | relay | `starttls`, `tls`, `none` |
 | `PROXYRELAY_SMTP_AUTH` | relay | `auto`, `plain`, `login`, `none` |
+| `PROXYRELAY_DB` | relay | Shared database address (same as `-db`) |
+| `PROXYRELAY_REPLICA_ID` | relay | Name of this relay among the ones sharing the database |
+| `PROXYRELAY_PEER_ADDR` | relay | `host:port` the other relays reach this one at |
+| `PROXYRELAY_METRICS_TOKEN` | relay | Bearer token for `/metrics` |
+| `PROXYRELAY_LOG_FORMAT` | relay | `text` or `json` |
+| `PROXYRELAY_REVOKED` | relay (`revoke` command) | Revocation list file |
+| `PROXYRELAY_PASSWORD` | relay (`user add`, `admin user`) | Password to set, instead of a prompt |
+| `PROXYRELAY_TEST_DB`, `PROXYRELAY_TEST_POSTGRES`, `PROXYRELAY_TEST_MYSQL` | tests | Run the relay tests on PostgreSQL or MySQL (see *Tests*) |
 
 Flags take precedence over environment variables when both are provided.
 
@@ -1845,6 +1904,20 @@ go test ./...
 go test -race ./...
 ```
 
+The relay's database tests run on SQLite by default. To run them on PostgreSQL
+or MySQL/MariaDB too, give a server where tests may create schemas and databases:
+
+```bash
+export PROXYRELAY_TEST_POSTGRES='postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable'
+export PROXYRELAY_TEST_MYSQL='mysql://root:pw@127.0.0.1:3306'
+go test ./relay                                   # SQLite, and the dialect matrix
+PROXYRELAY_TEST_DB=postgres go test ./relay       # the whole relay suite on PostgreSQL
+PROXYRELAY_TEST_DB=mysql go test ./relay          # ... and on MySQL/MariaDB
+```
+
+Each test uses a schema of its own and drops it afterwards. The tests of
+the multi-relay behavior start several relays in one process.
+
 The Keychain bridge test is opt-in and writes/deletes a test item in the real
 login Keychain:
 
@@ -1887,8 +1960,13 @@ that the `relay` package builds without Node.
 | `web.go`, `webui.go` | Web API, static UI embedding |
 | `socks.go` | SOCKS5 listener and handler |
 | `device.go` | Per-installation device code generation |
-| `notify.go` | Desktop notifications |
-| `relay/` | Relay protocol, server, store, CA, enrollment, SMTP, sign-in methods, administration interface |
+| `notify.go`, `notify_windows.go` | Desktop notifications |
+| `systemproxy_*.go`, `chromepolicy_*.go` | System proxy and Chrome policy (macOS, Windows) |
+| `secret_recovery.go`, `security_web.go` | Master password change, recovery key, their API |
+| `localauth.go` | Access token for the local interface |
+| `relay_renew.go` | Automatic renewal of the proxy's certificate |
+| `relay/` | Relay protocol, server, store, CA, enrollment, SMTP, sign-in methods, administration interface, applications, blocking policy, renewal, metrics |
+| `relay/sqldb.go`, `relay/shared.go`, `relay/ha.go` | Database dialects, shared state, several relays |
 | `webui/admin/` | React app of the relay administration interface (built into `relay/adminui/static`) |
 | `cmd/proxyrelay/` | Relay server CLI |
 | `cmd/proxygateway/` | Application gateway (serves applications published by a relay) |
