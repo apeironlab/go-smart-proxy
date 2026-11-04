@@ -17,12 +17,18 @@ import (
 // OIDCConfig signs users in with OpenID Connect (authorization code flow with
 // PKCE) with any OpenID Connect provider.
 //
-// Register the relay as an application of the provider, with the redirect
-// address <public-url>/enroll-auth/<id>/callback (or redirect_url below).
+// Register the relay as a **public client** of the provider (no client secret),
+// with the redirect address <public-url>/enroll-auth/<id>/callback (or
+// redirect_url below). PKCE is what protects the exchange. The sign-in is only
+// used to learn the user's e-mail address for enrollment, so no refresh token
+// is asked for (no offline_access scope) and no token is kept: the ID token is
+// checked once and thrown away.
 type OIDCConfig struct {
 	Issuer string `yaml:"issuer"` // https://login.example.com/realms/corp
-	// ClientID and ClientSecret identify the relay to the provider. The secret
-	// may be left out for a public client (PKCE protects the exchange).
+	// ClientID identifies the relay to the provider. ClientSecret is for
+	// providers that insist on a confidential client; leave it out for a public
+	// client, which is the recommended setup: then only the client id and the
+	// PKCE verifier are sent to the token endpoint.
 	ClientID     string `yaml:"client_id"`
 	ClientSecret string `yaml:"client_secret"`
 	// RedirectURL overrides the address the provider sends the user back to.
@@ -58,6 +64,11 @@ func (c *OIDCConfig) validate() error {
 	}
 	if strings.TrimSpace(c.ClientID) == "" {
 		return errors.New("client_id is required")
+	}
+	for _, sc := range c.Scopes {
+		if sc == "offline_access" {
+			return errors.New("offline_access is not needed (and not allowed): the sign-in is used once for enrollment, no refresh token is wanted")
+		}
 	}
 	if len(c.RequireGroups) > 0 && c.GroupsClaim == "" {
 		return errors.New("require_groups needs groups_claim")
@@ -109,10 +120,17 @@ func (m *oidcMethod) discover(ctx context.Context) (*oidc.Provider, error) {
 }
 
 func (m *oidcMethod) oauth(p *oidc.Provider) *oauth2.Config {
+	endpoint := p.Endpoint()
+	if m.cfg.ClientSecret == "" {
+		// A public client authenticates with nothing but its client id, in the
+		// form body. Left to guess, the library would first try HTTP Basic
+		// with an empty secret, which public clients are often refused.
+		endpoint.AuthStyle = oauth2.AuthStyleInParams
+	}
 	return &oauth2.Config{
 		ClientID:     m.cfg.ClientID,
 		ClientSecret: m.cfg.ClientSecret,
-		Endpoint:     p.Endpoint(),
+		Endpoint:     endpoint,
 		RedirectURL:  m.redirectURL(),
 		Scopes:       m.cfg.Scopes,
 	}

@@ -958,7 +958,10 @@ methods:
     oidc:
       issuer: https://login.example.com        # your provider's issuer address
       client_id: 1234-abcd
-      client_secret: ${OIDC_SECRET}      # optional for a public client (PKCE is always used)
+      # No client_secret: register the relay as a PUBLIC client. The sign-in is used
+      # once, to learn your e-mail address, so there is no secret to keep and no
+      # refresh token (offline_access is refused). PKCE protects the exchange.
+      # client_secret: ${OIDC_SECRET}   # only for a provider that insists on a confidential client
       require_groups: [vpn-users]        # any of these; groups come from the "groups" claim
       # redirect_url, scopes, email_claim, groups_claim, allow_unverified_email
   - id: directory
@@ -1008,8 +1011,10 @@ password, email, groups...)` (the file is re-read when it changes).
   as anyone else is refused, even with valid credentials.
 - `require_groups` is any-of, case-insensitive; an LDAP `memberOf` entry matches
   by its CN. A user outside the groups gets no certificate.
-- OpenID Connect uses the authorization code flow with PKCE, a one-time `state`
-  and a nonce; the ID token's signature, issuer, audience and expiry are
+- OpenID Connect uses the authorization code flow as a **public client** with
+  PKCE (S256), a one-time `state` and a nonce; with no `client_secret` the token
+  request carries only the client id and the PKCE verifier. No refresh token is
+  requested (the `offline_access` scope is refused) and no token is kept; the ID token's signature, issuer, audience and expiry are
   verified, and an unverified e-mail is refused unless `allow_unverified_email`.
 - SAML requires a response signed by a key in the identity provider's metadata,
   addressed to this service, and answering the request that was actually made

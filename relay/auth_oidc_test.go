@@ -33,6 +33,13 @@ type fakeIdP struct {
 	// omitEmail leaves e-mail out of the ID token (it is at userinfo).
 	omitEmail bool
 	authz     []url.Values
+	tokenReqs []tokenRequest
+}
+
+// tokenRequest is what the relay sent to the token endpoint.
+type tokenRequest struct {
+	authHeader string
+	form       url.Values
 }
 
 type idpCode struct {
@@ -79,6 +86,7 @@ func newFakeIdP(t *testing.T) *fakeIdP {
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
 		p.mu.Lock()
+		p.tokenReqs = append(p.tokenReqs, tokenRequest{authHeader: r.Header.Get("Authorization"), form: r.PostForm})
 		c, ok := p.codes[r.PostForm.Get("code")]
 		delete(p.codes, r.PostForm.Get("code")) // a code works once
 		p.mu.Unlock()
@@ -416,4 +424,69 @@ func TestOIDCProviderDown(t *testing.T) {
 	idp.srv.Close()
 	csr, _ := testCSR(t, "alice@example.com")
 	postJSONTest(t, ts.URL+"/enroll-auth/idp/start", "", map[string]string{"email": "alice@example.com", "csr": string(csr)}, nil, http.StatusBadGateway)
+}
+
+func TestOIDCPublicClientWithPKCEAndNoRefreshToken(t *testing.T) {
+	idp := newFakeIdP(t)
+	// no client secret: a public client
+	ts, _ := authServer(t, func(c *EnrollConfig, _ string) {
+		c.Auth = &AuthConfig{Methods: []AuthMethod{{ID: "idp", Type: "oidc", OIDC: &OIDCConfig{Issuer: idp.srv.URL, ClientID: "public-relay"}}}}
+	})
+	res := browserSignIn(t, ts, "idp", "alice@example.com")
+	if res.status != 200 || !res.approved {
+		t.Fatalf("a public client must be able to enroll: status %d approved %v", res.status, res.approved)
+	}
+
+	idp.mu.Lock()
+	defer idp.mu.Unlock()
+	if len(idp.tokenReqs) != 1 {
+		t.Fatalf("exactly one request to the token endpoint expected, got %d (a retry means the first style was refused)", len(idp.tokenReqs))
+	}
+	tr := idp.tokenReqs[0]
+	if tr.authHeader != "" {
+		t.Errorf("a public client must not authenticate with HTTP Basic, got %q", tr.authHeader)
+	}
+	if _, has := tr.form["client_secret"]; has {
+		t.Errorf("no client secret may be sent: %v", tr.form)
+	}
+	if tr.form.Get("client_id") != "public-relay" || tr.form.Get("grant_type") != "authorization_code" || tr.form.Get("code_verifier") == "" {
+		t.Errorf("token request: %v", tr.form)
+	}
+	// PKCE with S256, and no ask for a refresh token
+	q := idp.authz[0]
+	if q.Get("code_challenge_method") != "S256" || q.Get("code_challenge") == "" {
+		t.Errorf("PKCE must be used: %v", q)
+	}
+	for _, sc := range strings.Fields(q.Get("scope")) {
+		if sc == "offline_access" {
+			t.Errorf("no refresh token is wanted, but offline_access was requested: %q", q.Get("scope"))
+		}
+	}
+	if q.Get("access_type") != "" || q.Get("prompt") != "" {
+		t.Errorf("no offline access or forced consent: %v", q)
+	}
+}
+
+func TestOIDCConfidentialClientStillWorksAndOfflineAccessIsRefused(t *testing.T) {
+	idp := newFakeIdP(t)
+	ts, _ := oidcServer(t, idp, nil) // with a client secret
+	if res := browserSignIn(t, ts, "idp", "alice@example.com"); !res.approved {
+		t.Fatalf("a confidential client: %d", res.status)
+	}
+	idp.mu.Lock()
+	hasSecret := false
+	for _, tr := range idp.tokenReqs {
+		if tr.form.Get("client_secret") == "s3cret" || strings.HasPrefix(tr.authHeader, "Basic ") {
+			hasSecret = true
+		}
+	}
+	idp.mu.Unlock()
+	if !hasSecret {
+		t.Error("when a secret is configured it must be used")
+	}
+
+	m := AuthMethod{ID: "x", Type: "oidc", OIDC: &OIDCConfig{Issuer: "https://idp.example.com", ClientID: "c", Scopes: []string{"openid", "email", "offline_access"}}}
+	if err := (&AuthConfig{Methods: []AuthMethod{m}}).Validate(); err == nil || !strings.Contains(err.Error(), "offline_access") {
+		t.Fatalf("offline_access must be refused: %v", err)
+	}
 }
