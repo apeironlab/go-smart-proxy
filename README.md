@@ -120,34 +120,7 @@ English as fallback; code, comments and this README are in English.
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    subgraph Clients
-        B[Browser / app]
-        C[curl / CLI]
-    end
-
-    B -->|HTTP proxy :3128| P[proxy]
-    B -->|SOCKS5 :1080| P
-    C -->|HTTP / SOCKS5| P
-
-    P --> R{Route selection}
-    R -->|Direct| I[Internet / intranet]
-    R -->|PAC| PAC[Upstream proxy]
-    R -->|Chain| H1[HTTP / SOCKS5 hop] --> H2[...] --> I
-    R -->|Relay route| REL[Relay]
-    REL -->|mTLS / yamux| RS[Relay server]
-    RS -->|contact approved route| CONTACT[Contact's proxy]
-    CONTACT --> T[Target host]
-
-    P -->|blocked host| BL[Blocked: ads, trackers, malware]
-    P -->|application of a relay| REL
-    RS -->|gateway| APP[Application]
-
-    P --- UI[Embedded web UI / API]
-    P --- TRAY[System tray]
-    P --- CFG[(config.yml.enc)]
-```
+![Architecture of Go Smart Proxy: your device, the relay and the remote side](docs/images/architecture.svg)
 
 The proxy listens on one HTTP address (also serving the web UI and API on
 loopback) and optionally on a SOCKS5 address. Every outgoing connection is first

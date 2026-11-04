@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 640" font-family="Inter,Segoe UI,Helvetica,Arial,sans-serif" font-size="14">
+<defs>
+<style>
+.bg{fill:#fff}.box{fill:#f4f6fb;stroke:#8a96b8;stroke-width:1.5}.acc{fill:#e8edff;stroke:#4c5fd5;stroke-width:2}
+.ok{fill:#e6f7ee;stroke:#2f9e62;stroke-width:1.5}.bad{fill:#fdeceb;stroke:#d9534f;stroke-width:1.5}
+.grp{fill:none;stroke:#b5bdd6;stroke-width:1.5;stroke-dasharray:6 4}
+.t{fill:#1f2740}.s{fill:#5b6482;font-size:12px}.h{fill:#4c5fd5;font-weight:700;font-size:13px;letter-spacing:.06em}
+.l{stroke:#4c5fd5;stroke-width:2;fill:none;marker-end:url(#a)}.d{stroke:#2f9e62;stroke-width:2;fill:none;marker-end:url(#g)}.x{stroke:#d9534f;stroke-width:2;fill:none;stroke-dasharray:5 4;marker-end:url(#r)}
+@media (prefers-color-scheme:dark){.bg{fill:#14172a}.box{fill:#1e2340;stroke:#5a678f}.acc{fill:#27306b;stroke:#8c9bff}.ok{fill:#17382b;stroke:#4cc38a}.bad{fill:#3d1d22;stroke:#f07672}.grp{stroke:#45507a}.t{fill:#e8ebf7}.s{fill:#9aa5c8}.h{fill:#9fb0ff}.l{stroke:#8c9bff}.d{stroke:#4cc38a}.x{stroke:#f07672}}
+</style>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#4c5fd5"/></marker>
+<marker id="g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#2f9e62"/></marker>
+<marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#d9534f"/></marker>
+</defs>
+<rect class="bg" width="1200" height="640" rx="14"/>
+<!-- clients -->
+<text class="h" x="40" y="42">YOUR DEVICE</text>
+<rect class="grp" x="24" y="54" width="520" height="560" rx="14"/>
+<rect class="box" x="44" y="90" width="150" height="64" rx="10"/><text class="t" x="119" y="118" text-anchor="middle" font-weight="600">Browser / apps</text><text class="s" x="119" y="138" text-anchor="middle">HTTP · SOCKS5</text>
+<rect class="box" x="44" y="190" width="150" height="64" rx="10"/><text class="t" x="119" y="218" text-anchor="middle" font-weight="600">curl / CLI</text><text class="s" x="119" y="238" text-anchor="middle">proxy env vars</text>
+<rect class="acc" x="250" y="130" width="270" height="100" rx="12"/><text class="t" x="385" y="165" text-anchor="middle" font-weight="700" font-size="17">Go Smart Proxy</text><text class="s" x="385" y="187" text-anchor="middle">:3128 HTTP/HTTPS · :1080 SOCKS5</text><text class="s" x="385" y="207" text-anchor="middle">web UI · API · tray</text>
+<path class="l" d="M194 122 L250 160"/><path class="l" d="M194 222 L250 200"/>
+<rect class="bad" x="250" y="290" width="270" height="62" rx="10"/><text class="t" x="385" y="317" text-anchor="middle" font-weight="600">Blocking</text><text class="s" x="385" y="337" text-anchor="middle">ads · trackers · malware · relay rules</text>
+<path class="l" d="M385 230 L385 290"/>
+<rect class="box" x="250" y="392" width="270" height="62" rx="10"/><text class="t" x="385" y="419" text-anchor="middle" font-weight="600">Routes and rules</text><text class="s" x="385" y="439" text-anchor="middle">network-aware · domains · hosts · VPN</text>
+<path class="l" d="M385 352 L385 392"/>
+<rect class="box" x="44" y="392" width="170" height="62" rx="10"/><text class="t" x="129" y="419" text-anchor="middle" font-weight="600">config.yml.enc</text><text class="s" x="129" y="439" text-anchor="middle">encrypted · master password</text>
+<path d="M214 423 L250 423" stroke="#8a96b8" stroke-width="2" stroke-dasharray="3 3" fill="none"/>
+<rect class="box" x="44" y="500" width="476" height="90" rx="10"/><text class="t" x="60" y="526" font-weight="600">Outgoing paths</text>
+<text class="s" x="60" y="550">Direct · PAC / upstream proxy · proxy chains (HTTP, SOCKS5)</text><text class="s" x="60" y="570">Relay route (mTLS) · applications published by a relay</text>
+<path class="l" d="M385 454 L385 500"/>
+<!-- blocked -->
+<text class="s" x="100" y="318" text-anchor="middle">blocked</text><path class="x" d="M250 322 L170 322 L170 350"/><text class="s" x="170" y="368" text-anchor="middle">403</text>
+<!-- relay side -->
+<text class="h" x="600" y="42">RELAY (SEVERAL REPLICAS)</text>
+<rect class="grp" x="580" y="54" width="300" height="560" rx="14"/>
+<rect class="acc" x="605" y="90" width="250" height="110" rx="12"/><text class="t" x="730" y="122" text-anchor="middle" font-weight="700" font-size="16">Relay server</text><text class="s" x="730" y="144" text-anchor="middle">mTLS + yamux · identities by e-mail</text><text class="s" x="730" y="164" text-anchor="middle">enrolment · policy · catalog</text><text class="s" x="730" y="184" text-anchor="middle">/metrics · /healthz · audit</text>
+<rect class="acc" x="605" y="236" width="250" height="70" rx="12"/><text class="t" x="730" y="266" text-anchor="middle" font-weight="700" font-size="16">Relay server (replica)</text><text class="s" x="730" y="286" text-anchor="middle">behind a load balancer</text>
+<rect class="box" x="605" y="342" width="250" height="70" rx="10"/><text class="t" x="730" y="372" text-anchor="middle" font-weight="600">Shared database</text><text class="s" x="730" y="392" text-anchor="middle">SQLite · PostgreSQL · MySQL / MariaDB</text>
+<path stroke="#8a96b8" stroke-width="2" fill="none" d="M730 200 L730 236"/><path stroke="#8a96b8" stroke-width="2" fill="none" d="M730 306 L730 342"/>
+<rect class="box" x="605" y="450" width="250" height="64" rx="10"/><text class="t" x="730" y="478" text-anchor="middle" font-weight="600">Admin web UI</text><text class="s" x="730" y="498" text-anchor="middle">users · apps · blocking · audit</text>
+<path stroke="#8a96b8" stroke-width="2" fill="none" d="M730 450 L730 412"/>
+<rect class="box" x="605" y="538" width="250" height="52" rx="10"/><text class="t" x="730" y="568" text-anchor="middle" font-weight="600">OIDC · SAML · LDAP · e-mail code</text>
+<path class="l" d="M520 545 L545 545 L545 145 L605 145"/><text class="s" x="552" y="330" transform="rotate(-90 552 330)" text-anchor="middle">mTLS</text>
+<!-- remote -->
+<text class="h" x="920" y="42">REMOTE SIDE</text>
+<rect class="grp" x="904" y="54" width="272" height="560" rx="14"/>
+<rect class="ok" x="924" y="90" width="232" height="90" rx="12"/><text class="t" x="1040" y="120" text-anchor="middle" font-weight="700">Contact's proxy</text><text class="s" x="1040" y="142" text-anchor="middle">exit after your approval</text><text class="s" x="1040" y="162" text-anchor="middle">home / office network</text>
+<rect class="ok" x="924" y="236" width="232" height="90" rx="12"/><text class="t" x="1040" y="266" text-anchor="middle" font-weight="700">Gateway</text><text class="s" x="1040" y="288" text-anchor="middle">one per application</text><text class="s" x="1040" y="308" text-anchor="middle">service certificate</text>
+<rect class="box" x="924" y="380" width="232" height="70" rx="10"/><text class="t" x="1040" y="408" text-anchor="middle" font-weight="600">Applications</text><text class="s" x="1040" y="428" text-anchor="middle">RDP · SSH · web · any TCP</text>
+<rect class="box" x="924" y="500" width="232" height="70" rx="10"/><text class="t" x="1040" y="528" text-anchor="middle" font-weight="600">Target hosts</text><text class="s" x="1040" y="548" text-anchor="middle">internet · private networks</text>
+<path class="d" d="M855 130 L924 130"/><path class="d" d="M855 270 L924 270"/>
+<path class="d" d="M1040 326 L1040 380"/><path class="d" d="M1156 135 L1168 135 L1168 535 L1156 535"/>
+</svg>
