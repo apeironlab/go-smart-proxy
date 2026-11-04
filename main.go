@@ -163,6 +163,7 @@ func main() {
 	}
 
 	loadConfigurationOrSetup()
+	healRecovery()
 	relayHub.startAll()
 	blockingStart()
 

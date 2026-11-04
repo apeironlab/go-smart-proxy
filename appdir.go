@@ -98,7 +98,7 @@ func migrateDataDirectory(from, to string) {
 		return
 	}
 	moved := false
-	for _, name := range []string{encryptedConfig, plainConfig, configKeyFile, "relay_state.json"} {
+	for _, name := range []string{encryptedConfig, plainConfig, configKeyFile, recoveryFile, "relay_state.json"} {
 		src := filepath.Join(from, name)
 		if !fileExists(src) {
 			continue

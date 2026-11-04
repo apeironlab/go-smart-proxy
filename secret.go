@@ -23,19 +23,21 @@ import (
 )
 
 const (
-	secretMagic      = "GSP1"
-	secretSaltSize   = 16
-	secretNonceSize  = 12
-	secretIterations = 600_000
-	secretKeySize    = 32
-	secretEnv        = "PROXY_MASTER_PASSWORD"
-	noKeychainEnv    = "PROXY_NO_KEYCHAIN"
-	encryptedConfig  = "config.yml.enc"
-	plainConfig      = "config.yml"
-	configKeyFile    = "config.key.dpapi"
-	minPasswordLen   = 8
-	keychainService  = "go-smart-proxy"
+	secretMagic     = "GSP1"
+	secretSaltSize  = 16
+	secretNonceSize = 12
+	secretKeySize   = 32
+	secretEnv       = "PROXY_MASTER_PASSWORD"
+	noKeychainEnv   = "PROXY_NO_KEYCHAIN"
+	encryptedConfig = "config.yml.enc"
+	plainConfig     = "config.yml"
+	configKeyFile   = "config.key.dpapi"
+	minPasswordLen  = 8
+	keychainService = "go-smart-proxy"
 )
+
+// secretIterations is the PBKDF2 work factor (a variable so that tests can lower it).
+var secretIterations = 600_000
 
 var (
 	secretMu   sync.Mutex
@@ -154,6 +156,11 @@ func writeSecretFileAtomic(path string, data []byte) error {
 // The key is what the app uses from now on: the master password is no longer
 // kept in memory.
 func setConfigCrypto(key, salt []byte) {
+	// Whoever unlocks with the password is not in a "recovered" session; the
+	// recovery path sets that flag after calling this.
+	recoveredMu.Lock()
+	recoveredSession = false
+	recoveredMu.Unlock()
 	secretMu.Lock()
 	configKey = append([]byte(nil), key...)
 	configSalt = append([]byte(nil), salt...)
@@ -237,6 +244,10 @@ func unlockConfigStored(data []byte) ([]byte, error) {
 // unlockConfigWithPassword decrypts data with an explicitly supplied master
 // password and remembers the derived key in the system key store.
 func unlockConfigWithPassword(data []byte, password string) ([]byte, error) {
+	// A recovery key can be typed where the password is asked.
+	if looksLikeRecoveryKey(password) {
+		return unlockConfigWithRecoveryKey(data, password)
+	}
 	salt, err := secretSalt(data)
 	if err != nil {
 		return nil, err

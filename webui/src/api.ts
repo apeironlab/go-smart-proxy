@@ -269,7 +269,18 @@ export interface BlockingTest {
   rule?: string
 }
 
+export interface SecurityInfo {
+  recoveryEnabled: boolean
+  recoveryCreated?: string
+  recovered: boolean
+  keychain: boolean
+}
+
 export const api = {
+  security: () => req<SecurityInfo>('/api/security'),
+  changePassword: (oldPassword: string, newPassword: string) => post('/api/security/password', { old: oldPassword, new: newPassword }),
+  createRecoveryKey: (password: string) => post<{ key: string }>('/api/security/recovery', { password }),
+  removeRecoveryKey: (password: string) => post('/api/security/recovery/remove', { password }),
   blocking: () => req<BlockingInfo>('/api/blocking'),
   saveBlocking: (c: BlockingConfig) => req<BlockingInfo>('/api/blocking', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c),

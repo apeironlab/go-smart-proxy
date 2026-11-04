@@ -6,7 +6,7 @@ import {
 import { useDisclosure } from '@mantine/hooks'
 import {
   IconAlertTriangle, IconArrowDown, IconArrowUp, IconClock, IconNetwork, IconPencil, IconPlugConnected, IconPlus,
-  IconRefresh, IconRoute, IconRouteAltRight, IconServer, IconSettings, IconTrash,
+  IconLock, IconRefresh, IconRoute, IconRouteAltRight, IconServer, IconSettings, IconTrash,
 } from '@tabler/icons-react'
 import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
@@ -14,6 +14,7 @@ import { api } from '../api'
 import type { Credential, Hop, NetworkLabelRule, RelayConfigInfo, RelayStatus, RouteInfo, StateInfo, SystemProxyState } from '../api'
 import { PageHeader, Section, StatCard } from '../components/ui'
 import { RelaySwitcher } from '../components/relaySwitcher'
+import { SecuritySection } from '../components/securitySection'
 import { useSelectedRelay } from '../relaySelection'
 
 const pacColors: Record<string, string> = {
@@ -374,7 +375,12 @@ export default function ConfigPage() {
           <Tabs.Tab value="routes" leftSection={<IconRoute size={16} />}>{t('Routes')}</Tabs.Tab>
           <Tabs.Tab value="hosts" leftSection={<IconServer size={16} />}>{t('Hosts and DNS')}</Tabs.Tab>
           <Tabs.Tab value="relay" leftSection={<IconRouteAltRight size={16} />}>{t('Relay')}</Tabs.Tab>
+          <Tabs.Tab value="security" leftSection={<IconLock size={16} />}>{t('Security')}</Tabs.Tab>
         </Tabs.List>
+
+        <Tabs.Panel value="security">
+          <SecuritySection />
+        </Tabs.Panel>
 
         <Tabs.Panel value="network">
           <SimpleGrid cols={{ base: 2, sm: 3, lg: 5 }} mb="lg">

@@ -27,6 +27,7 @@ English as fallback; code, comments and this README are in English.
 - [Quick start](#quick-start)
 - [Configuration](#configuration)
   - [Encrypted configuration and first run](#encrypted-configuration-and-first-run)
+  - [Master password and recovery key](#master-password-and-recovery-key)
   - [Configuration reference](#configuration-reference)
   - [Routes and route selection](#routes-and-route-selection)
   - [Proxy chains](#proxy-chains)
@@ -265,6 +266,27 @@ proxy uses the user configuration directory instead:
 on Windows, `~/.config/go-smart-proxy` on Linux. On the first launch after an
 upgrade, an existing configuration found in the old working directory is moved
 to the new one. Set `PROXY_HOME` to force a specific directory.
+
+### Master password and recovery key
+
+The configuration (credentials, relay keys) is encrypted with a key derived from
+the master password. **Configuration → Security** changes it: it asks for the
+current password, re-encrypts the file under a new salt and key at once, and
+replaces the key kept in the system keychain. Attempts are limited to five a
+minute.
+
+A **recovery key** is for the day the password is forgotten. It is a private key
+made once and shown once (`GSPR-XXXX-XXXX-...`, with a checksum so a typing
+mistake is noticed): keep it apart from the computer. The proxy keeps, in
+`config.recovery`, the configuration key sealed to the matching public key.
+Because sealing needs only the public key, the file is brought up to date after
+every password change without the recovery key being at hand, and a crash
+between the two writes is repaired at the next start. To use it, type the
+recovery key where the master password is asked (terminal, unlock page or
+`PROXY_MASTER_PASSWORD`); the proxy opens and then asks you to choose a new
+password, without needing the old one. Making a new key invalidates the old
+one; removing it deletes the file. Without the recovery key, `config.recovery`
+reveals nothing.
 
 ### Configuration reference
 
