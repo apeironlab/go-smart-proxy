@@ -19,6 +19,8 @@ import (
 // so a revocation takes effect for new connections without restarting.
 type Revocations struct {
 	path string
+	sh   *Shared // when set, the list is in the shared database
+	read time.Time
 
 	mu      sync.Mutex
 	mtime   time.Time
@@ -33,7 +35,44 @@ func NewRevocations(path string) *Revocations {
 	return &Revocations{path: path, emails: map[string]bool{}, serials: map[string]bool{}}
 }
 
+// NewSharedRevocations returns a deny list kept in the shared database: what
+// one relay revokes, the others refuse within a second.
+func NewSharedRevocations(sh *Shared) *Revocations {
+	return &Revocations{sh: sh, emails: map[string]bool{}, serials: map[string]bool{}}
+}
+
+// sharedFreshness is how old the copy of a shared list may be.
+const sharedFreshness = time.Second
+
+func (r *Revocations) reloadShared() {
+	if time.Since(r.read) < sharedFreshness {
+		return
+	}
+	rows, err := r.sh.db.Query(`SELECT entry FROM revocations`)
+	if err != nil {
+		return // keep what we have
+	}
+	defer rows.Close()
+	emails, serials := map[string]bool{}, map[string]bool{}
+	for rows.Next() {
+		var e string
+		if rows.Scan(&e) != nil {
+			continue
+		}
+		if sv, ok := strings.CutPrefix(e, "serial:"); ok {
+			serials[sv] = true
+		} else {
+			emails[e] = true
+		}
+	}
+	r.emails, r.serials, r.read = emails, serials, time.Now()
+}
+
 func (r *Revocations) reload() {
+	if r.sh != nil {
+		r.reloadShared()
+		return
+	}
 	if r.path == "" {
 		return
 	}
@@ -73,7 +112,7 @@ func (r *Revocations) reload() {
 // IsRevoked reports whether a certificate serial (lowercase hex) or the e-mail
 // identity is revoked, for a certificate that is not at hand.
 func (r *Revocations) IsRevoked(email, serial string) bool {
-	if r == nil || r.path == "" {
+	if !r.Enabled() {
 		return false
 	}
 	r.mu.Lock()
@@ -85,7 +124,7 @@ func (r *Revocations) IsRevoked(email, serial string) bool {
 // Revoked reports whether the certificate (or the e-mail identity it carries)
 // has been revoked.
 func (r *Revocations) Revoked(cert *x509.Certificate) bool {
-	if r == nil || r.path == "" {
+	if !r.Enabled() {
 		return false
 	}
 	r.mu.Lock()
@@ -150,12 +189,30 @@ func (r *Revocations) Remove(entry string) error {
 }
 
 func (r *Revocations) edit(entry string, add bool) error {
-	if r == nil || r.path == "" {
+	if !r.Enabled() {
 		return errors.New("revocation is not enabled")
 	}
 	entry, err := normalizeRevocation(entry)
 	if err != nil {
 		return err
+	}
+	if r.sh != nil {
+		if add {
+			err = r.sh.db.tx(func(tx *dbTx) error {
+				_, err := tx.insertIgnore("revocations", []string{"entry", "created"}, entry, nowUnix())
+				return err
+			})
+		} else {
+			_, err = r.sh.db.Exec(`DELETE FROM revocations WHERE entry = ?`, entry)
+		}
+		if err != nil {
+			return err
+		}
+		r.sh.bump()
+		r.mu.Lock()
+		r.read = time.Time{} // read it again
+		r.mu.Unlock()
+		return nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -196,7 +253,7 @@ func (r *Revocations) edit(entry string, add bool) error {
 
 // List returns what is revoked, sorted.
 func (r *Revocations) List() (emails, serials []string) {
-	if r == nil || r.path == "" {
+	if !r.Enabled() {
 		return nil, nil
 	}
 	r.mu.Lock()
@@ -214,4 +271,4 @@ func (r *Revocations) List() (emails, serials []string) {
 }
 
 // Enabled reports whether the list is backed by a file.
-func (r *Revocations) Enabled() bool { return r != nil && r.path != "" }
+func (r *Revocations) Enabled() bool { return r != nil && (r.path != "" || r.sh != nil) }

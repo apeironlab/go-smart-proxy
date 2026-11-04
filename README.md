@@ -49,6 +49,7 @@ English as fallback; code, comments and this README are in English.
   - [Notifications and self-service revocation](#notifications-and-self-service-revocation)
   - [Device certificates and automatic renewal](#device-certificates-and-automatic-renewal)
   - [Health, metrics and logs](#health-metrics-and-logs)
+  - [Several relays (high availability)](#several-relays-high-availability)
   - [Relay administration interface (optional)](#relay-administration-interface-optional)
   - [Kubernetes deployment](#kubernetes-deployment)
 - [Security](#security)
@@ -999,6 +1000,8 @@ Main `serve` flags:
 | `-apps` | YAML file with the applications catalog (read-only) |
 | `-policy` | YAML file with the blocking policy (read-only); without it the interface edits it |
 | `-policy-dir` | Where downloaded block lists are kept (default `policy-lists` next to `-state`) |
+| `-db` | Shared database (`postgres://` or `mysql://`): the relay keeps its state there; several relays can share it |
+| `-replica-id`, `-peer-addr`, `-peer-server-name` | Name of this relay, where the others reach it, name in the relays' certificate (with `-db`) |
 | `-admin-db` | Enable the management interface; the database is a SQLite file, or `postgres://...` or `mysql://...` (see *Databases*) |
 | `-admin-groups`, `-admin-emails` | Who may sign in to the interface |
 | `-admin-methods` | Sign-in method ids allowed for administrators (default: all) |
@@ -1424,6 +1427,58 @@ tables are created on first use. The relay was tested against SQLite, PostgreSQL
 16 and MariaDB 10.11; it needs a database it may create tables in, and nothing
 else (no extensions). MySQL tables are `utf8mb4` with a binary collation, so
 that keys compare as they do elsewhere.
+
+### Several relays (high availability)
+
+With `-db` the relay keeps its state in a PostgreSQL or MySQL/MariaDB database
+instead of files, and any number of relays can share it behind a load balancer:
+they behave as one.
+
+```bash
+proxyrelay serve -listen :2443 -cert ... -key ... -ca /ca/ca.pem \
+  -db 'postgres://relay:${DB_PASSWORD}@db/relay?sslmode=require' \
+  -replica-id "$HOSTNAME" -peer-addr "$POD_IP:2443" -public-relay relay.example.com:2443 \
+  -enroll-listen :2444 -enroll-plain -public-url https://enroll.example.com ...
+```
+
+**In the database:** the address book (contacts, requests, devices, last seen,
+groups), the revocation list, enrollments in progress (so the steps of one
+enrollment, or an OpenID Connect or SAML sign-in that starts on one relay and
+returns on another, work whichever relay answers), the certificates issued,
+administrator sessions, the audit log, and what the interface saves (catalog,
+blocking policy, enrollment rules). Every change bumps a counter; each relay
+watches it every second and pushes fresh states to its own users, so a contact
+request made on one relay reaches the person connected to another.
+
+**On each relay:** the connections it serves. Who is connected where is in the
+database (kept fresh by a five-second heartbeat; the rows of a relay that died
+stop counting after 20 seconds). When a stream must reach a device or a gateway
+on another relay, the relay opens a link to it, to its ordinary mTLS port, with
+a certificate that only relays have (made at start-up from the CA directory,
+which every relay needs, as enrollment does; `-peer-addr` is where the others
+reach it) and asks it to open the stream: the authorization (contacts, catalog,
+policy) was done by the relay that received the request. A device that
+reconnects to another relay replaces its old session; a revocation closes the
+connections it covers on every relay within about two seconds; a gateway can
+be connected to a different relay from the users of its applications.
+
+Notes:
+
+- SQLite cannot be shared (the relay refuses `-peer-addr` with it). A relay with
+  `-db` alone, no `-peer-addr`, is a single relay whose state is in a database.
+- `-state`, `-enroll-state` and `-revoked` are not used with `-db`. The CA
+  directory (with the key, for enrollment and for the relay certificates) and
+  the server certificate are files every relay needs, a shared volume or
+  secret.
+- Rate limits (enrollment, sign-in) are counted per relay, so with N relays the
+  effective limit is up to N times higher.
+- Block lists are downloaded by each relay on its own.
+- `/readyz` also checks the database; `gsp_relay_devices_online` and the other
+  gauges are per relay (sum them); the interface's overview and its users list
+  show every relay's devices.
+- Tables are created at start-up; relays starting together take a database lock
+  so that they do not race. Tested with PostgreSQL 16 and MariaDB 10.11, with
+  two relay processes talking through a real PostgreSQL.
 
 ### Relay administration interface (optional)
 
@@ -1859,15 +1914,16 @@ The Go module is named `proxy`; internal packages are imported as
 
 Current limitations:
 
-- Master password rotation is not implemented (a new encrypted config must be
-  created to change it).
-- Certificate renewal is manual (Relay → Riconfigura). Revocation is a list file checked at connection, not a CRL/OCSP; users and administrators can add to it.
-- Enrollment invitations are initiated by the admin CLI; there is no admin web
-  console or user database UI.
-- The local API is protected by Host/Origin/Content-Type checks and, optionally, an access token (see below).
+- Revocation is a list checked when a device connects (and, every couple of
+  seconds, against connections already open), not a CRL or OCSP endpoint.
+- The local API is protected by Host/Origin/Content-Type checks and,
+  optionally, an access token (see above).
 - Windows lacks system proxy/PAC/Chrome policy/desktop notifications.
 - Linux system tray requires the systray GTK/AppIndicator dependencies.
-- The relay state file is single-instance; do not scale the relay horizontally.
+- Without `-db` the relay state is in files and the relay must run alone; with
+  `-db` (PostgreSQL or MySQL) several relays can share it. Rate limits are
+  per relay, and the CA directory and server certificate are files every relay
+  needs.
 - The macOS biometric gate is app-level `LocalAuthentication`; the Keychain item
   is not protected by a native biometric access-control ACL.
 
@@ -1876,14 +1932,11 @@ Possible future work:
 - Rules/routes UX redesign: reusable upstream profiles, rule groups, a visual
   flow (`rule → profile → hop chain`), drag-and-drop ordering, and a richer
   destination tester.
-- Per-device certificate identities (today device codes are routing labels and
-  devices may share one certificate).
-- Password rotation/rewrap tooling and recovery-key design.
-- Automatic certificate renewal and a standard CRL/OCSP endpoint.
-- Admin UI/API for invitations, users, and device management.
+- A standard CRL/OCSP endpoint.
 - Windows system proxy/PAC/Chrome/notifications.
 - Signed macOS builds with native Keychain access control.
-- Metrics/health endpoints, structured logs, and relay HA.
+- Rate limits shared between relays, and a state store that does not need the
+  CA key on every relay (a signing service).
 
 ---
 

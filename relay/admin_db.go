@@ -16,6 +16,9 @@ import (
 // rules edited from the interface.
 type adminDB struct {
 	db *dbConn
+	// changed, when set, is called after a setting is saved (the other relays
+	// are told to read it).
+	changed func()
 }
 
 var adminTables = []tableDef{
@@ -369,7 +372,13 @@ func (d *adminDB) setSetting(key string, v any) error {
 	if err != nil {
 		return err
 	}
-	return d.db.upsert("settings", "key", []string{"key", "value"}, []string{"value"}, key, string(b))
+	if err := d.db.upsert("settings", "key", []string{"key", "value"}, []string{"value"}, key, string(b)); err != nil {
+		return err
+	}
+	if d.changed != nil {
+		d.changed()
+	}
+	return nil
 }
 
 // ---- gateways ---------------------------------------------------------

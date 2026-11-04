@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -195,7 +196,11 @@ func runServe(args []string) error {
 	metricsListen := fs.String("metrics-listen", "", "serve /healthz, /readyz and /metrics here (e.g. 127.0.0.1:9100); empty disables")
 	metricsToken := fs.String("metrics-token", env("PROXYRELAY_METRICS_TOKEN", ""), "bearer token required for /metrics (prefer PROXYRELAY_METRICS_TOKEN)")
 	logFormat := fs.String("log-format", env("PROXYRELAY_LOG_FORMAT", "text"), "text or json")
-	adminDB := fs.String("admin-db", "", "enable the management interface (/admin/) with this SQLite database")
+	adminDB := fs.String("admin-db", "", "enable the management interface (/admin/) with this database (SQLite file, postgres:// or mysql://)")
+	dbAddr := fs.String("db", env("PROXYRELAY_DB", ""), "shared database (postgres:// or mysql://): the relay then keeps its state there, and several relays can share it")
+	replicaID := fs.String("replica-id", env("PROXYRELAY_REPLICA_ID", ""), "name of this relay among the ones sharing the database (default: the host name)")
+	peerAddr := fs.String("peer-addr", env("PROXYRELAY_PEER_ADDR", ""), "host:port the other relays reach this one's mTLS listener at (for instance the pod address)")
+	peerName := fs.String("peer-server-name", "", "name in the relays' server certificate (default: the host of -public-relay)")
 	adminGroups := fs.String("admin-groups", "", "groups whose members are administrators")
 	adminEmails := fs.String("admin-emails", "", "e-mail addresses that are administrators")
 	adminMethods := fs.String("admin-methods", "", "sign-in method ids allowed for administrators (default: all)")
@@ -221,18 +226,45 @@ func runServe(args []string) error {
 	if err != nil {
 		return err
 	}
-	store, err := relay.NewStore(*statePath)
-	if err != nil {
-		return err
+	var (
+		store *relay.Store
+		rev   *relay.Revocations
+		sh    *relay.Shared
+	)
+	if *dbAddr != "" {
+		// State in a database: files for it are not used.
+		if sh, err = relay.OpenShared(*dbAddr, firstNonEmpty(*replicaID, hostID())); err != nil {
+			return fmt.Errorf("-db: %w", err)
+		}
+		defer sh.Close()
+		store, rev = relay.NewSharedStore(sh), relay.NewSharedRevocations(sh)
+		if *peerAddr != "" && relay.IsSQLiteAddress(*dbAddr) {
+			return errors.New("-peer-addr: several relays cannot share a SQLite file; use PostgreSQL or MySQL")
+		}
+		log.Printf("state is in the shared database; this relay is %q", sh.ReplicaID)
+	} else {
+		if store, err = relay.NewStore(*statePath); err != nil {
+			return err
+		}
+		// Revocation is always on: users revoke their own certificates and the
+		// interface edits the same list.
+		if *revoked == "" {
+			*revoked = filepath.Join(filepath.Dir(*statePath), "revoked.txt")
+		}
+		rev = relay.NewRevocations(*revoked)
 	}
 	srv := relay.NewServer(store)
-	// Revocation is always on: users revoke their own certificates and the
-	// interface edits the same list.
-	if *revoked == "" {
-		*revoked = filepath.Join(filepath.Dir(*statePath), "revoked.txt")
-	}
-	rev := relay.NewRevocations(*revoked)
 	srv.Revoked = rev
+	if sh != nil {
+		name := *peerName
+		if name == "" {
+			name, _, _ = net.SplitHostPort(*publicRelay)
+		}
+		if err := srv.SetShared(sh, relay.ReplicaConfig{Addr: *peerAddr, CADir: firstNonEmpty(*caDir, filepath.Dir(*caFile)), ServerName: name, CAFile: *caFile}); err != nil {
+			return err
+		}
+	}
+	adminOn := *adminDB != "" || (sh != nil && (*adminGroups != "" || *adminEmails != ""))
 
 	// Catalog of applications: a file, or the management interface's.
 	var catalog *relay.Catalog
@@ -242,7 +274,7 @@ func runServe(args []string) error {
 			return err
 		}
 		defer catalog.Close()
-	case *adminDB != "":
+	case adminOn:
 		catalog = relay.NewCatalog()
 	}
 	if catalog != nil {
@@ -261,7 +293,7 @@ func runServe(args []string) error {
 		if policy, err = relay.LoadPolicyFile(*policyFile, *policyDir); err != nil {
 			return err
 		}
-	case *adminDB != "":
+	case adminOn:
 		policy = relay.NewPolicy(*policyDir)
 	}
 	if policy != nil {
@@ -271,13 +303,13 @@ func runServe(args []string) error {
 
 	// Management interface.
 	var admin *relay.Admin
-	if *adminDB != "" {
+	if adminOn {
 		sessTTL, err := time.ParseDuration(*adminSession)
 		if err != nil {
 			return fmt.Errorf("-admin-session: %w", err)
 		}
 		if admin, err = relay.NewAdmin(relay.AdminConfig{
-			DBPath: *adminDB, Groups: splitList(*adminGroups), Emails: splitList(*adminEmails), Methods: splitList(*adminMethods),
+			DBPath: *adminDB, Shared: sh, Groups: splitList(*adminGroups), Emails: splitList(*adminEmails), Methods: splitList(*adminMethods),
 			Revoked: rev, SessionTTL: sessTTL,
 		}); err != nil {
 			return err
@@ -292,6 +324,9 @@ func runServe(args []string) error {
 		}
 	}
 
+	if sh != nil {
+		go srv.RunShared(ctx)
+	}
 	ln, err := tls.Listen("tcp", *listen, tlsCfg)
 	if err != nil {
 		return err
@@ -309,7 +344,7 @@ func runServe(args []string) error {
 		cfg := relay.EnrollConfig{
 			CADir: firstNonEmpty(*caDir, filepath.Dir(*caFile)), PublicRelay: *publicRelay, PublicURL: *publicURL, DownloadURL: *downloadURL,
 			AllowedDomains: splitList(*allowDomains), StatePath: *enrollState, CertTTL: ttl,
-			TrustForwardedFor: *trustXFF, Admin: admin, Store: store, MaxRenewAge: renewAge,
+			TrustForwardedFor: *trustXFF, Admin: admin, Store: store, MaxRenewAge: renewAge, Shared: sh,
 			Revoked: rev, Disconnect: srv.Kick,
 		}
 		smtp.apply(&cfg)
@@ -364,7 +399,7 @@ func runServe(args []string) error {
 	}
 
 	if *metricsListen != "" {
-		obs := &relay.Observer{Server: srv, Enroll: enrollForMetrics, Admin: admin, Policy: policy, Token: *metricsToken, Started: time.Now(), Version: buildVersion()}
+		obs := &relay.Observer{Shared: sh, Server: srv, Enroll: enrollForMetrics, Admin: admin, Policy: policy, Token: *metricsToken, Started: time.Now(), Version: buildVersion()}
 		ms := &http.Server{Addr: *metricsListen, Handler: obs.Handler(), ReadHeaderTimeout: 10 * time.Second}
 		go func() {
 			log.Printf("metrics and health listening on %s", *metricsListen)
@@ -387,6 +422,25 @@ func runServe(args []string) error {
 		enrollSrv.Shutdown(sctx)
 	}
 	return nil
+}
+
+// hostID is a name for this relay made from the host name.
+func hostID() string {
+	h, _ := os.Hostname()
+	var b strings.Builder
+	for _, r := range strings.ToLower(h) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	id := strings.Trim(b.String(), "-")
+	if id == "" || len(id) > 29 {
+		return ""
+	}
+	return id
 }
 
 func firstNonEmpty(a, b string) string {

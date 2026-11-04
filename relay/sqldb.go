@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -272,15 +273,35 @@ func (c *dbConn) typeOf(col colDef) string {
 	return t
 }
 
-// migrate creates the tables. Index creation errors "already exists" are not
-// errors.
+// migrate creates the tables. Several relays may start at once and run this
+// together, which PostgreSQL and MySQL do not tolerate (CREATE ... IF NOT EXISTS
+// races with itself), so it takes a lock all of them share.
 func (c *dbConn) migrate(tables []tableDef) error {
+	ctx := context.Background()
+	conn, err := c.DB.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	switch c.dia {
+	case dialPostgres:
+		if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(7272741)`); err != nil {
+			return err
+		}
+		defer conn.ExecContext(ctx, `SELECT pg_advisory_unlock(7272741)`)
+	case dialMySQL:
+		var got sql.NullInt64
+		if err := conn.QueryRowContext(ctx, `SELECT GET_LOCK('gsp_migrate', 60)`).Scan(&got); err != nil || got.Int64 != 1 {
+			return fmt.Errorf("cannot take the migration lock: %v", err)
+		}
+		defer conn.ExecContext(ctx, `SELECT RELEASE_LOCK('gsp_migrate')`)
+	}
 	for _, stmt := range c.schema(tables) {
 		isIndex := false
 		if strings.HasPrefix(stmt, "\x00") {
 			stmt, isIndex = stmt[1:], true
 		}
-		if _, err := c.DB.Exec(stmt); err != nil {
+		if _, err := conn.ExecContext(ctx, stmt); err != nil {
 			if isIndex && (strings.Contains(err.Error(), "Duplicate key name") || strings.Contains(err.Error(), "already exists")) {
 				continue
 			}
@@ -295,4 +316,10 @@ func firstWords(s string) string {
 		return s[:60] + "..."
 	}
 	return s
+}
+
+// IsSQLiteAddress says whether a database address is a SQLite file.
+func IsSQLiteAddress(addr string) bool {
+	dia, _, _, err := parseDSN(addr)
+	return err == nil && dia == dialSQLite
 }

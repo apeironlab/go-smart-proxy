@@ -47,6 +47,11 @@ type Server struct {
 	sessions map[string]*session
 	gateways map[string]*session // application gateways by id
 	serving  atomic.Bool
+
+	// Shared and peers are set when several relays share a database (SetShared).
+	Shared   *Shared
+	peers    *peerState
+	onShared []func()
 }
 
 // Serving reports whether Serve is accepting connections.
@@ -94,9 +99,12 @@ type OnlineDevice struct {
 	Serial  string      `json:"serial"`
 	Since   time.Time   `json:"since"`
 	Context *NetContext `json:"context,omitempty"`
+	// Replica is the relay the device is connected to (empty: this one).
+	Replica string `json:"replica,omitempty"`
 }
 
-// Online lists the devices that are connected now.
+// Online lists the devices that are connected now, on every relay sharing the
+// database.
 func (s *Server) Online() []OnlineDevice {
 	s.mu.Lock()
 	all := make([]*session, 0, len(s.sessions))
@@ -109,6 +117,10 @@ func (s *Server) Online() []OnlineDevice {
 		sess.mu.Lock()
 		out = append(out, OnlineDevice{Email: sess.email, Device: sess.device, Addr: sess.addr, Serial: sess.serial, Since: sess.since, Context: sess.ctx})
 		sess.mu.Unlock()
+	}
+	for _, d := range s.remoteAll() {
+		_, devAddr := splitRemoteAddr(d.Addr)
+		out = append(out, OnlineDevice{Email: d.Email, Device: d.Device, Addr: devAddr, Serial: d.Serial, Since: d.Since, Context: d.Ctx, Replica: d.Replica})
 	}
 	return out
 }
@@ -126,6 +138,9 @@ func (s *Server) Kick(email, serial string) int {
 	s.mu.Unlock()
 	for _, sess := range hit {
 		sess.ys.Close()
+	}
+	if sh := s.sharedDB(); sh != nil { // the other relays close theirs
+		sh.db.Exec(`INSERT INTO kicks(email, device, serial, before_ts, ts) VALUES(?,?,?,?,?)`, email, "", serial, 0, nowUnix())
 	}
 	return len(hit)
 }
@@ -194,6 +209,15 @@ func (s *Server) handleConn(c net.Conn) {
 		c.Close()
 		return
 	}
+	if rid, isReplica := ReplicaFromCert(peers[0]); isReplica {
+		if s.sharedDB() == nil {
+			s.Log.Printf("a relay certificate (%s) from %s, but this relay is not shared: refused", rid, c.RemoteAddr())
+			c.Close()
+			return
+		}
+		s.handlePeerConn(c, rid)
+		return
+	}
 	if gid, isGateway := GatewayFromCert(peers[0]); isGateway {
 		s.handleGatewayConn(c, peers[0], gid)
 		return
@@ -250,6 +274,7 @@ func (s *Server) unregister(sess *session) {
 	sess.mu.Lock()
 	email, device := sess.email, sess.device
 	sess.mu.Unlock()
+	s.presenceDel(email, device)
 	s.Log.Printf("%s/%s disconnected", email, device)
 	s.audit("session.close", email, device, "")
 	s.Store.Seen(email, time.Now())
@@ -266,11 +291,19 @@ func sessionKey(email, device string) string { return email + "\x00" + device }
 // onlineDevices returns the sorted online device codes of a user.
 func (s *Server) onlineDevices(email string) []string {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	var out []string
+	seen := map[string]bool{}
 	for _, sess := range s.sessions {
 		if sess.email == email && sess.device != "" {
 			out = append(out, sess.device)
+			seen[sess.device] = true
+		}
+	}
+	s.mu.Unlock()
+	for _, d := range s.remoteDevices(email) {
+		if d.Device != "" && !seen[d.Device] {
+			out = append(out, d.Device)
+			seen[d.Device] = true
 		}
 	}
 	sort.Strings(out)
@@ -280,9 +313,18 @@ func (s *Server) onlineDevices(email string) []string {
 // deviceContexts returns the network context shared by each online device of
 // email, by device code. Devices that share nothing are left out.
 func (s *Server) deviceContexts(email string) map[string]NetContext {
+	var out map[string]NetContext
+	for _, d := range s.remoteDevices(email) {
+		if d.Device == "" || d.Ctx == nil {
+			continue
+		}
+		if out == nil {
+			out = map[string]NetContext{}
+		}
+		out[d.Device] = *d.Ctx
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var out map[string]NetContext
 	for _, sess := range s.sessions {
 		if sess.email != email || sess.device == "" {
 			continue
@@ -361,13 +403,9 @@ func (s *Server) pushStateDevice(email, device, notice string) {
 	}
 	ownOnline := map[string]bool{}
 	ownCtx := s.deviceContexts(email)
-	s.mu.Lock()
-	for _, sess := range s.sessions {
-		if sess.email == email {
-			ownOnline[sess.device] = true
-		}
+	for _, d := range s.onlineDevices(email) {
+		ownOnline[d] = true
 	}
-	s.mu.Unlock()
 	for _, id := range s.Store.Devices(email) {
 		di := DeviceInfo{ID: id, Online: ownOnline[id]}
 		if c, ok := ownCtx[id]; ok && ownOnline[id] {
@@ -486,6 +524,7 @@ func (s *Server) handleControl(sess *session, st net.Conn, br *bufio.Reader, hel
 		old.ys.Close() // a newer connection of the same user+device replaces the old one
 	}
 	close(sess.ready)
+	s.presenceSet(sess)
 	s.Store.RememberDevice(sess.email, device)
 	s.Log.Printf("%s/%s connected", sess.email, device)
 	s.audit("session.open", sess.email, device, sess.addr)
@@ -505,6 +544,7 @@ func (s *Server) handleControl(sess *session, st net.Conn, br *bufio.Reader, hel
 			sess.mu.Lock()
 			sess.ctx = SanitizeContext(m.Context)
 			sess.mu.Unlock()
+			s.presenceSet(sess)
 			s.pushState(sess.email, "")
 			s.notifyPresence(sess.email)
 			continue
@@ -575,24 +615,33 @@ func (s *Server) handlePing(sess *session, st net.Conn, req DialReq) {
 		reply(DialResp{Error: via + " is not in your contacts"})
 		return
 	}
-	peer, err := s.peer(via, viaDevice)
+	loc, err := s.locate(via, viaDevice)
 	if err != nil {
 		reply(DialResp{Error: err.Error()})
 		return
 	}
-	if peer == sess {
+	if loc.sess == sess {
 		reply(DialResp{Error: "this is the device you are using"})
 		return
 	}
-	ps, err := peer.ys.OpenStream()
-	if err != nil {
-		reply(DialResp{Error: via + " is unreachable"})
-		return
-	}
-	defer ps.Close()
-	if err := WriteLine(ps, DialReq{T: TPing, From: sess.email, FromDevice: fromDevice}); err != nil {
-		reply(DialResp{Error: via + " is unreachable"})
-		return
+	inner := DialReq{T: TPing, From: sess.email, FromDevice: fromDevice}
+	var ps net.Conn
+	if loc.remote != nil { // on another relay
+		if ps, err = s.openRemote(loc.remote, kindPing, inner); err != nil {
+			reply(DialResp{Error: via + " is unreachable"})
+			return
+		}
+		defer ps.Close()
+	} else {
+		if ps, err = loc.sess.ys.OpenStream(); err != nil {
+			reply(DialResp{Error: via + " is unreachable"})
+			return
+		}
+		defer ps.Close()
+		if err := WriteLine(ps, inner); err != nil {
+			reply(DialResp{Error: via + " is unreachable"})
+			return
+		}
 	}
 	ps.SetReadDeadline(time.Now().Add(pingTimeout))
 	var resp DialResp
@@ -655,24 +704,32 @@ func (s *Server) handleDial(sess *session, st net.Conn, br *bufio.Reader, req Di
 			return
 		}
 	}
-	peer, err := s.peer(via, viaDevice)
+	loc, err := s.locate(via, viaDevice)
 	if err != nil {
 		fail(err.Error())
 		return
 	}
-	if peer == sess {
+	if loc.sess == sess {
 		fail("cannot use this device as the relay exit")
 		return
 	}
-	ps, err := peer.ys.OpenStream()
-	if err != nil {
-		fail(via + " is unreachable")
-		return
-	}
-	if err := WriteLine(ps, DialReq{T: TDial, From: sess.email, FromDevice: fromDevice, Target: req.Target}); err != nil {
-		ps.Close()
-		fail(via + " is unreachable")
-		return
+	inner := DialReq{T: TDial, From: sess.email, FromDevice: fromDevice, Target: req.Target}
+	var ps net.Conn
+	if loc.remote != nil { // on another relay
+		if ps, err = s.openRemote(loc.remote, kindDial, inner); err != nil {
+			fail(via + " is unreachable")
+			return
+		}
+	} else {
+		if ps, err = loc.sess.ys.OpenStream(); err != nil {
+			fail(via + " is unreachable")
+			return
+		}
+		if err := WriteLine(ps, inner); err != nil {
+			ps.Close()
+			fail(via + " is unreachable")
+			return
+		}
 	}
 	pbr := NewReader(ps)
 	ps.SetReadDeadline(time.Now().Add(dialReplyTimeout))

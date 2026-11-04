@@ -289,6 +289,45 @@ func GatewayFromCert(c *x509.Certificate) (string, bool) {
 	return "", false
 }
 
+// replicaURIPrefix marks the certificate a relay uses toward the other relays
+// sharing its database. Like the gateway's, it cannot be obtained through
+// enrollment.
+const replicaURIPrefix = "urn:gsp:replica:"
+
+// ReplicaFromCert returns the id of the relay a certificate belongs to.
+func ReplicaFromCert(c *x509.Certificate) (string, bool) {
+	for _, u := range c.URIs {
+		if id, ok := strings.CutPrefix(u.String(), replicaURIPrefix); ok && authIDRe.MatchString(id) {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+// newReplicaCertificate makes the certificate (and key) a relay presents to
+// its peers, valid for ttl.
+func newReplicaCertificate(caDir, id string, ttl time.Duration) (tls.Certificate, error) {
+	ca, caPriv, err := loadCA(caDir)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	u, _ := url.Parse(replicaURIPrefix + id)
+	tpl := &x509.Certificate{
+		SerialNumber: serial(), Subject: pkix.Name{CommonName: "relay " + id}, URIs: []*url.URL{u},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(ttl),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, ca, &key.PublicKey, caPriv)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
+}
+
 // GatewayCredentials is a freshly issued gateway certificate.
 type GatewayCredentials struct {
 	CertPEM, KeyPEM, CAPEM []byte

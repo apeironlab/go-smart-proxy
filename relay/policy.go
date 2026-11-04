@@ -313,6 +313,25 @@ func (p *Policy) Set(c PolicyConfig) error {
 	return nil
 }
 
+// applyStored takes a policy another relay saved, without saving it again.
+func (p *Policy) applyStored(c PolicyConfig) {
+	if p.path != "" || c.Validate() != nil {
+		return
+	}
+	p.mu.Lock()
+	a, _ := json.Marshal(p.cfg)
+	b, _ := json.Marshal(c)
+	if string(a) == string(b) {
+		p.mu.Unlock()
+		return
+	}
+	p.cfg = c
+	p.mu.Unlock()
+	p.rebuild()
+	p.notify()
+	go p.Refresh(context.Background())
+}
+
 // OnChange registers a function called whenever what proxies are told changes.
 func (p *Policy) OnChange(fn func()) {
 	p.mu.Lock()

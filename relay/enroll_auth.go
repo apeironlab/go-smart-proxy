@@ -247,7 +247,7 @@ func (s *EnrollServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	s.users[pr.email] = true
+	s.noteUserLocked(pr.email)
 	s.saveLocked()
 	s.mu.Unlock()
 	s.log.Printf("enrollment: %s: certificate issued to %s", m.ID, pr.email)
@@ -297,9 +297,7 @@ func (s *EnrollServer) handleBrowserStart(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.mu.Lock()
-	s.items[it.ID] = it
-	s.byState[it.State] = it.ID
-	s.saveLocked()
+	s.itemAddLocked(it)
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":           it.ID,
@@ -338,11 +336,9 @@ func (s *EnrollServer) handleACS(w http.ResponseWriter, r *http.Request) {
 // only, so a replayed or forged callback finds nothing.
 func (s *EnrollServer) finishBrowser(w http.ResponseWriter, r *http.Request, m *methodEntry, state string) {
 	s.mu.Lock()
-	id, known := s.byState[state]
-	delete(s.byState, state)
-	it := s.items[id]
+	it := s.itemByStateLocked(state)
 	s.mu.Unlock()
-	if state == "" || !known || it == nil || it.Method != m.ID || it.Approved || time.Now().After(it.Expires) {
+	if state == "" || it == nil || it.Method != m.ID || it.Approved || time.Now().After(it.Expires) {
 		s.log.Printf("enrollment: %s: callback with an unknown or expired state", m.ID)
 		resultPage(w, false)
 		return
@@ -373,9 +369,8 @@ func (s *EnrollServer) finishBrowser(w http.ResponseWriter, r *http.Request, m *
 	// The certificate is issued only when the code shown in the proxy that
 	// started it is typed here (as in the OAuth device flow).
 	s.mu.Lock()
-	it.Ticket = randomToken(24)
-	s.byTicket[it.Ticket] = it.ID
-	ticket := it.Ticket
+	ticket := randomToken(24)
+	s.setTicketLocked(it, ticket)
 	s.mu.Unlock()
 	s.log.Printf("enrollment: %s: %s signed in, waiting for the device code", m.ID, it.Email)
 	confirmPage(w, http.StatusOK, ticket, it, enrollMaxTries, "")
@@ -401,9 +396,8 @@ func (s *EnrollServer) handleVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mu.Lock()
-	id, known := s.byTicket[ticket]
-	it := s.items[id]
-	if ticket == "" || !known || it == nil || it.Method != m.ID || it.Approved || time.Now().After(it.Expires) || it.Ticket != ticket {
+	it := s.itemByTicketLocked(ticket)
+	if ticket == "" || it == nil || it.Method != m.ID || it.Approved || time.Now().After(it.Expires) || it.Ticket != ticket {
 		s.mu.Unlock()
 		s.log.Printf("enrollment: %s: confirmation with an unknown or expired ticket", m.ID)
 		resultPage(w, false)
@@ -413,10 +407,10 @@ func (s *EnrollServer) handleVerify(w http.ResponseWriter, r *http.Request) {
 		it.Attempts++
 		left := enrollMaxTries - it.Attempts
 		if left <= 0 { // too many wrong codes: this sign-in is over
-			delete(s.byTicket, ticket)
-			it.Ticket = ""
+			s.clearTicketLocked(it, ticket)
 			it.Expires = time.Now()
 		}
+		s.saveLocked()
 		email := it.Email
 		s.mu.Unlock()
 		s.log.Printf("enrollment: %s: wrong device code for %s from %s (%d left)", m.ID, email, s.clientIP(r), left)
@@ -428,8 +422,8 @@ func (s *EnrollServer) handleVerify(w http.ResponseWriter, r *http.Request) {
 		confirmPage(w, http.StatusForbidden, ticket, it, left, "Codice non corretto · Wrong code")
 		return
 	}
-	delete(s.byTicket, ticket) // good for one use
-	it.Ticket = ""
+	s.clearTicketLocked(it, ticket) // good for one use
+	s.saveLocked()
 	s.mu.Unlock()
 
 	cert, err := s.issue(it)
@@ -441,7 +435,7 @@ func (s *EnrollServer) handleVerify(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	it.Approved = true
 	it.CertPEM = cert
-	s.users[it.Email] = true
+	s.noteUserLocked(it.Email)
 	s.saveLocked()
 	s.mu.Unlock()
 	s.log.Printf("enrollment: %s: certificate issued to %s", m.ID, it.Email)

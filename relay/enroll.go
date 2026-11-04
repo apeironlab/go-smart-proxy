@@ -66,6 +66,9 @@ type EnrollConfig struct {
 	// sign-in, which applications with group access use. Pass the Store of the
 	// relay Server.
 	Store *Store
+	// Shared, when set, keeps the enrollments in progress and the certificates
+	// issued in a database several relays use.
+	Shared *Shared
 	// Revoked is the deny list users add their certificates to when they
 	// revoke them themselves (the page at /revoke). nil turns that off. Pass
 	// the list the relay Server consults.
@@ -107,6 +110,10 @@ type Enrollment struct {
 	Approved   bool      `json:"approved"`
 	CertPEM    string    `json:"certPem,omitempty"`
 	Known      bool      `json:"known"`
+	// stateUsed: the browser sign-in state was spent. saved is what the database
+	// row held when it was read (to write back only what changed).
+	stateUsed bool
+	saved     string
 	// Admin marks a sign-in to the management interface (not a certificate
 	// request); LoginHash ties it to the browser that started it.
 	Admin     bool   `json:"-"`
@@ -194,7 +201,7 @@ func NewEnrollServer(cfg EnrollConfig) (*EnrollServer, error) {
 	if len(s.Rules().AllowedDomains) == 0 {
 		s.log.Printf("WARNING: enrollment is open to every e-mail domain (set -allow-domains to restrict it)")
 	}
-	if cfg.StatePath != "" {
+	if cfg.StatePath != "" && cfg.Shared == nil {
 		if b, err := os.ReadFile(cfg.StatePath); err == nil {
 			var f enrollFile
 			if err := json.Unmarshal(b, &f); err == nil {
@@ -236,6 +243,10 @@ func (s *EnrollServer) Handler() http.Handler {
 }
 
 func (s *EnrollServer) saveLocked() {
+	if s.shared() {
+		s.flushLocked()
+		return
+	}
 	if s.cfg.StatePath == "" {
 		return
 	}
@@ -282,6 +293,9 @@ func (s *EnrollServer) pruneLocked(now, cut time.Time) {
 		return
 	}
 	s.lastPrune = now
+	if s.shared() {
+		s.pruneSharedLocked(now)
+	}
 	for id, it := range s.items {
 		if now.After(it.Expires.Add(time.Hour)) {
 			delete(s.items, id)
@@ -490,21 +504,19 @@ func (s *EnrollServer) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 
 	s.mu.Lock()
-	known := s.users[email]
+	known := s.userKnownLocked(email)
 	it := &Enrollment{
 		ID: id, Email: email, Device: device, CSRPEM: req.CSR,
 		CodeHash: hashToken(code), PollHash: hashToken(pollToken),
 		Created: now, Expires: now.Add(enrollTTL), Known: known,
 	}
-	s.items[id] = it
-	s.saveLocked()
+	s.itemAddLocked(it)
 	s.mu.Unlock()
 
 	subject, body := enrollmentEmail(email, code, s.mailConfig(), known)
 	if err := s.send(email, subject, body); err != nil {
 		s.mu.Lock()
-		delete(s.items, id)
-		s.saveLocked()
+		s.itemDropLocked(id)
 		s.mu.Unlock()
 		s.log.Printf("enrollment mail to %s failed: %v", email, err)
 		writeError(w, http.StatusBadGateway, "invio dell'e-mail non riuscito")
@@ -733,7 +745,7 @@ func (s *EnrollServer) find(w http.ResponseWriter, r *http.Request) (*Enrollment
 	}
 	id := r.PathValue("id")
 	s.mu.Lock()
-	it := s.items[id]
+	it := s.itemLoadLocked(id)
 	s.mu.Unlock()
 	if it == nil || subtle.ConstantTimeCompare([]byte(hashToken(token)), []byte(it.PollHash)) != 1 {
 		writeError(w, http.StatusNotFound, "richiesta non trovata")
@@ -814,7 +826,7 @@ func (s *EnrollServer) handleConfirm(w http.ResponseWriter, r *http.Request) {
 		it.Approved = true
 		it.CertPEM = signed
 		it.CodeHash = ""
-		s.users[email] = true
+		s.noteUserLocked(email)
 		s.saveLocked()
 		s.mu.Unlock()
 		certPEM = signed

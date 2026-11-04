@@ -18,6 +18,7 @@ type Store struct {
 	devices  map[string]map[string]bool // email -> set of known device codes
 	lastSeen map[string]int64           // email -> Unix time of the last disconnection
 	groups   map[string][]string        // email -> groups reported when the user last signed in
+	sh       *Shared                    // when set, everything is in the shared database
 }
 
 type storeFile struct {
@@ -124,6 +125,9 @@ func (s *Store) saveLocked() {
 }
 
 func (s *Store) IsContact(a, b string) bool {
+	if s.sh != nil {
+		return s.sqlIsContact(a, b)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.contacts[a][b]
@@ -131,6 +135,9 @@ func (s *Store) IsContact(a, b string) bool {
 
 // RememberDevice records a device that connected at least once for an email.
 func (s *Store) RememberDevice(email, device string) bool {
+	if s.sh != nil {
+		return s.sqlRememberDevice(email, device)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.devices[email][device] {
@@ -143,6 +150,10 @@ func (s *Store) RememberDevice(email, device string) bool {
 
 // Seen records that email was online until now.
 func (s *Store) Seen(email string, t time.Time) {
+	if s.sh != nil {
+		s.sqlSeen(email, t)
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastSeen[email] = t.Unix()
@@ -151,6 +162,9 @@ func (s *Store) Seen(email string, t time.Time) {
 
 // LastSeen returns when email was last online (Unix seconds), or 0.
 func (s *Store) LastSeen(email string) int64 {
+	if s.sh != nil {
+		return s.sqlLastSeen(email)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.lastSeen[email]
@@ -158,6 +172,9 @@ func (s *Store) LastSeen(email string) int64 {
 
 // Devices returns all known devices of an email, sorted.
 func (s *Store) Devices(email string) []string {
+	if s.sh != nil {
+		return s.sqlDevices(email)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return keys(s.devices[email])
@@ -166,6 +183,10 @@ func (s *Store) Devices(email string) []string {
 // ForgetDevice removes a device code from the list of an address (the device
 // shows again if it connects).
 func (s *Store) ForgetDevice(email, device string) {
+	if s.sh != nil {
+		s.sqlForgetDevice(email, device)
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if delFrom(s.devices, email, device) {
@@ -175,6 +196,9 @@ func (s *Store) ForgetDevice(email, device string) {
 
 // Snapshot returns the contacts, incoming and outgoing requests of email.
 func (s *Store) Snapshot(email string) (contacts, incoming, outgoing []string) {
+	if s.sh != nil {
+		return s.sqlSnapshot(email)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	contacts = keys(s.contacts[email])
@@ -191,6 +215,9 @@ func (s *Store) Snapshot(email string) (contacts, incoming, outgoing []string) {
 // Request registers a contact request from -> to. Returns the emails whose
 // state changed and a notice for the requester.
 func (s *Store) Request(from, to string) (changed []string, notice string) {
+	if s.sh != nil {
+		return s.sqlRequest(from, to)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
@@ -214,6 +241,9 @@ func (s *Store) Request(from, to string) (changed []string, notice string) {
 
 // Respond answers the request of from, addressed to self.
 func (s *Store) Respond(self, from string, accept bool) (changed []string) {
+	if s.sh != nil {
+		return s.sqlRespond(self, from, accept)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !delFrom(s.pending, self, from) {
@@ -229,6 +259,9 @@ func (s *Store) Respond(self, from string, accept bool) (changed []string) {
 
 // Remove deletes the contact (both sides) and any pending request between the two.
 func (s *Store) Remove(self, other string) (changed []string) {
+	if s.sh != nil {
+		return s.sqlRemove(self, other)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	a := delFrom(s.contacts, self, other)
@@ -245,6 +278,10 @@ func (s *Store) Remove(self, other string) (changed []string) {
 // SetGroups records the groups an identity provider reported for email at
 // sign-in. Applications whose access is by group use them.
 func (s *Store) SetGroups(email string, groups []string) {
+	if s.sh != nil {
+		s.sqlSetGroups(email, groups)
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g := append([]string{}, groups...)
@@ -258,7 +295,15 @@ func (s *Store) SetGroups(email string, groups []string) {
 
 // Groups returns the groups last recorded for email.
 func (s *Store) Groups(email string) []string {
+	if s.sh != nil {
+		return s.sqlGroups(email)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string{}, s.groups[email]...)
+}
+
+// NewSharedStore returns a store kept in the shared database.
+func NewSharedStore(sh *Shared) *Store {
+	return &Store{sh: sh}
 }

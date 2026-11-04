@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -296,6 +297,29 @@ func (c *Catalog) Set(apps []App) error {
 		fn()
 	}
 	return nil
+}
+
+// applyStored takes a catalog another relay saved: it replaces the one in
+// memory (and tells the users) without saving it again.
+func (c *Catalog) applyStored(apps []App) {
+	if c.path != "" || ValidateApps(apps) != nil {
+		return
+	}
+	apps = append([]App{}, apps...)
+	sort.Slice(apps, func(i, j int) bool { return apps[i].ID < apps[j].ID })
+	c.mu.Lock()
+	a, _ := json.Marshal(c.apps)
+	b, _ := json.Marshal(apps)
+	if string(a) == string(b) {
+		c.mu.Unlock()
+		return
+	}
+	c.apps = apps
+	subs := append([]func(){}, c.subs...)
+	c.mu.Unlock()
+	for _, fn := range subs {
+		fn()
+	}
 }
 
 // OnChange registers a function called after every change.

@@ -183,6 +183,27 @@ func (s *EnrollServer) loadSavedRules() error {
 	return nil
 }
 
+// applyStoredRules takes the rules another relay saved.
+func (s *EnrollServer) applyStoredRules() {
+	if s.cfg.Admin == nil {
+		return
+	}
+	var r EnrollRules
+	ok, err := s.cfg.Admin.db.getSetting(rulesSetting, &r)
+	if err != nil || !ok {
+		return
+	}
+	if r.RequireGroups == nil {
+		r.RequireGroups = map[string][]string{}
+	}
+	if s.ValidateRules(r) != nil {
+		return
+	}
+	s.rulesMu.Lock()
+	s.rules = r
+	s.rulesMu.Unlock()
+}
+
 func (s *EnrollServer) isOff(id string) bool {
 	s.rulesMu.RLock()
 	defer s.rulesMu.RUnlock()
@@ -249,7 +270,7 @@ func (s *EnrollServer) signFor(csr []byte, email, device, method, ip string, ori
 			serial, notAfter = strings.ToLower(c.SerialNumber.Text(16)), c.NotAfter
 		}
 	}
-	if a := s.cfg.Admin; a != nil && serial != "" {
+	if a := s.cfg.Admin; a != nil && serial != "" && !s.shared() {
 		if err := a.db.recordCert(CertRecord{Serial: serial, Email: email, Device: device, Method: method, Issued: time.Now(), Expires: notAfter}); err != nil {
 			s.log.Printf("recording the certificate of %s: %v", email, err)
 		}

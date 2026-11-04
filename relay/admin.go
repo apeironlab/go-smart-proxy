@@ -30,6 +30,10 @@ import (
 type AdminConfig struct {
 	// DBPath is the SQLite database (created private if missing).
 	DBPath string
+	// Shared, when set, is the database several relays use (OpenShared); the
+	// interface then keeps its sessions and settings there too, and DBPath is
+	// not used.
+	Shared *Shared
 	// Groups are the groups whose members are administrators; Emails are
 	// administrators by address. At least one of the two is required.
 	Groups []string
@@ -66,6 +70,7 @@ type Admin struct {
 	catalog  *Catalog
 	policy   *Policy
 	sessions map[string]*adminSession // by hash of the cookie
+	sh       *Shared                  // sessions are kept there when set
 	started  time.Time
 	events   int
 }
@@ -95,11 +100,16 @@ func NewAdmin(cfg AdminConfig) (*Admin, error) {
 	if cfg.SessionTTL <= 0 {
 		cfg.SessionTTL = 8 * time.Hour
 	}
-	db, err := openAdminDB(cfg.DBPath)
-	if err != nil {
-		return nil, fmt.Errorf("admin: %w", err)
+	var db *adminDB
+	if cfg.Shared != nil {
+		db = cfg.Shared.admin
+	} else {
+		var err error
+		if db, err = openAdminDB(cfg.DBPath); err != nil {
+			return nil, fmt.Errorf("admin: %w", err)
+		}
 	}
-	a := &Admin{cfg: cfg, db: db, log: cfg.Logger, sessions: map[string]*adminSession{}, started: time.Now()}
+	a := &Admin{cfg: cfg, db: db, sh: cfg.Shared, log: cfg.Logger, sessions: map[string]*adminSession{}, started: time.Now()}
 	if a.log == nil {
 		a.log = log.Default()
 	}
@@ -110,7 +120,12 @@ func NewAdmin(cfg AdminConfig) (*Admin, error) {
 func (a *Admin) Ping() error { return a.db.db.Ping() }
 
 // Close closes the database.
-func (a *Admin) Close() error { return a.db.Close() }
+func (a *Admin) Close() error {
+	if a.sh != nil {
+		return nil // the shared database belongs to whoever opened it
+	}
+	return a.db.Close()
+}
 
 // SetServer connects the interface to the relay: it shows who is online, can
 // disconnect users, and receives the connection events.
@@ -119,6 +134,7 @@ func (a *Admin) SetServer(s *Server) {
 	a.server = s
 	a.mu.Unlock()
 	s.SetAudit(a.store)
+	s.OnSharedChange(a.syncSettings) // what another relay saved (shared database only)
 }
 
 const appsSetting = "apps"
@@ -144,6 +160,28 @@ func (a *Admin) SetCatalog(c *Catalog) error {
 		return c.Set(apps)
 	}
 	return nil
+}
+
+// syncSettings applies the settings another relay sharing the database saved.
+func (a *Admin) syncSettings() {
+	if c := a.cat(); c != nil && !c.ReadOnly() {
+		var apps []App
+		if ok, _ := a.db.getSetting(appsSetting, &apps); ok {
+			c.applyStored(apps)
+		}
+	}
+	if p := a.pol(); p != nil && !p.ReadOnly() {
+		var cfg PolicyConfig
+		if ok, _ := a.db.getSetting(policySetting, &cfg); ok {
+			p.applyStored(cfg)
+		}
+	}
+	a.mu.Lock()
+	es := a.enroll
+	a.mu.Unlock()
+	if es != nil {
+		es.applyStoredRules()
+	}
 }
 
 const policySetting = "policy"
@@ -382,6 +420,9 @@ func (a *Admin) session(r *http.Request) *adminSession {
 	}
 	key := hashToken(c.Value)
 	now := time.Now()
+	if a.sh != nil {
+		return a.sharedSession(key, now)
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.sweepLocked(now)
@@ -404,6 +445,19 @@ func (a *Admin) sweepLocked(now time.Time) {
 func (a *Admin) startSession(w http.ResponseWriter, r *http.Request, email, method string) {
 	token := randomToken(32)
 	now := time.Now()
+	if a.sh != nil {
+		a.startSharedSession(hashToken(token), email, method, now)
+	} else {
+		a.startLocalSession(hashToken(token), email, method, now)
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: adminCookie, Value: token, Path: "/admin", HttpOnly: true,
+		Secure: a.secure(r), SameSite: http.SameSiteStrictMode, MaxAge: int(a.cfg.SessionTTL / time.Second),
+	})
+	a.Record("admin.login", email, method, a.enroll.clientIP(r))
+}
+
+func (a *Admin) startLocalSession(key, email, method string, now time.Time) {
 	a.mu.Lock()
 	a.sweepLocked(now)
 	if len(a.sessions) >= adminMaxSession { // drop the oldest
@@ -416,13 +470,8 @@ func (a *Admin) startSession(w http.ResponseWriter, r *http.Request, email, meth
 		}
 		delete(a.sessions, oldK)
 	}
-	a.sessions[hashToken(token)] = &adminSession{email: email, method: method, csrf: randomToken(24), created: now, last: now}
+	a.sessions[key] = &adminSession{email: email, method: method, csrf: randomToken(24), created: now, last: now}
 	a.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{
-		Name: adminCookie, Value: token, Path: "/admin", HttpOnly: true,
-		Secure: a.secure(r), SameSite: http.SameSiteStrictMode, MaxAge: int(a.cfg.SessionTTL / time.Second),
-	})
-	a.Record("admin.login", email, method, a.enroll.clientIP(r))
 }
 
 func (a *Admin) handleSession(w http.ResponseWriter, r *http.Request) {
@@ -541,8 +590,7 @@ func (a *Admin) handleLoginStart(w http.ResponseWriter, r *http.Request) {
 	}
 	s := a.enroll
 	s.mu.Lock()
-	s.items[it.ID] = it
-	s.byState[it.State] = it.ID
+	s.itemAddLocked(it)
 	s.mu.Unlock()
 	// Lax, not Strict: the browser comes back from the identity provider.
 	http.SetCookie(w, &http.Cookie{
@@ -556,7 +604,7 @@ func (a *Admin) handleLoginStart(w http.ResponseWriter, r *http.Request) {
 func (a *Admin) finishLogin(w http.ResponseWriter, r *http.Request, m *methodEntry, it *Enrollment, id Identity) {
 	s := a.enroll
 	s.mu.Lock()
-	delete(s.items, it.ID)
+	s.itemDropLocked(it.ID)
 	s.mu.Unlock()
 	c, err := r.Cookie(adminLoginCook)
 	if err != nil || !subtleEqual(hashToken(c.Value), it.LoginHash) {
@@ -591,6 +639,9 @@ func (a *Admin) handleLogout(w http.ResponseWriter, r *http.Request, sess *admin
 	if c, err := r.Cookie(adminCookie); err == nil {
 		a.mu.Lock()
 		delete(a.sessions, hashToken(c.Value))
+		if a.sh != nil {
+			a.sh.db.Exec(`DELETE FROM admin_sessions WHERE hash = ?`, hashToken(c.Value))
+		}
 		a.mu.Unlock()
 	}
 	http.SetCookie(w, &http.Cookie{Name: adminCookie, Value: "", Path: "/admin", MaxAge: -1, HttpOnly: true, Secure: a.secure(r)})

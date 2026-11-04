@@ -39,6 +39,9 @@ func RenewWindow(notBefore, notAfter time.Time) time.Duration {
 
 // originOf finds when the sign-in behind a certificate happened.
 func (s *EnrollServer) originOf(serial string, fallback time.Time) time.Time {
+	if s.shared() {
+		return s.sqlOriginOf(serial, fallback)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, c := range s.certs {

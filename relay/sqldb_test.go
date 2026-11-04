@@ -184,3 +184,30 @@ func TestAdminDatabaseOnEveryDialect(t *testing.T) {
 		})
 	}
 }
+
+// Relays that start together all create the tables.
+func TestSeveralRelaysCreateTheTablesTogether(t *testing.T) {
+	for name, addr := range dialects(t) {
+		t.Run(name, func(t *testing.T) {
+			a := addr(t)
+			if name == "sqlite" {
+				t.Skip("a SQLite file belongs to one process")
+			}
+			errs := make(chan error, 6)
+			for i := 0; i < 6; i++ {
+				go func() {
+					sh, err := OpenShared(a, "")
+					if err == nil {
+						sh.Close()
+					}
+					errs <- err
+				}()
+			}
+			for i := 0; i < 6; i++ {
+				if err := <-errs; err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}

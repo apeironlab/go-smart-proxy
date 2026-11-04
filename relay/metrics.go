@@ -164,6 +164,8 @@ type Observer struct {
 	Enroll *EnrollServer
 	Admin  *Admin
 	Policy *Policy
+	// Shared, when the relay uses a shared database, is checked for readiness.
+	Shared *Shared
 	// Token, when set, is required (as a bearer token) to read /metrics. The
 	// health endpoints never need it and say nothing about users.
 	Token   string
@@ -176,6 +178,11 @@ type Observer struct {
 func (o *Observer) Ready() error {
 	if o.Server != nil && !o.Server.Serving() {
 		return fmt.Errorf("the mTLS listener is not running")
+	}
+	if o.Shared != nil {
+		if err := o.Shared.Ping(); err != nil {
+			return fmt.Errorf("the shared database does not answer: %w", err)
+		}
 	}
 	if o.Admin != nil {
 		if err := o.Admin.Ping(); err != nil {

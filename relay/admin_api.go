@@ -12,6 +12,11 @@ import (
 
 // pendingCount is the number of certificate requests waiting for the user.
 func (s *EnrollServer) pendingCount() int {
+	if s.shared() {
+		var n int
+		s.sdb().QueryRow(`SELECT COUNT(*) FROM enroll_items WHERE expires > ? AND data NOT LIKE '%"xAdmin":true%' AND data NOT LIKE '%"approved":true%'`, nowUnix()).Scan(&n)
+		return n
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()

@@ -46,6 +46,10 @@ type revokeToken struct {
 }
 
 func (s *EnrollServer) recordIssued(c *IssuedCert) {
+	if s.shared() {
+		s.sqlRecordIssued(c)
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
@@ -61,6 +65,9 @@ func (s *EnrollServer) recordIssued(c *IssuedCert) {
 
 // activeCerts lists the certificates of email that are valid and not revoked.
 func (s *EnrollServer) activeCerts(email string) []IssuedCert {
+	if s.shared() {
+		return s.sqlActiveCerts(email)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
@@ -76,6 +83,9 @@ func (s *EnrollServer) activeCerts(email string) []IssuedCert {
 
 // activeCertCount is the number of certificates in the ledger that are valid.
 func (s *EnrollServer) activeCertCount() int {
+	if s.shared() {
+		return s.sqlActiveCertCount()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
@@ -206,7 +216,7 @@ func (s *EnrollServer) handleRevokeRequest(w http.ResponseWriter, r *http.Reques
 				delete(s.revoke, k)
 			}
 		}
-		s.revoke[hashToken(token)] = &revokeToken{email: email, expires: now.Add(revokeTokenTTL)}
+		s.putRevokeTokenLocked(hashToken(token), email, now.Add(revokeTokenTTL))
 		s.mu.Unlock()
 		link := publicBase(s.cfg.PublicURL) + "/revoke/confirm?token=" + token
 		body := fmt.Sprintf("Ciao,\n\nè stata chiesta la revoca dei certificati associati a %s (richiesta da %s).\n\n"+
@@ -230,11 +240,7 @@ If the address has active certificates, we sent a message with a link to confirm
 func (s *EnrollServer) lookupToken(token string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	t := s.revoke[hashToken(token)]
-	if t == nil || time.Now().After(t.expires) {
-		return "", false
-	}
-	return t.email, true
+	return s.getRevokeTokenLocked(hashToken(token))
 }
 
 func badLink(w http.ResponseWriter) {
@@ -298,7 +304,7 @@ func (s *EnrollServer) handleRevokeDo(w http.ResponseWriter, r *http.Request) {
 	}
 	// The link is good for one revocation.
 	s.mu.Lock()
-	delete(s.revoke, hashToken(token))
+	s.delRevokeTokenLocked(hashToken(token))
 	s.mu.Unlock()
 
 	var done []IssuedCert
@@ -310,16 +316,20 @@ func (s *EnrollServer) handleRevokeDo(w http.ResponseWriter, r *http.Request) {
 			s.log.Printf("revocation of %s for %s failed: %v", c.Serial, email, err)
 			continue
 		}
-		s.mu.Lock()
-		for _, x := range s.certs {
-			if x.Serial == c.Serial {
-				x.Revoked = true
+		if s.shared() {
+			s.cfg.Shared.admin.markCert(c.Serial, true, email)
+		} else {
+			s.mu.Lock()
+			for _, x := range s.certs {
+				if x.Serial == c.Serial {
+					x.Revoked = true
+				}
 			}
-		}
-		s.saveLocked()
-		s.mu.Unlock()
-		if a := s.cfg.Admin; a != nil {
-			a.db.markCert(c.Serial, true, email)
+			s.saveLocked()
+			s.mu.Unlock()
+			if a := s.cfg.Admin; a != nil {
+				a.db.markCert(c.Serial, true, email)
+			}
 		}
 		if s.cfg.Disconnect != nil {
 			s.cfg.Disconnect(email, c.Serial)

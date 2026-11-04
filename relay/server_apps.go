@@ -14,6 +14,12 @@ import (
 // appDialTimeout bounds how long a gateway may take to reach a backend.
 const appDialTimeout = 30 * time.Second
 
+// gatewayOnline says whether a gateway is connected to this relay or to
+// another one sharing the database.
+func (s *Server) gatewayOnline(id string) bool {
+	return s.gateway(id) != nil || s.remoteGateway(id) != nil
+}
+
 func (s *Server) gateway(id string) *session {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -34,7 +40,7 @@ func (s *Server) appsFor(email string) []AppInfo {
 		}
 		out = append(out, AppInfo{
 			ID: a.ID, Name: a.Name, Description: a.Description, Host: a.Host, Kind: a.Kind,
-			Online: s.gateway(a.Gateway) != nil,
+			Online: s.gatewayOnline(a.Gateway),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name) })
@@ -99,10 +105,17 @@ func (s *Server) pushGateway(id string) {
 // OnlineGateways lists the gateways that are connected.
 func (s *Server) OnlineGateways() []string {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	out := make([]string, 0, len(s.gateways))
+	seen := map[string]bool{}
 	for id := range s.gateways {
 		out = append(out, id)
+		seen[id] = true
+	}
+	s.mu.Unlock()
+	for _, id := range s.remoteGatewayIDs() {
+		if !seen[id] {
+			out = append(out, id)
+		}
 	}
 	sort.Strings(out)
 	return out
@@ -157,6 +170,7 @@ func (s *Server) handleGatewayConn(c net.Conn, cert *x509.Certificate, id string
 	if old != nil {
 		old.ys.Close() // a newer connection of the same gateway replaces the old one
 	}
+	s.gatewayPresenceSet(id, sess)
 	s.Log.Printf("gateway %s connected from %s", id, sess.addr)
 	s.audit("gateway.open", id, "", sess.addr)
 	s.pushGateway(id)
@@ -168,6 +182,7 @@ func (s *Server) handleGatewayConn(c net.Conn, cert *x509.Certificate, id string
 			delete(s.gateways, id)
 		}
 		s.mu.Unlock()
+		s.gatewayPresenceDel(id)
 		s.Log.Printf("gateway %s disconnected", id)
 		s.audit("gateway.close", id, "", "")
 		s.pushCatalog()
@@ -217,18 +232,26 @@ func (s *Server) handleAppDial(sess *session, st net.Conn, br *bufio.Reader, req
 		fail("unknown application")
 		return
 	}
-	gw := s.gateway(app.Gateway)
-	if gw == nil {
-		fail(app.Name + " is not available right now")
-		return
-	}
-	ps, err := gw.ys.OpenStream()
-	if err != nil {
-		fail(app.Name + " is not available right now")
-		return
-	}
-	if err := WriteLine(ps, DialReq{T: TDial, App: app.ID, From: sess.email, FromDevice: fromDevice}); err != nil {
-		ps.Close()
+	inner := DialReq{T: TDial, App: app.ID, From: sess.email, FromDevice: fromDevice}
+	var ps net.Conn
+	var err error
+	if gw := s.gateway(app.Gateway); gw != nil {
+		if ps, err = gw.ys.OpenStream(); err != nil {
+			fail(app.Name + " is not available right now")
+			return
+		}
+		if err := WriteLine(ps, inner); err != nil {
+			ps.Close()
+			fail(app.Name + " is not available right now")
+			return
+		}
+	} else if rg := s.remoteGateway(app.Gateway); rg != nil { // on another relay
+		inner.Via = app.Gateway // tells the other relay which gateway
+		if ps, err = s.openRemote(rg, kindApp, inner); err != nil {
+			fail(app.Name + " is not available right now")
+			return
+		}
+	} else {
 		fail(app.Name + " is not available right now")
 		return
 	}
