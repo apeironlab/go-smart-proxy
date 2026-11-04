@@ -306,3 +306,23 @@ func TestPolicyIsOffWithoutOne(t *testing.T) {
 	}
 	b.send("PUT", "/admin/api/policy", map[string]any{"config": PolicyConfig{}}, nil, 404)
 }
+
+func TestRelayCanRequireTheLocalAccessToken(t *testing.T) {
+	env, client, _ := newAppRelay(t)
+	pol := NewPolicy(t.TempDir())
+	env.srv.AttachPolicy(pol)
+	alice := client("alice@example.com")
+	alice.waitState(t, func(s State) bool { return s.Email == "alice@example.com" })
+	if err := pol.Set(PolicyConfig{RequireLocalAuth: true}); err != nil {
+		t.Fatal(err)
+	}
+	st := alice.waitState(t, func(s State) bool { return s.Policy != nil })
+	if !st.Policy.RequireLocalAuth || len(st.Policy.Rules) != 0 || st.Policy.Rev == "" {
+		t.Fatalf("policy: %+v", st.Policy)
+	}
+	pol.Set(PolicyConfig{})
+	st = alice.waitState(t, func(s State) bool { return s.Policy == nil })
+	if st.Policy != nil {
+		t.Fatalf("lifted: %+v", st.Policy)
+	}
+}

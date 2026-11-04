@@ -28,6 +28,7 @@ English as fallback; code, comments and this README are in English.
 - [Configuration](#configuration)
   - [Encrypted configuration and first run](#encrypted-configuration-and-first-run)
   - [Master password and recovery key](#master-password-and-recovery-key)
+  - [Access token for the local interface (optional)](#access-token-for-the-local-interface-optional)
   - [Configuration reference](#configuration-reference)
   - [Routes and route selection](#routes-and-route-selection)
   - [Proxy chains](#proxy-chains)
@@ -287,6 +288,29 @@ recovery key where the master password is asked (terminal, unlock page or
 password, without needing the old one. Making a new key invalidates the old
 one; removing it deletes the file. Without the recovery key, `config.recovery`
 reveals nothing.
+
+### Access token for the local interface (optional)
+
+The web interface and its API answer to anything that can reach `127.0.0.1`,
+which on a computer with several users, or with untrusted programs, is more than
+the owner. **Configuration → Security → Access token** (or a relay, see below)
+turns on a token: every `/api/` call then needs it, as `Authorization: Bearer
+<token>` or as the session cookie (`HttpOnly`, `SameSite=Strict`) that signing
+in sets. The page that loads the interface is served without it, to show the
+sign-in form. The proxy itself (the HTTP and SOCKS5 ports used by your programs)
+is not affected.
+
+The token is random (256 bits), kept in `api.token` next to the configuration,
+readable by your user only. The tray's *Open management page* and the setup
+pages open the interface at `http://127.0.0.1:3128/#token=...`: what follows `#`
+is never sent anywhere, the page signs in with it and removes it from the
+address bar. Wrong tokens are limited to ten a minute; sessions end after two
+idle hours or twelve in all; *Make a new token* signs everybody else out.
+
+**A relay can require it.** In the relay's **Blocking** page (or `require_local_auth: true` in the policy
+file), *Require an access token for the proxy's local interface* applies to every
+proxy connected to it. The user then cannot switch it off (the switch says so),
+and it relaxes when the relay stops requiring it, back to the user's own choice.
 
 ### Configuration reference
 
@@ -680,6 +704,7 @@ lists:
     url: https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext
 allow: [false-positive.example.com]   # never blocked by the relay's rules
 refresh_hours: 24
+require_local_auth: false     # true: every proxy protects its interface with a token
 ```
 
 - **Required** rules are enforced by the relay on every connection that goes
@@ -1821,7 +1846,7 @@ Current limitations:
 - Certificate renewal is manual (Relay → Riconfigura). Revocation is a list file checked at connection, not a CRL/OCSP; users and administrators can add to it.
 - Enrollment invitations are initiated by the admin CLI; there is no admin web
   console or user database UI.
-- The local API has no authentication; it is intended for loopback use.
+- The local API is protected by Host/Origin/Content-Type checks and, optionally, an access token (see below).
 - Windows lacks system proxy/PAC/Chrome policy/desktop notifications.
 - Linux system tray requires the systray GTK/AppIndicator dependencies.
 - The relay state file is single-instance; do not scale the relay horizontally.

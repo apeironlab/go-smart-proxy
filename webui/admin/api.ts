@@ -171,6 +171,7 @@ export interface PolicyConfig {
   lists: PolicyList[]
   allow: string[]
   refreshHours?: number
+  requireLocalAuth?: boolean
 }
 
 export interface PolicyInfo {

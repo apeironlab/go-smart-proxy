@@ -300,6 +300,9 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/") {
+			if !localAuthGate(w, r) {
+				return
+			}
 			apiMux.ServeHTTP(w, r)
 			return
 		}
@@ -820,7 +823,7 @@ func systrayReady() {
 	mOpen := systray.AddMenuItem("Open management page", "Open the web UI in the browser")
 	go func() {
 		for range mOpen.ClickedCh {
-			if err := openBrowser(webUIURL()); err != nil {
+			if err := openBrowser(webUIOpenURL()); err != nil {
 				log.Printf("Cannot open the browser: %+v", err)
 			}
 		}

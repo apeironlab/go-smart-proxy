@@ -128,6 +128,18 @@ export default function PolicyPage() {
             )}
           </Section>
 
+          <Section
+            title={t('Proxy security')}
+            description={t('Applies to every proxy connected to this relay; users cannot switch it off.')}
+          >
+            <Switch
+              checked={!!cfg.requireLocalAuth} disabled={readOnly}
+              label={t('Require an access token for the proxy\'s local interface')}
+              description={t('The proxy then asks for a token (kept in a file only its user can read) before it shows its interface or answers its API.')}
+              onChange={(e) => { void save({ ...cfg, requireLocalAuth: e.currentTarget.checked }) }}
+            />
+          </Section>
+
           <Section title={t('Exceptions')} description={t('Domains the relay\'s rules never block: the fix for a list that blocks something it should not.')}>
             <TagsInput
               value={cfg.allow} disabled={readOnly} placeholder="example.com"

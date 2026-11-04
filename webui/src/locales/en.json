@@ -631,5 +631,20 @@
   "Your recovery key": "Your recovery key",
   "This is the only time it is shown. Whoever has it can open your configuration: keep it private.": "This is the only time it is shown. Whoever has it can open your configuration: keep it private.",
   "I have saved it": "I have saved it",
-  "Security": "Security"
+  "Security": "Security",
+  "Proxy security": "Proxy security",
+  "Applies to every proxy connected to this relay; users cannot switch it off.": "Applies to every proxy connected to this relay; users cannot switch it off.",
+  "Require an access token for the proxy's local interface": "Require an access token for the proxy's local interface",
+  "The proxy then asks for a token (kept in a file only its user can read) before it shows its interface or answers its API.": "The proxy then asks for a token (kept in a file only its user can read) before it shows its interface or answers its API.",
+  "Access token for this interface": "Access token for this interface",
+  "Anything that can reach 127.0.0.1 can use this interface and its API. With the token on, they need the token, kept in a file only you can read. Useful on a computer shared with others.": "Anything that can reach 127.0.0.1 can use this interface and its API. With the token on, they need the token, kept in a file only you can read. Useful on a computer shared with others.",
+  "Required by your organization": "Required by your organization",
+  "Require the access token": "Require the access token",
+  "The token is in": "The token is in",
+  "Make a new token? Every other browser window will have to sign in again.": "Make a new token? Every other browser window will have to sign in again.",
+  "Make a new token": "Make a new token",
+  "This interface needs the access token.": "This interface needs the access token.",
+  "Your organization requires the access token.": "Your organization requires the access token.",
+  "Access token": "Access token",
+  "Open the interface from the tray icon (it signs you in), or copy the token from the file": "Open the interface from the tray icon (it signs you in), or copy the token from the file"
 }

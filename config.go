@@ -153,6 +153,9 @@ type Configuration struct {
 	// Blocking turns the proxy into an ad, tracker and malware blocker (see
 	// blocking.go); it works with or without a relay.
 	Blocking BlockingConfig `yaml:"Blocking,omitempty"`
+	// LocalAuth protects the web interface and its API with an access token
+	// (see localauth.go); a relay can require it as well.
+	LocalAuth LocalAuthConfig `yaml:"LocalAuth,omitempty"`
 }
 
 var configuration Configuration

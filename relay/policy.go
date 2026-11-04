@@ -65,6 +65,9 @@ type PolicyConfig struct {
 	Allow []string `json:"allow" yaml:"allow"`
 	// RefreshHours is how often lists are downloaded again (default 24).
 	RefreshHours int `json:"refreshHours,omitempty" yaml:"refresh_hours,omitempty"`
+	// RequireLocalAuth makes every proxy protect its web interface and API with
+	// an access token; the user cannot switch it off.
+	RequireLocalAuth bool `json:"requireLocalAuth,omitempty" yaml:"require_local_auth,omitempty"`
 }
 
 // PolicyPush is what a proxy is told.
@@ -73,6 +76,8 @@ type PolicyPush struct {
 	Rules []PolicyRule `json:"rules,omitempty"`
 	Lists []PolicyList `json:"lists,omitempty"`
 	Allow []string     `json:"allow,omitempty"`
+	// RequireLocalAuth: the proxy must protect its interface with a token.
+	RequireLocalAuth bool `json:"requireLocalAuth,omitempty"`
 }
 
 const (
@@ -472,7 +477,7 @@ func (p *Policy) Push() *PolicyPush {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	out := &PolicyPush{Rev: p.rev, Allow: append([]string{}, p.cfg.Allow...)}
+	out := &PolicyPush{Rev: p.rev, Allow: append([]string{}, p.cfg.Allow...), RequireLocalAuth: p.cfg.RequireLocalAuth}
 	for _, r := range p.cfg.Rules {
 		if !r.Disabled {
 			out.Rules = append(out.Rules, r)
@@ -483,7 +488,7 @@ func (p *Policy) Push() *PolicyPush {
 			out.Lists = append(out.Lists, l)
 		}
 	}
-	if len(out.Rules) == 0 && len(out.Lists) == 0 {
+	if len(out.Rules) == 0 && len(out.Lists) == 0 && !out.RequireLocalAuth {
 		return nil
 	}
 	return out

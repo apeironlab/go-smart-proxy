@@ -194,6 +194,8 @@ export class ApiError extends Error {
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init)
   if (!res.ok) {
+    // The interface is protected by an access token: ask for it.
+    if (res.status === 401 && !path.startsWith('/api/auth/')) window.dispatchEvent(new Event('gsp-auth-required'))
     let msg = `${res.status} ${res.statusText}`
     let payload: unknown = undefined
     try {
@@ -276,7 +278,22 @@ export interface SecurityInfo {
   keychain: boolean
 }
 
+export interface AuthInfo {
+  required: boolean
+  imposed: boolean
+  signedIn: boolean
+  tokenFile?: string
+}
+
 export const api = {
+  authInfo: () => req<AuthInfo>('/api/auth/info'),
+  login: (token: string) => post('/api/auth/login', { token }),
+  logout: () => post('/api/auth/logout', {}),
+  setAuthEnabled: (enabled: boolean) => req('/api/auth/config', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }),
+  }),
+  rotateToken: () => post('/api/auth/rotate', {}),
+  authToken: () => req<{ token: string }>('/api/auth/token'),
   security: () => req<SecurityInfo>('/api/security'),
   changePassword: (oldPassword: string, newPassword: string) => post('/api/security/password', { old: oldPassword, new: newPassword }),
   createRecoveryKey: (password: string) => post<{ key: string }>('/api/security/recovery', { password }),

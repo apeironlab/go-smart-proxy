@@ -631,5 +631,20 @@
   "Your recovery key": "La tua chiave di recupero",
   "This is the only time it is shown. Whoever has it can open your configuration: keep it private.": "È l'unica volta che viene mostrata. Chi la possiede può aprire la tua configurazione: tienila riservata.",
   "I have saved it": "L'ho salvata",
-  "Security": "Sicurezza"
+  "Security": "Sicurezza",
+  "Proxy security": "Sicurezza dei proxy",
+  "Applies to every proxy connected to this relay; users cannot switch it off.": "Vale per ogni proxy collegato a questo relay; gli utenti non possono disattivarla.",
+  "Require an access token for the proxy's local interface": "Richiedi un token di accesso per l'interfaccia locale del proxy",
+  "The proxy then asks for a token (kept in a file only its user can read) before it shows its interface or answers its API.": "Il proxy chiede allora un token (in un file leggibile solo dal suo utente) prima di mostrare l'interfaccia o rispondere alla sua API.",
+  "Access token for this interface": "Token di accesso per questa interfaccia",
+  "Anything that can reach 127.0.0.1 can use this interface and its API. With the token on, they need the token, kept in a file only you can read. Useful on a computer shared with others.": "Tutto ciò che raggiunge 127.0.0.1 può usare questa interfaccia e la sua API. Con il token attivo serve il token, in un file che solo tu puoi leggere. Utile su un computer condiviso con altri.",
+  "Required by your organization": "Richiesto dalla tua organizzazione",
+  "Require the access token": "Richiedi il token di accesso",
+  "The token is in": "Il token è in",
+  "Make a new token? Every other browser window will have to sign in again.": "Creare un nuovo token? Ogni altra finestra del browser dovrà accedere di nuovo.",
+  "Make a new token": "Crea un nuovo token",
+  "This interface needs the access token.": "Questa interfaccia richiede il token di accesso.",
+  "Your organization requires the access token.": "La tua organizzazione richiede il token di accesso.",
+  "Access token": "Token di accesso",
+  "Open the interface from the tray icon (it signs you in), or copy the token from the file": "Apri l'interfaccia dall'icona nella barra (ti fa accedere), oppure copia il token dal file"
 }

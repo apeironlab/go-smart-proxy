@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Alert, Badge, Button, Code, CopyButton, Group, Modal, PasswordInput, Stack, Text } from '@mantine/core'
+import { Alert, Badge, Button, Code, CopyButton, Group, Modal, PasswordInput, Stack, Switch, Text } from '@mantine/core'
 import { IconCheck, IconCopy, IconDownload, IconKey, IconLock } from '@tabler/icons-react'
 import { api } from '../api'
-import type { SecurityInfo } from '../api'
+import type { AuthInfo, SecurityInfo } from '../api'
 import { Section } from './ui'
 import { usePolled } from '../usePolled'
 
@@ -13,6 +13,7 @@ const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 export function SecuritySection() {
   const { t } = useTranslation()
   const info = usePolled<SecurityInfo>(api.security, 3000)
+  const auth = usePolled<AuthInfo>(api.authInfo, 3000)
   const [oldPw, setOldPw] = useState('')
   const [newPw, setNewPw] = useState('')
   const [again, setAgain] = useState('')
@@ -87,6 +88,38 @@ export function SecuritySection() {
           {t('You unlocked the configuration with the recovery key. Choose a new master password now.')}
         </Alert>
       )}
+
+      <Section
+        title={t('Access token for this interface')}
+        description={t('Anything that can reach 127.0.0.1 can use this interface and its API. With the token on, they need the token, kept in a file only you can read. Useful on a computer shared with others.')}
+        right={auth?.required ? <Badge color="green" variant="light">{t('on')}</Badge> : <Badge color="gray" variant="light">{t('off')}</Badge>}
+      >
+        <Stack gap="sm" maw={460}>
+          <Switch
+            checked={!!auth?.required} disabled={!!auth?.imposed || !auth}
+            label={auth?.imposed ? t('Required by your organization') : t('Require the access token')}
+            onChange={(e) => {
+              const on = e.currentTarget.checked
+              setError(null)
+              api.setAuthEnabled(on).then(() => api.authInfo()).catch((x: unknown) => setError(errText(x)))
+            }}
+          />
+          {auth?.required && (
+            <>
+              <Text size="sm" c="dimmed">{t('The token is in')} <Code>{auth.tokenFile}</Code></Text>
+              <Group>
+                <Button
+                  variant="default"
+                  onClick={() => {
+                    if (!window.confirm(t('Make a new token? Every other browser window will have to sign in again.'))) return
+                    api.rotateToken().catch((x: unknown) => setError(errText(x)))
+                  }}
+                >{t('Make a new token')}</Button>
+              </Group>
+            </>
+          )}
+        </Stack>
+      </Section>
 
       <Section
         title={t('Master password')}
