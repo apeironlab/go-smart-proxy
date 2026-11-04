@@ -163,6 +163,16 @@ func (s *Store) Devices(email string) []string {
 	return keys(s.devices[email])
 }
 
+// ForgetDevice removes a device code from the list of an address (the device
+// shows again if it connects).
+func (s *Store) ForgetDevice(email, device string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if delFrom(s.devices, email, device) {
+		s.saveLocked()
+	}
+}
+
 // Snapshot returns the contacts, incoming and outgoing requests of email.
 func (s *Store) Snapshot(email string) (contacts, incoming, outgoing []string) {
 	s.mu.Lock()

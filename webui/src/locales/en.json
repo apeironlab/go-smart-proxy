@@ -597,5 +597,17 @@
   "Most blocked": "Most blocked",
   "Latest": "Latest",
   "By": "By",
-  "certificate until {{date}}, renewed automatically": "certificate until {{date}}, renewed automatically"
+  "certificate until {{date}}, renewed automatically": "certificate until {{date}}, renewed automatically",
+  "Invite people": "Invite people",
+  "Devices and certificates": "Devices and certificates",
+  "Devices of {{email}}": "Devices of {{email}}",
+  "No device known for this address.": "No device known for this address.",
+  "Revoke every certificate of the device {{device}} and disconnect it?": "Revoke every certificate of the device {{device}} and disconnect it?",
+  "Revoke device": "Revoke device",
+  "Connected without a certificate recorded here (issued before the interface was enabled).": "Connected without a certificate recorded here (issued before the interface was enabled).",
+  "Each address gets an e-mail with where to get the proxy and the address of this relay. They then sign in as usual.": "Each address gets an e-mail with where to get the proxy and the address of this relay. They then sign in as usual.",
+  "One per line, or separated by commas.": "One per line, or separated by commas.",
+  "{{count}} invitations sent.": "{{count}} invitations sent.",
+  "Close": "Close",
+  "Send": "Send"
 }

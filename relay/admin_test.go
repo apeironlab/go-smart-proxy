@@ -922,3 +922,137 @@ func TestAppsAreNotAvailableWithoutACatalog(t *testing.T) {
 	}
 	b.send("PUT", "/admin/api/apps", map[string]any{"apps": []App{}}, nil, 404)
 }
+
+func enrollDevice(t *testing.T, f *adminFixture, user, pass, email, device string) string {
+	t.Helper()
+	csr, _ := testCSR(t, email)
+	body, _ := json.Marshal(map[string]string{"email": email, "csr": string(csr), "username": user, "password": pass, "device": device})
+	resp, err := http.Post(f.ts.URL+"/enroll-auth/local", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out struct {
+		CertPEM string `json:"certPem"`
+	}
+	json.NewDecoder(resp.Body).Decode(&out)
+	if resp.StatusCode != 200 {
+		t.Fatalf("enroll %s: %d", device, resp.StatusCode)
+	}
+	return out.CertPEM
+}
+
+func TestAdminListsAndRevokesDevices(t *testing.T) {
+	f := newAdminFixture(t, adminOpts{})
+	srv := NewServer(mustStore(t))
+	f.admin.SetServer(srv)
+	b := f.loggedIn(t)
+	b.send("POST", "/admin/api/local-users", map[string]any{"username": "bob", "password": "bobs long password", "email": "bob@example.com"}, nil, 200)
+	laptop := enrollDevice(t, f, "bob", "bobs long password", "bob@example.com", "laptop")
+	phone1 := enrollDevice(t, f, "bob", "bobs long password", "bob@example.com", "phone")
+	phone2 := enrollDevice(t, f, "bob", "bobs long password", "bob@example.com", "phone")
+	srv.Store.RememberDevice("bob@example.com", "old-pc")
+
+	var devs []AdminDevice
+	b.get("/admin/api/devices?email=Bob@Example.com", &devs, 200)
+	byName := map[string]AdminDevice{}
+	for _, d := range devs {
+		byName[d.Device] = d
+	}
+	if len(byName["laptop"].Certs) != 1 || len(byName["phone"].Certs) != 2 || len(byName["old-pc"].Certs) != 0 || len(devs) != 3 {
+		t.Fatalf("devices: %+v", devs)
+	}
+	b.get("/admin/api/devices?email=nope", nil, 400)
+
+	// revoking the phone leaves the laptop alone
+	rev := NewRevocations(f.rev)
+	b.send("POST", "/admin/api/revoke-device", map[string]any{"email": "bob@example.com", "device": "phone", "forget": false}, nil, 200)
+	if !rev.Revoked(parseCert(t, phone1)) || !rev.Revoked(parseCert(t, phone2)) || rev.Revoked(parseCert(t, laptop)) {
+		t.Fatal("exactly the phone's certificates must be revoked")
+	}
+	b.get("/admin/api/devices?email=bob@example.com", &devs, 200)
+	for _, d := range devs {
+		for _, c := range d.Certs {
+			if (d.Device == "phone") != c.Revoked {
+				t.Fatalf("revoked flags: %+v", d)
+			}
+		}
+	}
+	b.send("POST", "/admin/api/revoke-device", map[string]any{"email": "bob@example.com", "device": "phone"}, nil, 404) // nothing active left
+	b.send("POST", "/admin/api/revoke-device", map[string]any{"email": "bob@example.com", "device": ""}, nil, 400)
+	// forgetting removes it from the user's list
+	b.send("POST", "/admin/api/revoke-device", map[string]any{"email": "bob@example.com", "device": "laptop", "forget": true}, nil, 200)
+	srv.Store.RememberDevice("bob@example.com", "laptop")
+	srv.Store.ForgetDevice("bob@example.com", "old-pc")
+	if got := srv.Store.Devices("bob@example.com"); len(got) != 1 || got[0] != "laptop" {
+		t.Fatalf("store devices: %v", got)
+	}
+	// the user's self-service page no longer offers revoked certificates
+	if n := len(f.es.activeCerts("bob@example.com")); n != 0 {
+		t.Fatalf("active certificates after revoking every device: %d", n)
+	}
+	var ev []Event
+	b.get("/admin/api/events?kind=admin.revoke.device", &ev, 200)
+	if len(ev) != 2 {
+		t.Fatalf("events: %+v", ev)
+	}
+}
+
+func TestAdminSendsInvitations(t *testing.T) {
+	box := &mailbox{}
+	f := newAdminFixture(t, adminOpts{mutate: func(c *EnrollConfig) {
+		c.SendMail = box.send
+		c.DownloadURL = "https://example.com/download"
+	}})
+	b := f.loggedIn(t)
+	var out struct {
+		Sent    int `json:"sent"`
+		Results []struct {
+			Email string
+			OK    bool
+			Error string
+		}
+	}
+	b.send("POST", "/admin/api/invite", map[string]any{"emails": []string{"new@example.com", "NEW@example.com", "outside@other.org", "not an address", "second@example.com"}}, &out, 200)
+	if out.Sent != 2 || len(out.Results) != 4 {
+		t.Fatalf("results: %+v", out)
+	}
+	msgs := box.wait(t, 2)
+	to := map[string]string{}
+	for _, m := range msgs {
+		to[m.to] = m.body
+	}
+	if !strings.Contains(to["new@example.com"], "https://example.com/download") || !strings.Contains(to["new@example.com"], f.ts.URL) {
+		t.Fatalf("invitation: %s", to["new@example.com"])
+	}
+	for _, r := range out.Results {
+		switch r.Email {
+		case "outside@other.org":
+			if r.OK || !strings.Contains(r.Error, "domain") {
+				t.Fatalf("outside domain: %+v", r)
+			}
+		case "not an address":
+			if r.OK {
+				t.Fatal("invalid address invited")
+			}
+		}
+	}
+	b.send("POST", "/admin/api/invite", map[string]any{"emails": []string{}}, nil, 400)
+	many := make([]string, maxInvites+1)
+	for i := range many {
+		many[i] = "u" + strconv.Itoa(i) + "@example.com"
+	}
+	b.send("POST", "/admin/api/invite", map[string]any{"emails": many}, nil, 400)
+	// the same person is not invited over and over
+	for i := 0; i < 4; i++ {
+		b.send("POST", "/admin/api/invite", map[string]any{"emails": []string{"again@example.com"}}, &out, 200)
+	}
+	if out.Sent != 0 {
+		t.Fatalf("a fourth invitation to one person went out: %+v", out)
+	}
+	var ev []Event
+	b.get("/admin/api/events?kind=admin.invite", &ev, 200)
+	if len(ev) < 2 {
+		t.Fatalf("events: %+v", ev)
+	}
+}

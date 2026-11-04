@@ -234,6 +234,9 @@ func (a *Admin) attach(s *EnrollServer) {
 	a.mu.Lock()
 	a.enroll = s
 	a.mu.Unlock()
+	if s.cfg.Revoked == nil {
+		s.cfg.Revoked = a.cfg.Revoked // one list: what the interface edits is what users revoke into
+	}
 }
 
 // loginMethods lists the methods that can be used to sign in to the interface.
@@ -281,6 +284,9 @@ func (a *Admin) mount(m *http.ServeMux) {
 	m.HandleFunc("GET /admin/api/overview", a.protect(a.handleOverview))
 	m.HandleFunc("GET /admin/api/users", a.protect(a.handleUsers))
 	m.HandleFunc("GET /admin/api/certs", a.protect(a.handleCerts))
+	m.HandleFunc("GET /admin/api/devices", a.protect(a.handleDevices))
+	m.HandleFunc("POST /admin/api/revoke-device", a.protect(a.handleRevokeDevice))
+	m.HandleFunc("POST /admin/api/invite", a.protect(a.handleInvite))
 	m.HandleFunc("POST /admin/api/revoke", a.protect(a.handleRevoke))
 	m.HandleFunc("POST /admin/api/unrevoke", a.protect(a.handleUnrevoke))
 	m.HandleFunc("POST /admin/api/kick", a.protect(a.handleKick))

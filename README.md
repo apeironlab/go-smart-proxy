@@ -1432,6 +1432,12 @@ methods:
   and take precedence over the configuration file after a restart. The SMTP
   password is stored in the database (hence its 0600 mode) and is never sent
   back to the browser.
+- *Invitations and devices*: **Invite people** e-mails where to get the proxy and
+  the relay's address to a list of addresses (the allowed domains apply, at most
+  three invitations to one person in ten minutes). Each user's **Devices and
+  certificates** window groups their certificates by device, shows which are
+  online, from where and on what network, and revokes one device (every
+  certificate issued for it, disconnecting it) without touching the others.
 - *Audit log*: enrollment requests, certificates issued, refused sign-ins,
   administrator actions (sign-ins, revocations, user and rules changes) and
   device connections, with filter, search and paging. The newest 100 000 entries

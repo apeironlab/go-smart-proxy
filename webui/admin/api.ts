@@ -70,6 +70,20 @@ export interface CertRecord {
   revokedBy?: string
 }
 
+export interface AdminDevice {
+  device: string
+  online: boolean
+  addr?: string
+  since?: string
+  context?: { label?: string; vpn?: boolean }
+  certs: CertRecord[]
+}
+
+export interface InviteResult {
+  sent: number
+  results: { email: string; ok: boolean; error?: string }[]
+}
+
 export interface LocalUser {
   username: string
   email: string
@@ -233,6 +247,10 @@ export const adminApi = {
   revoke: (target: { email?: string; serial?: string }) =>
     req<{ ok: boolean; disconnected: number }>('POST', '/admin/api/revoke', target),
   unrevoke: (target: { email?: string; serial?: string }) => req<{ ok: boolean }>('POST', '/admin/api/unrevoke', target),
+  devices: (email: string) => req<AdminDevice[]>('GET', `/admin/api/devices${q({ email })}`),
+  revokeDevice: (email: string, device: string, forget = false) =>
+    req<{ ok: boolean; revoked: number; disconnected: number }>('POST', '/admin/api/revoke-device', { email, device, forget }),
+  invite: (emails: string[]) => req<InviteResult>('POST', '/admin/api/invite', { emails }),
   kick: (email: string) => req<{ ok: boolean; disconnected: number }>('POST', '/admin/api/kick', { email }),
 
   localUsers: () => req<{ enabled: boolean; users: LocalUser[] }>('GET', '/admin/api/local-users'),

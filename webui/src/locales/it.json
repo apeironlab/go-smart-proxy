@@ -597,5 +597,17 @@
   "Most blocked": "Più bloccati",
   "Latest": "Ultimi",
   "By": "Da",
-  "certificate until {{date}}, renewed automatically": "certificato valido fino al {{date}}, rinnovato in automatico"
+  "certificate until {{date}}, renewed automatically": "certificato valido fino al {{date}}, rinnovato in automatico",
+  "Invite people": "Invita persone",
+  "Devices and certificates": "Dispositivi e certificati",
+  "Devices of {{email}}": "Dispositivi di {{email}}",
+  "No device known for this address.": "Nessun dispositivo noto per questo indirizzo.",
+  "Revoke every certificate of the device {{device}} and disconnect it?": "Revocare tutti i certificati del dispositivo {{device}} e disconnetterlo?",
+  "Revoke device": "Revoca il dispositivo",
+  "Connected without a certificate recorded here (issued before the interface was enabled).": "Connesso senza un certificato registrato qui (emesso prima che l'interfaccia fosse attiva).",
+  "Each address gets an e-mail with where to get the proxy and the address of this relay. They then sign in as usual.": "Ogni indirizzo riceve un'e-mail con dove scaricare il proxy e l'indirizzo di questo relay. Poi accedono come al solito.",
+  "One per line, or separated by commas.": "Uno per riga, o separati da virgole.",
+  "{{count}} invitations sent.": "{{count}} inviti inviati.",
+  "Close": "Chiudi",
+  "Send": "Invia"
 }

@@ -1,14 +1,14 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  ActionIcon, Alert, Badge, Button, Group, Modal, PasswordInput, Stack, Table, Tabs, TagsInput, Text, TextInput, Tooltip,
+  ActionIcon, Alert, Badge, Button, Group, Modal, PasswordInput, Stack, Table, Tabs, TagsInput, Text, Textarea, TextInput, Tooltip,
 } from '@mantine/core'
 import {
-  IconBan, IconCertificate, IconCircleCheck, IconKey, IconPencil, IconPlus, IconTrash, IconUserCog, IconUsers,
+  IconBan, IconCertificate, IconMailPlus, IconCircleCheck, IconKey, IconPencil, IconPlus, IconTrash, IconUserCog, IconUsers,
 } from '@tabler/icons-react'
 import { Dot, EmptyState, PageHeader, Section } from '../../src/components/ui'
 import { adminApi } from '../api'
-import type { CertRecord, LocalUser, UserInfo } from '../api'
+import type { AdminDevice, CertRecord, InviteResult, LocalUser, UserInfo } from '../api'
 import { fmtDate } from '../format'
 import { message, usePolling } from '../hooks'
 
@@ -20,6 +20,7 @@ export default function UsersPage({ self }: { self: string }) {
   const [certsOf, setCertsOf] = useState<string | null>(null)
   const [editing, setEditing] = useState<LocalUser | 'new' | null>(null)
   const [filter, setFilter] = useState('')
+  const [inviting, setInviting] = useState(false)
 
   const act = async (fn: () => Promise<unknown>) => {
     try {
@@ -39,6 +40,7 @@ export default function UsersPage({ self }: { self: string }) {
       <PageHeader
         icon={IconUsers} title={t('Users and certificates')}
         description={t('Everybody who got a certificate from this relay. Revoking cuts live connections at once and refuses new ones.')}
+        actions={<Button leftSection={<IconMailPlus size={16} />} onClick={() => setInviting(true)}>{t('Invite people')}</Button>}
       />
       {(problem || users.error) && <Alert color="red" variant="light" mb="md">{problem ?? users.error}</Alert>}
       <Tabs defaultValue="people" keepMounted={false}>
@@ -76,8 +78,8 @@ export default function UsersPage({ self }: { self: string }) {
                         <Table.Td>{u.revoked ? <Badge color="red" variant="light">{t('revoked')}</Badge> : <Badge color="green" variant="light">{t('active')}</Badge>}</Table.Td>
                         <Table.Td>
                           <Group gap={4} justify="flex-end" wrap="nowrap">
-                            <Tooltip label={t('Certificates')}>
-                              <ActionIcon variant="subtle" aria-label={t('Certificates')} onClick={() => setCertsOf(u.email)}><IconCertificate size={16} /></ActionIcon>
+                            <Tooltip label={t('Devices and certificates')}>
+                              <ActionIcon variant="subtle" aria-label={t('Devices and certificates')} onClick={() => setCertsOf(u.email)}><IconCertificate size={16} /></ActionIcon>
                             </Tooltip>
                             {u.revoked ? (
                               <Tooltip label={t('Allow again')}>
@@ -161,7 +163,8 @@ export default function UsersPage({ self }: { self: string }) {
         </Tabs.Panel>
       </Tabs>
 
-      {certsOf && <CertsModal email={certsOf} onClose={() => { setCertsOf(null); users.reload() }} />}
+      {inviting && <InviteModal onClose={() => setInviting(false)} />}
+      {certsOf && <DevicesModal email={certsOf} onClose={() => { setCertsOf(null); users.reload() }} />}
       {editing && (
         <LocalUserModal
           user={editing === 'new' ? null : editing}
@@ -173,9 +176,9 @@ export default function UsersPage({ self }: { self: string }) {
   )
 }
 
-function CertsModal({ email, onClose }: { email: string; onClose: () => void }) {
+function DevicesModal({ email, onClose }: { email: string; onClose: () => void }) {
   const { t } = useTranslation()
-  const { data, error, reload } = usePolling(() => adminApi.certs(email), 0)
+  const { data, error, reload } = usePolling(() => adminApi.devices(email), 4000)
   const [problem, setProblem] = useState<string | null>(null)
   const act = async (fn: () => Promise<unknown>) => {
     try {
@@ -188,51 +191,109 @@ function CertsModal({ email, onClose }: { email: string; onClose: () => void }) 
   }
   const now = Date.now()
   return (
-    <Modal opened onClose={onClose} title={t('Certificates of {{email}}', { email })} size="xl">
+    <Modal opened onClose={onClose} title={t('Devices of {{email}}', { email })} size="xl">
       {(problem || error) && <Alert color="red" variant="light" mb="md">{problem ?? error}</Alert>}
-      {data && data.length === 0 && <Text size="sm" c="dimmed">{t('No certificate was issued by this relay (the database starts recording when the interface is enabled).')}</Text>}
-      <Table.ScrollContainer minWidth={620}>
-        <Table verticalSpacing="xs">
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>{t('Serial')}</Table.Th>
-              <Table.Th>{t('Device')}</Table.Th>
-              <Table.Th>{t('Method')}</Table.Th>
-              <Table.Th>{t('Issued')}</Table.Th>
-              <Table.Th>{t('Expires')}</Table.Th>
-              <Table.Th />
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {(data ?? []).map((c: CertRecord) => {
-              const expired = new Date(c.expires).getTime() < now
-              return (
-                <Table.Tr key={c.serial}>
-                  <Table.Td><Text size="xs" ff="monospace">{c.serial.slice(0, 16)}</Text></Table.Td>
-                  <Table.Td><Text size="sm">{c.device || '-'}</Text></Table.Td>
-                  <Table.Td><Text size="sm">{c.method || '-'}</Text></Table.Td>
-                  <Table.Td><Text size="xs">{fmtDate(c.issued)}</Text></Table.Td>
-                  <Table.Td>
-                    {c.revoked ? <Badge color="red" variant="light">{t('revoked')}</Badge>
-                      : expired ? <Badge color="gray" variant="light">{t('expired')}</Badge>
-                        : <Text size="xs">{fmtDate(c.expires)}</Text>}
-                  </Table.Td>
-                  <Table.Td>
-                    {c.revoked ? (
-                      <Button size="compact-xs" variant="light" color="teal" onClick={() => { void act(() => adminApi.unrevoke({ serial: c.serial })) }}>{t('Allow again')}</Button>
-                    ) : !expired && (
-                      <Button
-                        size="compact-xs" variant="light" color="red"
-                        onClick={() => { if (window.confirm(t('Revoke this certificate?'))) void act(() => adminApi.revoke({ serial: c.serial })) }}
-                      >{t('Revoke')}</Button>
-                    )}
-                  </Table.Td>
-                </Table.Tr>
-              )
-            })}
-          </Table.Tbody>
-        </Table>
-      </Table.ScrollContainer>
+      {data && data.length === 0 && <Text size="sm" c="dimmed">{t('No device known for this address.')}</Text>}
+      <Stack gap="lg">
+        {(data ?? []).map((d: AdminDevice) => {
+          const active = d.certs.filter((c) => !c.revoked && new Date(c.expires).getTime() > now)
+          return (
+            <div key={d.device}>
+              <Group justify="space-between" wrap="nowrap" mb={4}>
+                <Group gap={8} wrap="nowrap">
+                  <Dot color={d.online ? 'green' : 'gray'} />
+                  <Text fw={650}>{d.device}</Text>
+                  {d.online && <Text size="xs" c="dimmed">{d.addr}</Text>}
+                  {d.context?.vpn && <Badge variant="light" color="grape" size="sm">VPN</Badge>}
+                  {d.context?.label && <Badge variant="outline" color="grape" size="sm" tt="none">{d.context.label}</Badge>}
+                </Group>
+                {active.length > 0 && (
+                  <Button
+                    size="compact-xs" variant="light" color="red"
+                    onClick={() => { if (window.confirm(t('Revoke every certificate of the device {{device}} and disconnect it?', { device: d.device }))) void act(() => adminApi.revokeDevice(email, d.device)) }}
+                  >{t('Revoke device')}</Button>
+                )}
+              </Group>
+              {d.certs.length === 0 ? (
+                <Text size="xs" c="dimmed">{t('Connected without a certificate recorded here (issued before the interface was enabled).')}</Text>
+              ) : (
+                <Table.ScrollContainer minWidth={560}>
+                  <Table verticalSpacing="xs">
+                    <Table.Tbody>
+                      {d.certs.map((c: CertRecord) => {
+                        const expired = new Date(c.expires).getTime() < now
+                        return (
+                          <Table.Tr key={c.serial}>
+                            <Table.Td><Text size="xs" ff="monospace">{c.serial.slice(0, 16)}</Text></Table.Td>
+                            <Table.Td><Text size="sm">{c.method || '-'}</Text></Table.Td>
+                            <Table.Td><Text size="xs">{fmtDate(c.issued)}</Text></Table.Td>
+                            <Table.Td>
+                              {c.revoked ? <Badge color="red" variant="light">{t('revoked')}</Badge>
+                                : expired ? <Badge color="gray" variant="light">{t('expired')}</Badge>
+                                  : <Text size="xs">{fmtDate(c.expires)}</Text>}
+                            </Table.Td>
+                            <Table.Td>
+                              {c.revoked ? (
+                                <Button size="compact-xs" variant="light" color="teal" onClick={() => { void act(() => adminApi.unrevoke({ serial: c.serial })) }}>{t('Allow again')}</Button>
+                              ) : !expired && (
+                                <Button
+                                  size="compact-xs" variant="subtle" color="red"
+                                  onClick={() => { if (window.confirm(t('Revoke this certificate?'))) void act(() => adminApi.revoke({ serial: c.serial })) }}
+                                >{t('Revoke')}</Button>
+                              )}
+                            </Table.Td>
+                          </Table.Tr>
+                        )
+                      })}
+                    </Table.Tbody>
+                  </Table>
+                </Table.ScrollContainer>
+              )}
+            </div>
+          )
+        })}
+      </Stack>
+    </Modal>
+  )
+}
+
+function InviteModal({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation()
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [result, setResult] = useState<InviteResult | null>(null)
+  const send = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      setResult(await adminApi.invite(text.split(/[\s,;]+/).filter(Boolean)))
+    } catch (e) {
+      setError(message(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Modal opened onClose={onClose} title={t('Invite people')}>
+      <Stack gap="sm">
+        <Text size="sm" c="dimmed">{t('Each address gets an e-mail with where to get the proxy and the address of this relay. They then sign in as usual.')}</Text>
+        {error && <Alert color="red" variant="light">{error}</Alert>}
+        <Textarea
+          label={t('E-mail addresses')} description={t('One per line, or separated by commas.')} minRows={4} autosize
+          value={text} onChange={(e) => setText(e.currentTarget.value)} disabled={!!result}
+        />
+        {result && (
+          <Stack gap={4}>
+            <Alert color={result.sent ? 'green' : 'yellow'} variant="light">{t('{{count}} invitations sent.', { count: result.sent })}</Alert>
+            {result.results.filter((r) => !r.ok).map((r) => <Text key={r.email} size="sm" c="red">{r.email}: {r.error}</Text>)}
+          </Stack>
+        )}
+        <Group justify="flex-end">
+          <Button variant="default" onClick={onClose}>{result ? t('Close') : t('Cancel')}</Button>
+          {!result && <Button loading={busy} disabled={!text.trim()} onClick={() => { void send() }}>{t('Send')}</Button>}
+        </Group>
+      </Stack>
     </Modal>
   )
 }

@@ -66,7 +66,7 @@ func (s *EnrollServer) activeCerts(email string) []IssuedCert {
 	now := time.Now()
 	var out []IssuedCert
 	for _, c := range s.certs {
-		if c.Email == email && !c.Revoked && now.Before(c.Expires) {
+		if c.Email == email && !c.Revoked && now.Before(c.Expires) && !s.cfg.Revoked.IsRevoked(c.Email, c.Serial) {
 			out = append(out, *c)
 		}
 	}
