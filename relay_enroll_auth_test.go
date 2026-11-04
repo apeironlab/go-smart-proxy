@@ -253,19 +253,20 @@ func TestEnrollWithPasswordConfiguresTheRelay(t *testing.T) {
 // stubBrowserRelay is an enrollment endpoint whose browser sign-in finishes
 // when the test says so, issuing a real certificate.
 type stubBrowserRelay struct {
-	ts      *httptest.Server
-	caDir   string
-	mu      sync.Mutex
-	csr     string
-	email   string
-	done    bool
-	authURL string
-	polls   int
+	ts       *httptest.Server
+	caDir    string
+	mu       sync.Mutex
+	csr      string
+	email    string
+	done     bool
+	authURL  string
+	userCode string
+	polls    int
 }
 
 func newStubBrowserRelay(t *testing.T) *stubBrowserRelay {
 	t.Helper()
-	s := &stubBrowserRelay{caDir: filepath.Join(t.TempDir(), "ca"), authURL: "https://idp.example.com/login?x=1"}
+	s := &stubBrowserRelay{caDir: filepath.Join(t.TempDir(), "ca"), authURL: "https://idp.example.com/login?x=1", userCode: "K7QM-2XPD"}
 	if err := relay.InitCA(s.caDir); err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +278,7 @@ func newStubBrowserRelay(t *testing.T) *stubBrowserRelay {
 		s.csr, s.email = in.CSR, in.Email
 		s.mu.Unlock()
 		json.NewEncoder(w).Encode(map[string]any{
-			"id": "enr1", "pollToken": "tok1", "authUrl": s.authURL, "relayAddress": "relay.example.com:8443",
+			"id": "enr1", "pollToken": "tok1", "authUrl": s.authURL, "userCode": s.userCode, "relayAddress": "relay.example.com:8443",
 			"expiresAt": time.Now().Add(10 * time.Minute),
 		})
 	})
@@ -315,7 +316,7 @@ func TestEnrollInTheBrowser(t *testing.T) {
 		t.Fatalf("start: %q %v", authURL, err)
 	}
 	info := enrollPendingInfo()
-	if info["pending"] != true || info["phase"] != "browser" || info["authUrl"] != s.authURL || info["name"] != "office" {
+	if info["pending"] != true || info["phase"] != "browser" || info["authUrl"] != s.authURL || info["name"] != "office" || info["userCode"] != "K7QM-2XPD" {
 		t.Fatalf("pending info: %v", info)
 	}
 
@@ -490,3 +491,17 @@ func errorsAs(err error, target **untrustedCertificateError) bool {
 
 func logWriter() io.Writer     { return log.Writer() }
 func setLogWriter(w io.Writer) { log.SetOutput(w) }
+
+func TestBrowserEnrollmentNeedsAWellFormedDeviceCode(t *testing.T) {
+	for _, bad := range []string{"", "k7qm-2xpd", "K7QM2XPD", "<script>", "K7QM-2XPD-EXTRA", "AAAA-AAA1"} {
+		enrollEnv(t)
+		s := newStubBrowserRelay(t)
+		s.userCode = bad
+		if _, err := relayEnrollStart("", s.ts.URL, "alice@example.com", certPEM(s.ts), "", "idp"); err == nil {
+			t.Errorf("the device code %q must be refused: it is shown on screen", bad)
+		}
+		if enrollPendingInfo()["pending"] == true {
+			t.Errorf("nothing may stay pending for %q", bad)
+		}
+	}
+}

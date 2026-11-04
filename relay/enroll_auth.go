@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"html"
@@ -266,11 +267,14 @@ func (s *EnrollServer) handleBrowserStart(w http.ResponseWriter, r *http.Request
 		return
 	}
 	pollToken := randomToken(32)
+	// The code that ties the sign-in to the device that asked for it: it is
+	// shown only in that device's proxy, and whoever signs in must type it.
+	userCode := randomCode()
 	now := time.Now()
 	it := &Enrollment{
 		ID: randomToken(12), Email: pr.email, Device: pr.device, CSRPEM: pr.csr, Method: m.ID,
-		PollHash: hashToken(pollToken), Created: now, Expires: now.Add(enrollTTL),
-		State: randomToken(24),
+		PollHash: hashToken(pollToken), CodeHash: hashToken(userCode), Created: now, Expires: now.Add(enrollTTL),
+		State: randomToken(24), ClientAddr: s.clientIP(r),
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), authTimeout+5*time.Second)
 	defer cancel()
@@ -289,6 +293,7 @@ func (s *EnrollServer) handleBrowserStart(w http.ResponseWriter, r *http.Request
 		"id":           it.ID,
 		"pollToken":    pollToken,
 		"authUrl":      authURL,
+		"userCode":     userCode[:4] + "-" + userCode[4:],
 		"expiresAt":    it.Expires,
 		"relayAddress": s.cfg.PublicRelay,
 		"relayCAPEM":   s.cfg.RelayCAPEM,
@@ -341,6 +346,69 @@ func (s *EnrollServer) finishBrowser(w http.ResponseWriter, r *http.Request, m *
 		resultPage(w, false)
 		return
 	}
+	// The provider has vouched for the user, but not that this user is the one
+	// who started this enrollment: a sign-in link can be sent to somebody else.
+	// The certificate is issued only when the code shown in the proxy that
+	// started it is typed here (as in the OAuth device flow).
+	s.mu.Lock()
+	it.Ticket = randomToken(24)
+	s.byTicket[it.Ticket] = it.ID
+	ticket := it.Ticket
+	s.mu.Unlock()
+	s.log.Printf("enrollment: %s: %s signed in, waiting for the device code", m.ID, it.Email)
+	confirmPage(w, http.StatusOK, ticket, it, enrollMaxTries, "")
+}
+
+// handleVerify receives the code typed in the confirmation page and, if it is
+// the one shown in the proxy that started the enrollment, issues the
+// certificate.
+func (s *EnrollServer) handleVerify(w http.ResponseWriter, r *http.Request) {
+	m, ok := s.method(w, r)
+	if !ok {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		resultPage(w, false)
+		return
+	}
+	ticket := r.PostForm.Get("ticket")
+	code := normalizeCode(r.PostForm.Get("code"))
+	if !s.allow("verify:"+s.clientIP(r), 30) {
+		writeError(w, http.StatusTooManyRequests, "troppi tentativi, riprova tra qualche minuto")
+		return
+	}
+
+	s.mu.Lock()
+	id, known := s.byTicket[ticket]
+	it := s.items[id]
+	if ticket == "" || !known || it == nil || it.Method != m.ID || it.Approved || time.Now().After(it.Expires) || it.Ticket != ticket {
+		s.mu.Unlock()
+		s.log.Printf("enrollment: %s: confirmation with an unknown or expired ticket", m.ID)
+		resultPage(w, false)
+		return
+	}
+	if !subtleEqual(hashToken(code), it.CodeHash) {
+		it.Attempts++
+		left := enrollMaxTries - it.Attempts
+		if left <= 0 { // too many wrong codes: this sign-in is over
+			delete(s.byTicket, ticket)
+			it.Ticket = ""
+			it.Expires = time.Now()
+		}
+		email := it.Email
+		s.mu.Unlock()
+		s.log.Printf("enrollment: %s: wrong device code for %s from %s (%d left)", m.ID, email, s.clientIP(r), left)
+		if left <= 0 {
+			resultPage(w, false)
+			return
+		}
+		confirmPage(w, http.StatusForbidden, ticket, it, left, "Codice non corretto · Wrong code")
+		return
+	}
+	delete(s.byTicket, ticket) // good for one use
+	it.Ticket = ""
+	s.mu.Unlock()
+
 	cert, err := s.issue(it)
 	if err != nil {
 		s.log.Printf("enrollment signing for %s failed: %v", it.Email, err)
@@ -378,6 +446,42 @@ func (s *EnrollServer) handleSAMLMetadata(w http.ResponseWriter, r *http.Request
 	w.Write(b)
 }
 
+// confirmPage asks for the code shown in the proxy. It says who asked and
+// from where, so that somebody who was only sent a link can see it is not
+// theirs. left is how many wrong codes are still allowed.
+func confirmPage(w http.ResponseWriter, status int, ticket string, it *Enrollment, left int, problem string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'")
+	w.WriteHeader(status)
+	warn := ""
+	if problem != "" {
+		warn = fmt.Sprintf(`<p style="color:#b00020"><b>%s</b> (%d)</p>`, html.EscapeString(problem), left)
+	}
+	device := it.Device
+	if device == "" {
+		device = "-"
+	}
+	fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Conferma il dispositivo · Confirm the device</title>
+<body style="font-family:system-ui,sans-serif;max-width:34rem;margin:12vh auto;padding:0 1.5rem;line-height:1.5">
+<h1 style="font-size:1.4rem">Conferma il dispositivo · Confirm the device</h1>
+<p>Hai effettuato l'accesso come <b>%s</b>. Un dispositivo (<b>%s</b>, richiesta da <b>%s</b>) chiede un certificato per questo indirizzo.<br>
+You signed in as <b>%s</b>. A device (<b>%s</b>, asked from <b>%s</b>) is requesting a certificate for this address.</p>
+<p><b>Sei stato tu?</b> Digita il codice mostrato nel proxy sul tuo computer. Se non riconosci questa richiesta, chiudi la pagina: non verrà emesso nulla.<br>
+<b>Was it you?</b> Type the code shown in the proxy on your computer. If you do not recognise this request, close this page: nothing will be issued.</p>
+%s
+<form method="post" action="verify" autocomplete="off">
+<input type="hidden" name="ticket" value="%s">
+<p><input name="code" placeholder="ABCD-EFGH" autofocus required maxlength="12" autocomplete="off" style="font-size:1.4rem;letter-spacing:.15em;text-transform:uppercase;width:12rem;padding:.4rem"> <button style="font-size:1.1rem;padding:.4rem 1rem">OK</button></p>
+</form></body>`,
+		html.EscapeString(it.Email), html.EscapeString(device), html.EscapeString(it.ClientAddr),
+		html.EscapeString(it.Email), html.EscapeString(device), html.EscapeString(it.ClientAddr),
+		warn, html.EscapeString(ticket))
+}
+
 // resultPage is what the user sees in the browser after signing in. It says
 // nothing about why a sign-in failed: the details are in the relay's log.
 func resultPage(w http.ResponseWriter, ok bool) {
@@ -396,3 +500,6 @@ func resultPage(w http.ResponseWriter, ok bool) {
 <body style="font-family:system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1.5rem;line-height:1.5"><h1 style="font-size:1.4rem">%s</h1><p>%s</p></body>`,
 		html.EscapeString(title), html.EscapeString(title), text)
 }
+
+// subtleEqual compares two hashes in constant time.
+func subtleEqual(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1 }

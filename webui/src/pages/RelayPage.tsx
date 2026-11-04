@@ -48,6 +48,7 @@ export default function RelayPage() {
   const [enrollPass, setEnrollPass] = useState('')
   const [enrollFp, setEnrollFp] = useState('')
   const [authUrl, setAuthUrl] = useState('')
+  const [userCode, setUserCode] = useState('')
   const browserWaiting = useRef(false)
   const [showEnroll, setShowEnroll] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -72,6 +73,7 @@ export default function RelayPage() {
         if (s.phase === 'browser') {
           browserWaiting.current = true
           setAuthUrl(s.authUrl ?? '')
+          setUserCode(s.userCode ?? '')
           setEnrollPhase('browser')
         } else {
           setEnrollPhase('code')
@@ -178,8 +180,9 @@ export default function RelayPage() {
     setBusy(true)
     try {
       setError(null)
-      const { authUrl: url } = await api.relayEnrollStart(enrollRequest(m.id))
+      const { authUrl: url, userCode: code } = await api.relayEnrollStart(enrollRequest(m.id))
       setAuthUrl(url)
+      setUserCode(code)
       browserWaiting.current = true
       setEnrollPhase('browser')
       // The page of the identity provider opens in a new tab; the link stays
@@ -387,8 +390,13 @@ export default function RelayPage() {
         ) : enrollPhase === 'browser' ? (
           <Section
             title={t('Finish signing in in your browser')}
-            description={t('A new tab opened with the sign-in page of your organization. When you are done, come back here: this page continues by itself.')}
+            description={t('A new tab opened with the sign-in page of your organization. After you sign in, that page asks for the code below to confirm that this device is the one asking. Then come back here: this page continues by itself.')}
           >
+            <Card withBorder padding="md" radius="md" maw={420} mb="md">
+              <Text size="xs" c="dimmed" tt="uppercase" fw={650} style={{ letterSpacing: '.05em' }}>{t('Confirmation code')}</Text>
+              <Text ff="monospace" fw={700} fz={34} style={{ letterSpacing: '.12em' }} data-testid="user-code">{userCode}</Text>
+              <Text size="xs" c="dimmed">{t('Type it on the page that opens. If you did not start this enrollment on this computer, do not type it anywhere.')}</Text>
+            </Card>
             <Group gap="md" wrap="nowrap" align="center">
               <Loader size="sm" />
               <Text size="sm">{t('Waiting for the sign-in...')}</Text>

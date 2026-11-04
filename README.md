@@ -1052,11 +1052,35 @@ A client that does not know about methods and enrolls on a relay that requires
 one gets the `401` and its message; it needs updating. A relay without the new
 configuration keeps working with any client.
 
+**Browser sign-in (OpenID Connect, SAML): where the browser returns, and why a
+code.** The proxy runs on `localhost`, but the identity provider never talks to
+it: the relay is the application the provider knows. The relay's own address
+(`<public-url>/enroll-auth/<id>/callback` or `/acs`) is the redirect, and the
+relay finishes the OpenID Connect or SAML exchange itself. The proxy only holds
+two things the relay gave it when it started the enrollment: a **poll token**
+(a secret only this proxy has, used to collect the result) and a short
+**confirmation code**. The certificate is bound to the key the proxy generated
+and sent at the start, so the poll token alone gives nothing but that
+certificate.
+
+The code closes a hole that signing in alone leaves open: a sign-in link can be
+sent to somebody else. Without it, an attacker could start an enrollment for
+`victim@example.com` with the attacker's own key and send the victim the link;
+when the victim signs in, the relay would issue the attacker a certificate with
+the victim's identity. So after the provider vouches for the user, the relay
+shows a page saying who is asking (device, address, e-mail) and asks for the
+code displayed **in the proxy that started the enrollment**, as the OAuth device
+flow does. Only then is the certificate issued. The code is single-use, five
+wrong attempts end the sign-in, and the page cannot be framed or cached. A user
+who did not start the enrollment sees a code request they cannot answer, and
+nothing is issued.
+
 **In the proxy.** Enrollment first asks the relay how you can sign in and shows
 the choices. With a password or LDAP method the proxy shows a form (the password
 goes only to the relay, over the verified or pinned connection, and is not
-stored); with OpenID Connect or SAML a new tab opens the provider's page and the
-proxy continues by itself when you are done. Relays that predate this feature
+stored); with OpenID Connect or SAML a new tab opens the provider's page, the proxy
+shows the confirmation code to type there after you sign in, and continues by
+itself when you are done. Relays that predate this feature
 simply offer the e-mail code.
 
 ### Kubernetes deployment

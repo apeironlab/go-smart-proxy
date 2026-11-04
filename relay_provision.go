@@ -31,6 +31,7 @@ type pendingEnrollment struct {
 	Name         string // the relay entry being created or renewed
 	Method       string // "code" (e-mail) or "browser" (sign-in on the provider's page)
 	AuthURL      string // browser sign-in: the page the user was sent to
+	UserCode     string // browser sign-in: the code to type on the relay's confirmation page
 	BaseURL      string
 	Email        string
 	Device       string
@@ -552,6 +553,9 @@ type enrollMethod struct {
 
 var enrollMethodIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,29}$`)
 
+// userCodeRe is the shape of the confirmation code, for instance "K7QM-2XPD".
+var userCodeRe = regexp.MustCompile(`^[A-Z2-9]{4}-[A-Z2-9]{4}$`)
+
 // cleanEnrollMethods keeps the well-formed entries of a list sent by a relay.
 // The list is shown to the user and its ids end up in addresses, so nothing is
 // taken on trust.
@@ -622,7 +626,8 @@ func relayEnrollStart(name, address, email, serverCAPEM, acceptFingerprint, meth
 	}
 	var res struct {
 		enrollResponse
-		AuthURL string `json:"authUrl"`
+		AuthURL  string `json:"authUrl"`
+		UserCode string `json:"userCode"`
 	}
 	endpoint := t.base.String() + "/enroll-auth/" + url.PathEscape(method) + "/start"
 	if err := postJSON(t.client, endpoint, "", t.body(nil), &res); err != nil {
@@ -634,11 +639,18 @@ func relayEnrollStart(name, address, email, serverCAPEM, acceptFingerprint, meth
 	if perr != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
 		return "", errors.New("il relay ha indicato un indirizzo di accesso non valido")
 	}
+	// The code is what ties the sign-in in the browser to this device: the relay
+	// asks for it after the identity provider has vouched for the user. It comes
+	// from the relay and is shown on screen, so only the expected shape is kept.
+	if !userCodeRe.MatchString(res.UserCode) {
+		return "", errors.New("il relay non ha indicato il codice di conferma del dispositivo")
+	}
 	p, err := t.pending(res.enrollResponse, "browser")
 	if err != nil {
 		return "", err
 	}
 	p.AuthURL = res.AuthURL
+	p.UserCode = res.UserCode
 	enrollMu.Lock()
 	trustPending = nil
 	enrollPending = p
@@ -849,6 +861,7 @@ func enrollPendingInfo() map[string]any {
 		"name":      enrollPending.Name,
 		"phase":     enrollPending.Method,
 		"authUrl":   enrollPending.AuthURL,
+		"userCode":  enrollPending.UserCode,
 		"email":     enrollPending.Email,
 		"address":   enrollPending.BaseURL,
 		"expiresAt": enrollPending.Expires,

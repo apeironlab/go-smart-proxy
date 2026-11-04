@@ -347,7 +347,6 @@
   "Relay name": "Relay name",
   "Remove relay": "Remove relay",
   "Remove the relay \"{{name}}\"? Its contacts and approvals on this computer are forgotten; nothing changes on the relay server.": "Remove the relay \"{{name}}\"? Its contacts and approvals on this computer are forgotten; nothing changes on the relay server.",
-  "A new tab opened with the sign-in page of your organization. When you are done, come back here: this page continues by itself.": "A new tab opened with the sign-in page of your organization. When you are done, come back here: this page continues by itself.",
   "Continue": "Continue",
   "E-mail code": "E-mail code",
   "Enter the enrollment endpoint address and your email. The relay then tells you how you can sign in (an e-mail code, your company login, single sign-on...). The certificate is created locally and signed by the relay.": "Enter the enrollment endpoint address and your email. The relay then tells you how you can sign in (an e-mail code, your company login, single sign-on...). The certificate is created locally and signed by the relay.",
@@ -362,5 +361,8 @@
   "User name": "User name",
   "User name and password, typed here": "User name and password, typed here",
   "Waiting for the sign-in...": "Waiting for the sign-in...",
-  "We send a code to {{email}}": "We send a code to {{email}}"
+  "We send a code to {{email}}": "We send a code to {{email}}",
+  "A new tab opened with the sign-in page of your organization. After you sign in, that page asks for the code below to confirm that this device is the one asking. Then come back here: this page continues by itself.": "A new tab opened with the sign-in page of your organization. After you sign in, that page asks for the code below to confirm that this device is the one asking. Then come back here: this page continues by itself.",
+  "Confirmation code": "Confirmation code",
+  "Type it on the page that opens. If you did not start this enrollment on this computer, do not type it anywhere.": "Type it on the page that opens. If you did not start this enrollment on this computer, do not type it anywhere."
 }

@@ -6,10 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"html"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -126,6 +129,60 @@ func newFakeIdP(t *testing.T) *fakeIdP {
 	return p
 }
 
+// page is what a browser gets back from the relay.
+type page struct {
+	status int
+	body   string
+	ticket string // the hidden field of the confirmation form, if any
+}
+
+var ticketField = regexp.MustCompile(`name="ticket" value="([^"]*)"`)
+
+func newPage(resp *http.Response) page {
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	pg := page{status: resp.StatusCode, body: string(b)}
+	if m := ticketField.FindStringSubmatch(pg.body); m != nil {
+		pg.ticket = html.UnescapeString(m[1])
+	}
+	return pg
+}
+
+func getPage(t *testing.T, u string) page {
+	t.Helper()
+	resp, err := http.Get(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newPage(resp)
+}
+
+// verify types the code shown in the proxy into the relay's confirmation page.
+func verify(t *testing.T, ts *httptest.Server, method, ticket, code string) page {
+	t.Helper()
+	resp, err := http.PostForm(ts.URL+"/enroll-auth/"+method+"/verify", url.Values{"ticket": {ticket}, "code": {code}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newPage(resp)
+}
+
+type pollResult struct{ Status, CertPEM string }
+
+func pollStatus(t *testing.T, ts *httptest.Server, id, poll string) pollResult {
+	t.Helper()
+	req, _ := http.NewRequest("GET", ts.URL+"/enroll/"+id, nil)
+	req.Header.Set("Authorization", "Bearer "+poll)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var st pollResult
+	json.NewDecoder(resp.Body).Decode(&st)
+	return st
+}
+
 type browserResult struct {
 	status   int
 	approved bool
@@ -144,6 +201,7 @@ func browserSignIn(t *testing.T, ts *httptest.Server, method, email string) brow
 		ID        string `json:"id"`
 		PollToken string `json:"pollToken"`
 		AuthURL   string `json:"authUrl"`
+		UserCode  string `json:"userCode"`
 	}
 	postJSONTest(t, ts.URL+"/enroll-auth/"+method+"/start", "", map[string]string{"email": email, "csr": string(csr), "device": "laptop"}, &start, 200)
 	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -156,29 +214,20 @@ func browserSignIn(t *testing.T, ts *httptest.Server, method, email string) brow
 	if callback == "" {
 		t.Fatalf("the provider did not redirect back (status %d)", resp.StatusCode)
 	}
-	return finishCallback(t, ts, start.ID, start.PollToken, callback)
+	return finishCallback(t, ts, method, start.ID, start.PollToken, callback, start.UserCode)
 }
 
-func finishCallback(t *testing.T, ts *httptest.Server, id, poll, callback string) browserResult {
+// finishCallback is what the user's browser does after the provider sent it
+// back: open the callback and, if the relay asks which device this is, type the
+// code shown in the proxy. A refusal at the callback ends there.
+func finishCallback(t *testing.T, ts *httptest.Server, method, id, poll, callback, userCode string) browserResult {
 	t.Helper()
-	resp, err := http.Get(callback)
-	if err != nil {
-		t.Fatal(err)
+	pg := getPage(t, callback)
+	res := browserResult{status: pg.status, id: id, poll: poll, callback: callback}
+	if pg.status == http.StatusOK && pg.ticket != "" {
+		res.status = verify(t, ts, method, pg.ticket, userCode).status
 	}
-	resp.Body.Close()
-	res := browserResult{status: resp.StatusCode, id: id, poll: poll, callback: callback}
-	req, _ := http.NewRequest("GET", ts.URL+"/enroll/"+id, nil)
-	req.Header.Set("Authorization", "Bearer "+poll)
-	sresp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sresp.Body.Close()
-	var st struct {
-		Status  string `json:"status"`
-		CertPEM string `json:"certPem"`
-	}
-	json.NewDecoder(sresp.Body).Decode(&st)
+	st := pollStatus(t, ts, id, poll)
 	res.approved, res.cert = st.Status == "approved", st.CertPEM
 	return res
 }
@@ -217,7 +266,7 @@ func TestOIDCSignIn(t *testing.T) {
 	}
 
 	// the same return cannot be played twice
-	again := finishCallback(t, ts, res.id, res.poll, res.callback)
+	again := finishCallback(t, ts, "idp", res.id, res.poll, res.callback, "")
 	if again.status != http.StatusForbidden {
 		t.Fatalf("a replayed callback must be refused, got %d", again.status)
 	}
@@ -386,7 +435,7 @@ func TestOIDCCallbackProblems(t *testing.T) {
 		noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 		r, _ := noRedirect.Get(st.AuthURL)
 		r.Body.Close()
-		return finishCallback(t, ts2, st.ID, st.PollToken, r.Header.Get("Location"))
+		return finishCallback(t, ts2, "idp", st.ID, st.PollToken, r.Header.Get("Location"), "")
 	}()
 	if res.status != http.StatusForbidden || res.approved {
 		t.Fatalf("an expired sign-in must be refused: %d %v", res.status, res.approved)
@@ -488,5 +537,179 @@ func TestOIDCConfidentialClientStillWorksAndOfflineAccessIsRefused(t *testing.T)
 	m := AuthMethod{ID: "x", Type: "oidc", OIDC: &OIDCConfig{Issuer: "https://idp.example.com", ClientID: "c", Scopes: []string{"openid", "email", "offline_access"}}}
 	if err := (&AuthConfig{Methods: []AuthMethod{m}}).Validate(); err == nil || !strings.Contains(err.Error(), "offline_access") {
 		t.Fatalf("offline_access must be refused: %v", err)
+	}
+}
+
+// A sign-in link can be sent to somebody else. An attacker starts an
+// enrollment for the victim's address with the attacker's own key, then
+// persuades the victim to open the link and sign in. Whoever signs in at the
+// identity provider must not, by that alone, hand the attacker a certificate.
+func TestSigningInForSomeoneElsesEnrollmentGivesThemNothing(t *testing.T) {
+	idp := newFakeIdP(t) // the user who signs in is alice@example.com
+	ts, _ := oidcServer(t, idp, nil)
+
+	// the attacker starts it, keeping the poll token and the key
+	csr, _ := testCSR(t, "alice@example.com")
+	var start struct {
+		ID        string `json:"id"`
+		PollToken string `json:"pollToken"`
+		AuthURL   string `json:"authUrl"`
+		UserCode  string `json:"userCode"`
+	}
+	postJSONTest(t, ts.URL+"/enroll-auth/idp/start", "", map[string]string{"email": "alice@example.com", "csr": string(csr)}, &start, 200)
+	if start.UserCode == "" {
+		t.Fatal("the starter must be given a code to show: it is what ties the sign-in to the device that asked")
+	}
+
+	// the victim follows the link and signs in at the provider
+	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := noRedirect.Get(start.AuthURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	page := getPage(t, resp.Header.Get("Location"))
+	if page.status != 200 || page.ticket == "" {
+		t.Fatalf("after the provider vouches for the user, the relay must still ask for the device's code (status %d)", page.status)
+	}
+
+	// the victim does not have the code: whatever they type, nothing is issued
+	for _, guess := range []string{"", "AAAA-AAAA", "ZZZZ-9999", "ABCD-EFGH"} {
+		if p := verify(t, ts, "idp", page.ticket, guess); p.status == 200 {
+			t.Fatalf("a wrong code (%q) must not approve", guess)
+		}
+	}
+	if st := pollStatus(t, ts, start.ID, start.PollToken); st.Status == "approved" || st.CertPEM != "" {
+		t.Fatalf("the attacker must get no certificate: %+v", st)
+	}
+}
+
+// startAndSignIn runs a sign-in up to the confirmation page.
+func startAndSignIn(t *testing.T, ts *httptest.Server) (start struct {
+	ID        string `json:"id"`
+	PollToken string `json:"pollToken"`
+	AuthURL   string `json:"authUrl"`
+	UserCode  string `json:"userCode"`
+}, pg page) {
+	t.Helper()
+	csr, _ := testCSR(t, "alice@example.com")
+	postJSONTest(t, ts.URL+"/enroll-auth/idp/start", "", map[string]string{"email": "alice@example.com", "csr": string(csr), "device": "laptop-1"}, &start, 200)
+	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := noRedirect.Get(start.AuthURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	pg = getPage(t, resp.Header.Get("Location"))
+	if pg.status != 200 || pg.ticket == "" {
+		t.Fatalf("expected the confirmation page, got %d", pg.status)
+	}
+	return start, pg
+}
+
+func TestDeviceCodeConfirmation(t *testing.T) {
+	idp := newFakeIdP(t)
+	ts, _ := oidcServer(t, idp, nil)
+
+	start, pg := startAndSignIn(t, ts)
+	// the page says who is asking, so someone who was only sent a link can tell
+	for _, want := range []string{"alice@example.com", "laptop-1", "127.0.0.1"} {
+		if !strings.Contains(pg.body, want) {
+			t.Errorf("the confirmation page must show %q", want)
+		}
+	}
+	// the code has the shape the proxy displays
+	if matched, _ := regexp.MatchString(`^[A-Z2-9]{4}-[A-Z2-9]{4}$`, start.UserCode); !matched {
+		t.Fatalf("user code %q", start.UserCode)
+	}
+	// still waiting: nothing issued before the code is typed
+	if st := pollStatus(t, ts, start.ID, start.PollToken); st.Status != "pending" || st.CertPEM != "" {
+		t.Fatalf("before the code: %+v", st)
+	}
+
+	// a wrong code says how many tries are left and keeps the form
+	wrong := verify(t, ts, "idp", pg.ticket, "AAAA-AAAA")
+	if wrong.status != http.StatusForbidden || wrong.ticket != pg.ticket || !strings.Contains(wrong.body, "(4)") {
+		t.Fatalf("a wrong code: %d, ticket kept=%v\n%.300s", wrong.status, wrong.ticket == pg.ticket, wrong.body)
+	}
+	// the code may be typed as the user likes: lower case, without the dash, with spaces
+	typed := " " + strings.ToLower(strings.ReplaceAll(start.UserCode, "-", "")) + " "
+	if ok := verify(t, ts, "idp", pg.ticket, typed); ok.status != 200 {
+		t.Fatalf("the right code, typed loosely: %d", ok.status)
+	}
+	st := pollStatus(t, ts, start.ID, start.PollToken)
+	if st.Status != "approved" || certEmail(t, st.CertPEM) != "alice@example.com" {
+		t.Fatalf("after the code: %+v", st)
+	}
+	// the ticket is good for one use
+	if again := verify(t, ts, "idp", pg.ticket, start.UserCode); again.status != http.StatusForbidden {
+		t.Fatalf("a ticket used twice: %d", again.status)
+	}
+}
+
+func TestTooManyWrongDeviceCodesEndTheSignIn(t *testing.T) {
+	idp := newFakeIdP(t)
+	ts, _ := oidcServer(t, idp, nil)
+	start, pg := startAndSignIn(t, ts)
+	for i := 0; i < enrollMaxTries; i++ {
+		verify(t, ts, "idp", pg.ticket, "AAAA-AAAA")
+	}
+	// even the right code is useless now: the sign-in is over
+	if p := verify(t, ts, "idp", pg.ticket, start.UserCode); p.status == 200 {
+		t.Fatal("after too many wrong codes the right one must not work")
+	}
+	if st := pollStatus(t, ts, start.ID, start.PollToken); st.CertPEM != "" {
+		t.Fatalf("no certificate after the lock-out: %+v", st)
+	}
+}
+
+func TestConfirmationNeedsATicketFromTheProvider(t *testing.T) {
+	idp := newFakeIdP(t)
+	ts, _ := oidcServer(t, idp, nil)
+	csr, _ := testCSR(t, "alice@example.com")
+	var start struct {
+		ID, PollToken string
+		UserCode      string `json:"userCode"`
+	}
+	postJSONTest(t, ts.URL+"/enroll-auth/idp/start", "", map[string]string{"email": "alice@example.com", "csr": string(csr)}, &start, 200)
+
+	// Knowing the code is not enough: whoever started the enrollment knows it,
+	// but a ticket exists only after the provider has vouched for the user.
+	for _, ticket := range []string{"", "guess", start.ID, start.PollToken} {
+		if p := verify(t, ts, "idp", ticket, start.UserCode); p.status == 200 {
+			t.Fatalf("ticket %q must not be accepted", ticket)
+		}
+	}
+	if st := pollStatus(t, ts, start.ID, start.PollToken); st.CertPEM != "" {
+		t.Fatalf("a certificate without signing in: %+v", st)
+	}
+	// a ticket of another method does not work on this one
+	_, pg := startAndSignIn(t, ts)
+	if p := verify(t, ts, "other", pg.ticket, "AAAA-AAAA"); p.status == 200 {
+		t.Fatal("a ticket is for its own method")
+	}
+}
+
+func TestConfirmationPageIsHardened(t *testing.T) {
+	idp := newFakeIdP(t)
+	ts, _ := oidcServer(t, idp, nil)
+	csr, _ := testCSR(t, "alice@example.com")
+	var start struct {
+		AuthURL string `json:"authUrl"`
+	}
+	postJSONTest(t, ts.URL+"/enroll-auth/idp/start", "", map[string]string{"email": "alice@example.com", "csr": string(csr)}, &start, 200)
+	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, _ := noRedirect.Get(start.AuthURL)
+	resp.Body.Close()
+	r, err := http.Get(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Body.Close()
+	h := r.Header
+	if h.Get("Cache-Control") != "no-store" || h.Get("Referrer-Policy") != "no-referrer" || h.Get("X-Frame-Options") != "DENY" ||
+		!strings.Contains(h.Get("Content-Security-Policy"), "frame-ancestors 'none'") ||
+		!strings.Contains(h.Get("Content-Security-Policy"), "form-action 'self'") || !strings.Contains(h.Get("Content-Security-Policy"), "default-src 'none'") {
+		t.Fatalf("headers: %v", h)
 	}
 }

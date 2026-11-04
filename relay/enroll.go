@@ -73,17 +73,21 @@ type Enrollment struct {
 	// sent by e-mail) or the id of an authentication method.
 	Method string `json:"method,omitempty"`
 	// Browser sign-in state: kept in memory only.
-	State         string    `json:"-"`
-	Nonce         string    `json:"-"`
-	Verifier      string    `json:"-"`
-	SAMLRequestID string    `json:"-"`
-	PollHash      string    `json:"pollHash"`
-	Created       time.Time `json:"created"`
-	Expires       time.Time `json:"expires"`
-	Attempts      int       `json:"attempts"`
-	Approved      bool      `json:"approved"`
-	CertPEM       string    `json:"certPem,omitempty"`
-	Known         bool      `json:"known"`
+	State         string `json:"-"`
+	Nonce         string `json:"-"`
+	Verifier      string `json:"-"`
+	SAMLRequestID string `json:"-"`
+	// Ticket ties the confirmation form shown after the provider vouched for the
+	// user to this enrollment; ClientAddr is who started it (shown to the user).
+	Ticket     string    `json:"-"`
+	ClientAddr string    `json:"-"`
+	PollHash   string    `json:"pollHash"`
+	Created    time.Time `json:"created"`
+	Expires    time.Time `json:"expires"`
+	Attempts   int       `json:"attempts"`
+	Approved   bool      `json:"approved"`
+	CertPEM    string    `json:"certPem,omitempty"`
+	Known      bool      `json:"known"`
 }
 
 type enrollFile struct {
@@ -106,6 +110,7 @@ type EnrollServer struct {
 	methods     map[string]*methodEntry // by id
 	methodOrder []string
 	byState     map[string]string // browser sign-in state -> enrollment id
+	byTicket    map[string]string // confirmation ticket -> enrollment id
 }
 
 func NewEnrollServer(cfg EnrollConfig) (*EnrollServer, error) {
@@ -116,8 +121,9 @@ func NewEnrollServer(cfg EnrollConfig) (*EnrollServer, error) {
 		users: map[string]bool{},
 		rate:  map[string][]time.Time{},
 
-		methods: map[string]*methodEntry{},
-		byState: map[string]string{},
+		methods:  map[string]*methodEntry{},
+		byState:  map[string]string{},
+		byTicket: map[string]string{},
 	}
 	if s.log == nil {
 		s.log = log.Default()
@@ -174,6 +180,7 @@ func (s *EnrollServer) Handler() http.Handler {
 	m.HandleFunc("POST /enroll-auth/{method}/start", s.handleBrowserStart)
 	m.HandleFunc("GET /enroll-auth/{method}/callback", s.handleCallback)
 	m.HandleFunc("POST /enroll-auth/{method}/acs", s.handleACS)
+	m.HandleFunc("POST /enroll-auth/{method}/verify", s.handleVerify)
 	m.HandleFunc("GET /enroll-auth/{method}/metadata", s.handleSAMLMetadata)
 	m.HandleFunc("GET /enroll/{id}", s.handleStatus)
 	m.HandleFunc("POST /enroll/{id}/confirm", s.handleConfirm)
@@ -232,6 +239,11 @@ func (s *EnrollServer) pruneLocked(now, cut time.Time) {
 	for st, id := range s.byState {
 		if _, ok := s.items[id]; !ok {
 			delete(s.byState, st)
+		}
+	}
+	for tk, id := range s.byTicket {
+		if _, ok := s.items[id]; !ok {
+			delete(s.byTicket, tk)
 		}
 	}
 	for k, times := range s.rate {

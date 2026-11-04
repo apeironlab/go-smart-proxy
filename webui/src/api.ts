@@ -166,6 +166,8 @@ export interface EnrollStatus {
   name?: string
   phase?: string // "code" or "browser"
   authUrl?: string
+  // The code to type on the relay's confirmation page after signing in.
+  userCode?: string
   email?: string
   address?: string
   expiresAt?: string
@@ -258,7 +260,7 @@ export const api = {
   // User name and password typed in the proxy (methods password and ldap).
   relayEnrollLogin: (b: EnrollRequest & { username: string; password: string }) => post('/api/relay/enroll/login', b),
   // Sign-in on the provider's page (OpenID Connect, SAML): returns the page to open.
-  relayEnrollStart: (b: EnrollRequest) => post<{ authUrl: string }>('/api/relay/enroll/start', b),
+  relayEnrollStart: (b: EnrollRequest) => post<{ authUrl: string; userCode: string }>('/api/relay/enroll/start', b),
   relayEnrollCancel: () => req('/api/relay/enroll', { method: 'DELETE' }),
   relayConfirm: (code: string) => post('/api/relay/enroll/confirm', { code }),
   relayRequest: (email: string, relay?: string) => post('/api/relay/contacts' + rq(relay), { email }),

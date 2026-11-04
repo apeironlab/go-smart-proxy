@@ -141,6 +141,7 @@ type samlRound struct {
 		ID        string `json:"id"`
 		PollToken string `json:"pollToken"`
 		AuthURL   string `json:"authUrl"`
+		UserCode  string `json:"userCode"`
 	}
 	response, relayState string
 }
@@ -177,17 +178,13 @@ func (r *samlRound) post(t *testing.T, ts *httptest.Server, method, response, re
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
-	res := browserResult{status: resp.StatusCode}
-	req, _ := http.NewRequest("GET", ts.URL+"/enroll/"+r.start.ID, nil)
-	req.Header.Set("Authorization", "Bearer "+r.start.PollToken)
-	sresp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
+	pg := newPage(resp)
+	res := browserResult{status: pg.status}
+	// the relay now asks which device this is: type the code shown in the proxy
+	if pg.status == http.StatusOK && pg.ticket != "" {
+		res.status = verify(t, ts, method, pg.ticket, r.start.UserCode).status
 	}
-	defer sresp.Body.Close()
-	var st struct{ Status, CertPEM string }
-	jsonDecode(sresp.Body, &st)
+	st := pollStatus(t, ts, r.start.ID, r.start.PollToken)
 	res.approved, res.cert = st.Status == "approved", st.CertPEM
 	return res
 }
@@ -405,4 +402,34 @@ func TestSAMLIdentityProviderUnreachable(t *testing.T) {
 	csr, _ := testCSR(t, "alice@example.com")
 	postJSONTest(t, ts2.URL+"/enroll-auth/sso/start", "", map[string]string{"email": "alice@example.com", "csr": string(csr)}, nil, http.StatusBadGateway)
 	_ = ts
+}
+
+// The same protection for SAML: the identity provider vouching for the user is
+// not enough to hand a certificate to whoever started the request.
+func TestSAMLSignInNeedsTheDeviceCode(t *testing.T) {
+	ts, _, _, _ := samlServer(t, nil)
+	r := beginSAML(t, ts, "sso", "alice@example.com")
+	if r.start.UserCode == "" {
+		t.Fatal("the starter must be given a code")
+	}
+	resp, err := http.PostForm(ts.URL+"/enroll-auth/sso/acs", url.Values{"SAMLResponse": {r.response}, "RelayState": {r.relayState}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pg := newPage(resp)
+	if pg.status != 200 || pg.ticket == "" {
+		t.Fatalf("the relay must ask for the device code (status %d)", pg.status)
+	}
+	if st := pollStatus(t, ts, r.start.ID, r.start.PollToken); st.CertPEM != "" {
+		t.Fatalf("no certificate before the code: %+v", st)
+	}
+	if p := verify(t, ts, "sso", pg.ticket, "AAAA-AAAA"); p.status == 200 {
+		t.Fatal("a wrong code must not approve")
+	}
+	if p := verify(t, ts, "sso", pg.ticket, r.start.UserCode); p.status != 200 {
+		t.Fatalf("the right code: %d", p.status)
+	}
+	if st := pollStatus(t, ts, r.start.ID, r.start.PollToken); st.Status != "approved" {
+		t.Fatalf("after the code: %+v", st)
+	}
 }
