@@ -15,7 +15,7 @@ import (
 )
 
 // OIDCConfig signs users in with OpenID Connect (authorization code flow with
-// PKCE): Microsoft Entra ID, Okta, Keycloak, Google, Authentik...
+// PKCE) with any OpenID Connect provider.
 //
 // Register the relay as an application of the provider, with the redirect
 // address <public-url>/enroll-auth/<id>/callback (or redirect_url below).

@@ -18,7 +18,7 @@ import (
 //
 //   - password: local users with bcrypt hashes, typed in a form in the proxy;
 //   - ldap:     a directory (LDAP, Active Directory), also typed in the form;
-//   - oidc:     OpenID Connect, in the browser (Entra ID, Okta, Keycloak, Google...);
+//   - oidc:     OpenID Connect, in the browser (any OpenID Connect provider);
 //   - saml:     SAML 2.0 in the browser.
 //
 // Whatever the method, its only job is to establish the e-mail address of the

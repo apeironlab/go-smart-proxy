@@ -937,7 +937,7 @@ certificate:
 |---|---|---|
 | `password` | a form in the proxy | local users with bcrypt hashes (file) |
 | `ldap` | a form in the proxy | an account of a directory (OpenLDAP, Active Directory, FreeIPA) |
-| `oidc` | the provider's page, in the browser | OpenID Connect (Entra ID, Okta, Keycloak, Google...) |
+| `oidc` | the provider's page, in the browser | any OpenID Connect provider |
 | `saml` | the provider's page, in the browser | SAML 2.0 |
 
 Whatever the method, its only job is to establish **the e-mail address** of the
@@ -956,7 +956,7 @@ methods:
     type: oidc
     label: Company sign-in
     oidc:
-      issuer: https://login.microsoftonline.com/<tenant>/v2.0
+      issuer: https://login.example.com        # your provider's issuer address
       client_id: 1234-abcd
       client_secret: ${OIDC_SECRET}      # optional for a public client (PKCE is always used)
       require_groups: [vpn-users]        # any of these; groups come from the "groups" claim
