@@ -153,12 +153,19 @@ func addSMTPFlags(fs *flag.FlagSet) smtpFlags {
 		user: fs.String("smtp-user", env("PROXYRELAY_SMTP_USER", ""), "SMTP user"),
 		pass: fs.String("smtp-pass", env("PROXYRELAY_SMTP_PASS", ""), "SMTP password (prefer PROXYRELAY_SMTP_PASS)"),
 		from: fs.String("smtp-from", env("PROXYRELAY_SMTP_FROM", ""), "From address"),
-		tls:  fs.String("smtp-tls", env("PROXYRELAY_SMTP_TLS", "starttls"), "starttls, tls or none"),
-		auth: fs.String("smtp-auth", env("PROXYRELAY_SMTP_AUTH", "auto"), "auto, plain, login or none"),
+		tls:  fs.String("smtp-tls", "starttls", "starttls, tls or none (PROXYRELAY_SMTP_TLS, when set, wins)"),
+		auth: fs.String("smtp-auth", "auto", "auto, plain, login or none (PROXYRELAY_SMTP_AUTH, when set, wins)"),
 	}
 }
 
 func (f smtpFlags) apply(c *relay.EnrollConfig) {
+	// As before: for these two the environment, when set, wins over the flag.
+	if v := os.Getenv("PROXYRELAY_SMTP_TLS"); v != "" {
+		*f.tls = v
+	}
+	if v := os.Getenv("PROXYRELAY_SMTP_AUTH"); v != "" {
+		*f.auth = v
+	}
 	c.SMTPAddr, c.SMTPUser, c.SMTPPass, c.SMTPFrom, c.SMTPTLS, c.SMTPAuth = *f.addr, *f.user, *f.pass, *f.from, *f.tls, *f.auth
 }
 
