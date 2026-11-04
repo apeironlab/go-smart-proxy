@@ -25,6 +25,8 @@ const (
 	TContactRespond = "contact_respond" // client -> relay
 	TContactRemove  = "contact_remove"  // client -> relay
 	TContext        = "context"         // client -> relay: the network context this device shares
+	TGateway        = "gateway"         // first line of an application gateway's control stream
+	TGatewayState   = "gwstate"         // relay -> gateway: the applications it serves
 )
 
 // NetContext is what a device chooses to tell its contacts about the network
@@ -94,9 +96,11 @@ type State struct {
 	Email     string       `json:"email"`
 	Contacts  []Contact    `json:"contacts"`
 	MyDevices []DeviceInfo `json:"myDevices,omitempty"`
-	Incoming  []string     `json:"incoming"` // requests waiting for our answer
-	Outgoing  []string     `json:"outgoing"` // requests we sent, not answered yet
-	Notice    string       `json:"notice,omitempty"`
+	// Apps is the catalog of applications this user may open.
+	Apps     []AppInfo `json:"apps,omitempty"`
+	Incoming []string  `json:"incoming"` // requests waiting for our answer
+	Outgoing []string  `json:"outgoing"` // requests we sent, not answered yet
+	Notice   string    `json:"notice,omitempty"`
 }
 
 // DialReq opens a stream to Target through contact Via (client -> relay) or
@@ -109,6 +113,10 @@ type DialReq struct {
 	FromDevice string `json:"fromDevice,omitempty"` // device of the requester
 	Device     string `json:"device,omitempty"`     // control stream: this client's device
 	Target     string `json:"target"`
+	// App, on a dial, names a catalog application instead of a contact: the
+	// relay checks the user may open it and routes to its gateway. Via and
+	// Target are then ignored.
+	App string `json:"app,omitempty"`
 	// Context, on the control stream hello, is the network context the device
 	// shares from the start (nil: nothing).
 	Context *NetContext `json:"context,omitempty"`

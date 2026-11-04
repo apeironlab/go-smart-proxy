@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -16,6 +17,7 @@ type Store struct {
 	pending  map[string]map[string]bool // to -> set of requesters
 	devices  map[string]map[string]bool // email -> set of known device codes
 	lastSeen map[string]int64           // email -> Unix time of the last disconnection
+	groups   map[string][]string        // email -> groups reported when the user last signed in
 }
 
 type storeFile struct {
@@ -23,12 +25,14 @@ type storeFile struct {
 	Pending  map[string][]string `json:"pending"`
 	Devices  map[string][]string `json:"devices"`
 	LastSeen map[string]int64    `json:"lastSeen,omitempty"`
+	Groups   map[string][]string `json:"groups,omitempty"`
 }
 
 func NewStore(path string) (*Store, error) {
 	s := &Store{
 		path: path, contacts: map[string]map[string]bool{}, pending: map[string]map[string]bool{},
 		devices: map[string]map[string]bool{}, lastSeen: map[string]int64{},
+		groups: map[string][]string{},
 	}
 	if path == "" {
 		return s, nil
@@ -61,6 +65,9 @@ func NewStore(path string) (*Store, error) {
 	}
 	for k, v := range f.LastSeen {
 		s.lastSeen[k] = v
+	}
+	for k, v := range f.Groups {
+		s.groups[k] = v
 	}
 	return s, nil
 }
@@ -96,7 +103,10 @@ func (s *Store) saveLocked() {
 	if s.path == "" {
 		return
 	}
-	f := storeFile{Contacts: map[string][]string{}, Pending: map[string][]string{}, Devices: map[string][]string{}, LastSeen: map[string]int64{}}
+	f := storeFile{Contacts: map[string][]string{}, Pending: map[string][]string{}, Devices: map[string][]string{}, LastSeen: map[string]int64{}, Groups: map[string][]string{}}
+	for k, v := range s.groups {
+		f.Groups[k] = v
+	}
 	for k, v := range s.contacts {
 		f.Contacts[k] = keys(v)
 	}
@@ -220,4 +230,25 @@ func (s *Store) Remove(self, other string) (changed []string) {
 	}
 	s.saveLocked()
 	return []string{self, other}
+}
+
+// SetGroups records the groups an identity provider reported for email at
+// sign-in. Applications whose access is by group use them.
+func (s *Store) SetGroups(email string, groups []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g := append([]string{}, groups...)
+	sort.Strings(g)
+	if strings.Join(s.groups[email], "\x00") == strings.Join(g, "\x00") {
+		return
+	}
+	s.groups[email] = g
+	s.saveLocked()
+}
+
+// Groups returns the groups last recorded for email.
+func (s *Store) Groups(email string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string{}, s.groups[email]...)
 }

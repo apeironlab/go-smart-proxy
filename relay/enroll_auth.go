@@ -172,6 +172,9 @@ func (s *EnrollServer) checkIdentity(m *methodEntry, id Identity, want string) e
 	if !groupMatches(id.Groups, s.requiredGroups(m)) {
 		return fmt.Errorf("%s is not in any of the required groups", email)
 	}
+	if s.cfg.Store != nil {
+		s.cfg.Store.SetGroups(email, id.Groups)
+	}
 	return nil
 }
 

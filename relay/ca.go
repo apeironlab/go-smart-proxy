@@ -14,8 +14,10 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -238,4 +240,92 @@ func LoadPool(path string) (*x509.CertPool, error) {
 		return nil, fmt.Errorf("%s: no certificates found", path)
 	}
 	return pool, nil
+}
+
+// gatewayURIPrefix marks the certificate of an application gateway: its
+// identity is a URI, never an e-mail address, and enrollment cannot produce
+// one (SignCSR copies only the e-mail identity), so no user can pose as a gateway.
+const gatewayURIPrefix = "urn:gsp:gateway:"
+
+// GatewayFromCert returns the id of the gateway a certificate belongs to.
+func GatewayFromCert(c *x509.Certificate) (string, bool) {
+	for _, u := range c.URIs {
+		if id, ok := strings.CutPrefix(u.String(), gatewayURIPrefix); ok && authIDRe.MatchString(id) {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+// GatewayCredentials is a freshly issued gateway certificate.
+type GatewayCredentials struct {
+	CertPEM, KeyPEM, CAPEM []byte
+	Serial                 string // lowercase hex
+	NotAfter               time.Time
+}
+
+// NewGatewayCredentials issues the certificate of the application gateway id,
+// valid for ttl.
+func NewGatewayCredentials(caDir, id string, ttl time.Duration) (*GatewayCredentials, error) {
+	if !authIDRe.MatchString(id) {
+		return nil, errors.New("invalid gateway id (lowercase letters, digits, - and _)")
+	}
+	ca, caPriv, err := loadCA(caDir)
+	if err != nil {
+		return nil, err
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	u, _ := url.Parse(gatewayURIPrefix + id)
+	tpl := &x509.Certificate{
+		SerialNumber: serial(), Subject: pkix.Name{CommonName: "gateway " + id},
+		URIs:        []*url.URL{u},
+		NotBefore:   time.Now().Add(-time.Hour),
+		NotAfter:    time.Now().Add(ttl),
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, ca, &key.PublicKey, caPriv)
+	if err != nil {
+		return nil, err
+	}
+	kb, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	caPEM, err := os.ReadFile(filepath.Join(caDir, caFile))
+	if err != nil {
+		return nil, err
+	}
+	return &GatewayCredentials{
+		CertPEM:  pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		KeyPEM:   pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kb}),
+		CAPEM:    caPEM,
+		Serial:   strings.ToLower(tpl.SerialNumber.Text(16)),
+		NotAfter: tpl.NotAfter,
+	}, nil
+}
+
+// IssueGateway writes a gateway certificate, its key and the CA into outDir
+// (gateway.pem, gateway-key.pem, ca.pem).
+func IssueGateway(caDir, outDir, id string) error {
+	c, err := NewGatewayCredentials(caDir, id, leafTTL)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		return err
+	}
+	for name, data := range map[string][]byte{"gateway.pem": c.CertPEM, "gateway-key.pem": c.KeyPEM, caFile: c.CAPEM} {
+		mode := os.FileMode(0o644)
+		if name == "gateway-key.pem" {
+			mode = 0o600
+		}
+		if err := os.WriteFile(filepath.Join(outDir, name), data, mode); err != nil {
+			return err
+		}
+	}
+	return nil
 }

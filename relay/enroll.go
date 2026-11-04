@@ -61,7 +61,11 @@ type EnrollConfig struct {
 	// the audit log and the issued certificates in its database, and lets the
 	// rules be edited from there. nil leaves the relay exactly as configured
 	// by files.
-	Admin  *Admin
+	Admin *Admin
+	// Store, when set, remembers the groups each identity provider reports at
+	// sign-in, which applications with group access use. Pass the Store of the
+	// relay Server.
+	Store  *Store
 	Logger *log.Logger
 	// SendMail is used by tests; when nil, SMTP is used.
 	SendMail func(to, subject, body string) error

@@ -32,9 +32,13 @@ type Server struct {
 	// Audit, when set, is told about connections and refusals (the admin
 	// interface keeps them in its event log).
 	Audit func(kind, actor, subject, detail string)
+	// Catalog lists the applications users can open through gateways. nil
+	// means the relay serves no applications.
+	Catalog *Catalog
 
 	mu       sync.Mutex
 	sessions map[string]*session
+	gateways map[string]*session // application gateways by id
 }
 
 type session struct {
@@ -101,7 +105,7 @@ func (s *Server) Kick(email, serial string) int {
 }
 
 func NewServer(store *Store) *Server {
-	return &Server{Store: store, Log: log.Default(), sessions: map[string]*session{}}
+	return &Server{Store: store, Log: log.Default(), sessions: map[string]*session{}, gateways: map[string]*session{}}
 }
 
 // TLSConfig builds the server TLS configuration: clients must present a
@@ -158,6 +162,10 @@ func (s *Server) handleConn(c net.Conn) {
 			s.audit("session.refused", e, "", "revoked certificate from "+c.RemoteAddr().String())
 		}
 		c.Close()
+		return
+	}
+	if gid, isGateway := GatewayFromCert(peers[0]); isGateway {
+		s.handleGatewayConn(c, peers[0], gid)
 		return
 	}
 	email, ok := EmailFromCert(peers[0])
@@ -310,7 +318,7 @@ func (s *Server) pushStateDevice(email, device, notice string) {
 	}
 
 	contacts, in, out := s.Store.Snapshot(email)
-	st := State{T: TState, Email: email, Incoming: in, Outgoing: out, Notice: notice}
+	st := State{T: TState, Email: email, Incoming: in, Outgoing: out, Notice: notice, Apps: s.appsFor(email)}
 	for _, c := range contacts {
 		devices := s.onlineDevices(c)
 		ct := Contact{Email: c, Online: len(devices) > 0, Devices: devices, Context: s.deviceContexts(c)}
@@ -574,6 +582,10 @@ func (s *Server) handleDial(sess *session, st net.Conn, br *bufio.Reader, req Di
 	fromDevice := sess.device
 	sess.mu.Unlock()
 
+	if req.App != "" {
+		s.handleAppDial(sess, st, br, req, fromDevice)
+		return
+	}
 	via, ok := NormalizeEmail(req.Via)
 	viaDevice, dok := NormalizeDevice(req.ViaDevice)
 	if !ok || !dok || !validTarget(req.Target) {
