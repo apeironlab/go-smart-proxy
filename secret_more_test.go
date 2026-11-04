@@ -86,3 +86,65 @@ func TestEnrollConfirmRefusals(t *testing.T) {
 		}
 	}
 }
+
+func TestEncryptionRefusesBadInput(t *testing.T) {
+	salt := make([]byte, secretSaltSize)
+	key := make([]byte, secretKeySize)
+	if _, err := encryptWithKey(key[:5], salt, []byte("x")); err == nil {
+		t.Error("a short key was accepted")
+	}
+	if _, err := encryptWithKey(key, salt[:5], []byte("x")); err == nil {
+		t.Error("a short salt was accepted")
+	}
+	if _, err := decryptWithKey(key, []byte("short")); err == nil {
+		t.Error("a short file was decrypted")
+	}
+	if _, err := decryptWithKey(key, append([]byte("NOTMAGIC"), make([]byte, 200)...)); err == nil {
+		t.Error("a file with a bad header was decrypted")
+	}
+	enc, _ := encryptWithKey(key, salt, []byte("hello"))
+	enc[len(enc)-1] ^= 0xff
+	if _, err := decryptWithKey(key, enc); err == nil {
+		t.Error("a tampered file was decrypted")
+	}
+	if _, err := secretSalt([]byte("short")); err == nil {
+		t.Error("the salt of a short file")
+	}
+	if _, err := decryptSecret("pw", []byte("short")); err == nil {
+		t.Error("decryptSecret of a short file")
+	}
+}
+
+func TestInteractiveUnlockWithoutATerminal(t *testing.T) {
+	t.Setenv(noKeychainEnv, "1")
+	t.Cleanup(clearConfigCrypto)
+	data, _ := encryptSecret("a long enough password", []byte("conf"))
+
+	// the environment answers for the user
+	t.Setenv(secretEnv, "a long enough password")
+	if plain, err := unlockConfigInteractive(data); err != nil || string(plain) != "conf" {
+		t.Errorf("unlock with the environment: %q %v", plain, err)
+	}
+	// nothing stored and no terminal: there is no one to ask, and it says so
+	t.Setenv(secretEnv, "")
+	clearConfigCrypto()
+	if _, err := unlockConfigInteractive(data); err == nil {
+		t.Error("unlocked without any password")
+	}
+	if _, err := newMasterPassword(); err == nil {
+		t.Error("a master password out of nowhere")
+	}
+	if _, err := promptPassword("Master password"); err == nil {
+		t.Error("a prompt without a terminal or a dialog tool")
+	}
+	if _, err := unlockConfigStored([]byte("not encrypted")); err == nil {
+		t.Error("garbage was unlocked")
+	}
+	// a damaged password check via the wrong password
+	if _, err := unlockConfigWithPassword(data, "the wrong password"); err != errWrongPassword {
+		t.Errorf("wrong password: %v", err)
+	}
+	if _, err := unlockConfigWithPassword([]byte("junk"), "whatever password"); err == nil {
+		t.Error("junk was unlocked")
+	}
+}

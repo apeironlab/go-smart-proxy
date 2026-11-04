@@ -183,6 +183,9 @@ var (
 	activeListener net.Listener
 )
 
+// serveStopped ends serve; the program never sets it, tests do.
+var serveStopped atomic.Bool
+
 func serve() {
 	server := &http.Server{
 		Handler:           http.HandlerFunc(proxyHandler),
@@ -190,7 +193,7 @@ func serve() {
 		IdleTimeout:       2 * time.Minute,
 	}
 
-	for {
+	for !serveStopped.Load() {
 		ln, err := net.Listen("tcp", configuration.Address)
 		if err != nil {
 			log.Printf("Error listening on %s: %+v", configuration.Address, err)
