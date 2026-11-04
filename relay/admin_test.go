@@ -38,7 +38,7 @@ func newAdminFixture(t *testing.T, o adminOpts) *adminFixture {
 		dir = t.TempDir()
 	}
 	rev := filepath.Join(dir, "revoked.txt")
-	admin, err := NewAdmin(AdminConfig{DBPath: filepath.Join(dir, "admin.db"), Groups: []string{"admin"}, Revoked: NewRevocations(rev)})
+	admin, err := NewAdmin(AdminConfig{DBPath: testDBAddr(t, dir), Groups: []string{"admin"}, Revoked: NewRevocations(rev)})
 	if err != nil {
 		t.Fatal(err)
 	}

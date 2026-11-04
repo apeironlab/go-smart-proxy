@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -16,72 +15,36 @@ import (
 // users, the certificates that were issued, the audit log and the enrollment
 // rules edited from the interface.
 type adminDB struct {
-	db *sql.DB
+	db *dbConn
 }
 
-const adminSchema = `
-CREATE TABLE IF NOT EXISTS users (
-	username TEXT PRIMARY KEY,
-	hash     TEXT NOT NULL,
-	email    TEXT NOT NULL,
-	groups   TEXT NOT NULL DEFAULT '',
-	created  INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS certs (
-	serial     TEXT PRIMARY KEY,
-	email      TEXT NOT NULL,
-	device     TEXT NOT NULL DEFAULT '',
-	method     TEXT NOT NULL DEFAULT '',
-	issued     INTEGER NOT NULL,
-	expires    INTEGER NOT NULL,
-	revoked    INTEGER NOT NULL DEFAULT 0,
-	revoked_by TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS certs_email ON certs(email);
-CREATE TABLE IF NOT EXISTS gateways (
-	serial     TEXT PRIMARY KEY,
-	id         TEXT NOT NULL,
-	issued     INTEGER NOT NULL,
-	expires    INTEGER NOT NULL,
-	revoked    INTEGER NOT NULL DEFAULT 0,
-	revoked_by TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS gateways_id ON gateways(id);
-CREATE TABLE IF NOT EXISTS events (
-	id      INTEGER PRIMARY KEY AUTOINCREMENT,
-	ts      INTEGER NOT NULL,
-	kind    TEXT NOT NULL,
-	actor   TEXT NOT NULL DEFAULT '',
-	subject TEXT NOT NULL DEFAULT '',
-	detail  TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
-CREATE TABLE IF NOT EXISTS settings (
-	key   TEXT PRIMARY KEY,
-	value TEXT NOT NULL
-);`
+var adminTables = []tableDef{
+	{name: "users", pk: "username", cols: []colDef{
+		{"username", kKey, ""}, {"hash", kText, ""}, {"email", kKey, ""}, {"groups", kText, "''"}, {"created", kInt, ""},
+	}},
+	{name: "certs", pk: "serial", indexes: [][]string{{"email"}}, cols: []colDef{
+		{"serial", kKey, ""}, {"email", kKey, ""}, {"device", kKey, "''"}, {"method", kKey, "''"},
+		{"issued", kInt, ""}, {"expires", kInt, ""}, {"revoked", kInt, "0"}, {"revoked_by", kKey, "''"},
+	}},
+	{name: "gateways", pk: "serial", indexes: [][]string{{"id"}}, cols: []colDef{
+		{"serial", kKey, ""}, {"id", kKey, ""}, {"issued", kInt, ""}, {"expires", kInt, ""}, {"revoked", kInt, "0"}, {"revoked_by", kKey, "''"},
+	}},
+	{name: "events", pk: "id", indexes: [][]string{{"ts"}}, cols: []colDef{
+		{"id", kSerial, ""}, {"ts", kInt, ""}, {"kind", kKey, ""}, {"actor", kText, "''"}, {"subject", kText, "''"}, {"detail", kText, "''"},
+	}},
+	{name: "settings", pk: "key", cols: []colDef{{"key", kKey, ""}, {"value", kText, ""}}},
+}
 
 const maxEvents = 100000
 
-func openAdminDB(path string) (*adminDB, error) {
-	if strings.TrimSpace(path) == "" {
-		return nil, errors.New("the database path is required")
-	}
-	// Create the file private before the driver does: it holds password hashes
-	// and the SMTP password.
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+func openAdminDB(addr string) (*adminDB, error) {
+	db, err := openDB(addr)
 	if err != nil {
 		return nil, err
 	}
-	f.Close()
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)")
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(adminSchema); err != nil {
+	if err := db.migrate(adminTables); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("database %s: %w", path, err)
+		return nil, fmt.Errorf("database: %w", err)
 	}
 	return &adminDB{db: db}, nil
 }
@@ -121,7 +84,7 @@ func joinGroups(g []string) string {
 
 func (d *adminDB) lookupUser(name string) (passwordUser, bool, error) {
 	var hash, email, groups string
-	err := d.db.QueryRow(`SELECT hash, email, groups FROM users WHERE username = ?`, name).Scan(&hash, &email, &groups)
+	err := d.db.QueryRow(`SELECT hash, email, `+d.db.q("groups")+` FROM users WHERE username = ?`, name).Scan(&hash, &email, &groups)
 	if errors.Is(err, sql.ErrNoRows) {
 		return passwordUser{}, false, nil
 	}
@@ -132,7 +95,7 @@ func (d *adminDB) lookupUser(name string) (passwordUser, bool, error) {
 }
 
 func (d *adminDB) listUsers() ([]LocalUser, error) {
-	rows, err := d.db.Query(`SELECT username, email, groups, created FROM users ORDER BY username`)
+	rows, err := d.db.Query(`SELECT username, email, ` + d.db.q("groups") + `, created FROM users ORDER BY username`)
 	if err != nil {
 		return nil, err
 	}
@@ -173,9 +136,9 @@ func (d *adminDB) addUser(name, password, email string, groups []string) error {
 	if err != nil {
 		return err
 	}
-	_, err = d.db.Exec(`INSERT INTO users(username, hash, email, groups, created) VALUES(?,?,?,?,?)`,
+	_, err = d.db.Exec(`INSERT INTO users(username, hash, email, `+d.db.q("groups")+`, created) VALUES(?,?,?,?,?)`,
 		name, hash, email, joinGroups(groups), time.Now().Unix())
-	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
+	if isDuplicate(err) {
 		return errUserExists
 	}
 	return err
@@ -196,9 +159,9 @@ func (d *adminDB) updateUser(name, password, email string, groups []string) erro
 		if herr != nil {
 			return herr
 		}
-		res, err = d.db.Exec(`UPDATE users SET hash = ?, email = ?, groups = ? WHERE username = ?`, hash, email, joinGroups(groups), name)
+		res, err = d.db.Exec(`UPDATE users SET hash = ?, email = ?, `+d.db.q("groups")+` = ? WHERE username = ?`, hash, email, joinGroups(groups), name)
 	} else {
-		res, err = d.db.Exec(`UPDATE users SET email = ?, groups = ? WHERE username = ?`, email, joinGroups(groups), name)
+		res, err = d.db.Exec(`UPDATE users SET email = ?, `+d.db.q("groups")+` = ? WHERE username = ?`, email, joinGroups(groups), name)
 	}
 	if err != nil {
 		return err
@@ -235,9 +198,9 @@ type CertRecord struct {
 }
 
 func (d *adminDB) recordCert(c CertRecord) error {
-	_, err := d.db.Exec(`INSERT OR REPLACE INTO certs(serial, email, device, method, issued, expires) VALUES(?,?,?,?,?,?)`,
+	return d.db.upsert("certs", "serial", []string{"serial", "email", "device", "method", "issued", "expires"},
+		[]string{"email", "device", "method", "issued", "expires"},
 		c.Serial, c.Email, c.Device, c.Method, c.Issued.Unix(), c.Expires.Unix())
-	return err
 }
 
 func scanCerts(rows *sql.Rows) ([]CertRecord, error) {
@@ -322,7 +285,12 @@ func (d *adminDB) addEvent(kind, actor, subject, detail string) error {
 
 // pruneEvents keeps the newest maxEvents entries.
 func (d *adminDB) pruneEvents() {
-	d.db.Exec(`DELETE FROM events WHERE id <= (SELECT MAX(id) FROM events) - ?`, maxEvents)
+	// Two steps: MySQL does not allow a subquery on the table being deleted from.
+	var max sql.NullInt64
+	if err := d.db.QueryRow(`SELECT MAX(id) FROM events`).Scan(&max); err != nil || !max.Valid {
+		return
+	}
+	d.db.Exec(`DELETE FROM events WHERE id <= ?`, max.Int64-maxEvents)
 }
 
 // EventFilter selects events. Before is a cursor: only events with a smaller
@@ -342,7 +310,7 @@ func (d *adminDB) events(f EventFilter) ([]Event, error) {
 	var args []any
 	if f.Kind != "" {
 		if strings.HasSuffix(f.Kind, ".") {
-			q += ` AND kind LIKE ? ESCAPE '\'`
+			q += ` AND kind LIKE ? ESCAPE '!'`
 			args = append(args, escapeLike(f.Kind)+"%")
 		} else {
 			q += ` AND kind = ?`
@@ -350,7 +318,7 @@ func (d *adminDB) events(f EventFilter) ([]Event, error) {
 		}
 	}
 	if f.Search != "" {
-		q += ` AND (actor LIKE ? ESCAPE '\' OR subject LIKE ? ESCAPE '\' OR detail LIKE ? ESCAPE '\')`
+		q += ` AND (actor LIKE ? ESCAPE '!' OR subject LIKE ? ESCAPE '!' OR detail LIKE ? ESCAPE '!')`
 		like := "%" + escapeLike(f.Search) + "%"
 		args = append(args, like, like, like)
 	}
@@ -379,14 +347,14 @@ func (d *adminDB) events(f EventFilter) ([]Event, error) {
 }
 
 func escapeLike(s string) string {
-	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+	return strings.NewReplacer(`!`, `!!`, `%`, `!%`, `_`, `!_`).Replace(s)
 }
 
 // ---- settings ---------------------------------------------------------
 
 func (d *adminDB) getSetting(key string, v any) (bool, error) {
 	var raw string
-	err := d.db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&raw)
+	err := d.db.QueryRow(`SELECT value FROM settings WHERE `+d.db.q("key")+` = ?`, key).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -401,8 +369,7 @@ func (d *adminDB) setSetting(key string, v any) error {
 	if err != nil {
 		return err
 	}
-	_, err = d.db.Exec(`INSERT INTO settings(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, string(b))
-	return err
+	return d.db.upsert("settings", "key", []string{"key", "value"}, []string{"value"}, key, string(b))
 }
 
 // ---- gateways ---------------------------------------------------------
@@ -418,9 +385,8 @@ type GatewayCert struct {
 }
 
 func (d *adminDB) recordGateway(g GatewayCert) error {
-	_, err := d.db.Exec(`INSERT OR REPLACE INTO gateways(serial, id, issued, expires) VALUES(?,?,?,?)`,
+	return d.db.upsert("gateways", "serial", []string{"serial", "id", "issued", "expires"}, []string{"id", "issued", "expires"},
 		g.Serial, g.ID, g.Issued.Unix(), g.Expires.Unix())
-	return err
 }
 
 func (d *adminDB) gatewayCerts() ([]GatewayCert, error) {

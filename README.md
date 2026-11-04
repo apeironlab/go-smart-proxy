@@ -999,7 +999,7 @@ Main `serve` flags:
 | `-apps` | YAML file with the applications catalog (read-only) |
 | `-policy` | YAML file with the blocking policy (read-only); without it the interface edits it |
 | `-policy-dir` | Where downloaded block lists are kept (default `policy-lists` next to `-state`) |
-| `-admin-db` | Enable the management interface, with this SQLite database |
+| `-admin-db` | Enable the management interface; the database is a SQLite file, or `postgres://...` or `mysql://...` (see *Databases*) |
 | `-admin-groups`, `-admin-emails` | Who may sign in to the interface |
 | `-admin-methods` | Sign-in method ids allowed for administrators (default: all) |
 | `-admin-session` | Administrator session lifetime (default `8h`) |
@@ -1406,6 +1406,24 @@ A useful alert is a rise of `gsp_relay_events_total{kind="admin.denied"}` or
 line on standard error (`time`, `level`, `msg`), and every audited event as an
 `event` record with `kind`, `actor`, `subject` and `detail` fields, ready for a
 log pipeline. The default stays plain text.
+
+### Databases
+
+The management interface keeps its data (local users, certificates, audit log,
+settings) in SQL. The address given to `-admin-db` chooses the database:
+
+| Address | Database |
+|---|---|
+| `/data/admin.db` or `sqlite:/data/admin.db` | SQLite file (default; created `0600`) |
+| `postgres://user:pass@host:5432/relay?sslmode=require` | PostgreSQL |
+| `mysql://user:pass@host:3306/relay` (or `mariadb://`) | MySQL, MariaDB |
+
+`${VAR}` in the address is replaced from the environment, so passwords stay out
+of command lines (`-admin-db 'postgres://relay:${DB_PASSWORD}@db/relay'`). The
+tables are created on first use. The relay was tested against SQLite, PostgreSQL
+16 and MariaDB 10.11; it needs a database it may create tables in, and nothing
+else (no extensions). MySQL tables are `utf8mb4` with a binary collation, so
+that keys compare as they do elsewhere.
 
 ### Relay administration interface (optional)
 
