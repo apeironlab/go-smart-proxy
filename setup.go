@@ -422,6 +422,7 @@ const setupPage = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E %3Cdefs%3E %3ClinearGradient id=%22g%22 x1=%220%22 y1=%220%22 x2=%221%22 y2=%221%22%3E %3Cstop offset=%220%22 stop-color=%22#4562e3%22/%3E %3Cstop offset=%221%22 stop-color=%22#22b8cf%22/%3E %3C/linearGradient%3E %3C/defs%3E %3Crect width=%2264%22 height=%2264%22 rx=%2214%22 fill=%22url(#g)%22/%3E %3Cg fill=%22none%22 stroke=%22#fff%22 stroke-width=%224%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E %3Ccircle cx=%2232%22 cy=%2229%22 r=%2215%22/%3E %3Cellipse cx=%2232%22 cy=%2229%22 rx=%226.5%22 ry=%2215%22/%3E %3Cpath d=%22M17 29h30%22/%3E %3Cpath d=%22M32 44v8M24 52h16%22/%3E %3C/g%3E %3C/svg%3E">
 <title>Go Smart Proxy</title>
 <style>
   :root {
