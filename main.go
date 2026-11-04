@@ -164,6 +164,7 @@ func main() {
 
 	loadConfigurationOrSetup()
 	relayHub.startAll()
+	blockingStart()
 
 	applyChromePolicy()
 	go watchSystemProxy()
@@ -318,6 +319,11 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := blockCheck("request", r.RemoteAddr, r.URL.Hostname(), targetPort, r.Method, r.URL.String()); err != nil {
+		log.Printf("Blocked %s from %s to %s: %v", r.Method, r.RemoteAddr, r.URL.Host, err)
+		blockedPage(w, err)
+		return
+	}
 	route, ruleName := routeFor(r.URL.Hostname())
 	if route == nil {
 		http.Error(w, "no route available", http.StatusServiceUnavailable)
@@ -467,6 +473,10 @@ func handleConnect(client net.Conn, clientBr *bufio.Reader, hostport string) {
 		if rec == nil {
 			status = http.StatusServiceUnavailable
 		}
+		var be *blockedError
+		if errors.As(err, &be) {
+			status = http.StatusForbidden
+		}
 		connectError(client, status)
 		return
 	}
@@ -503,6 +513,10 @@ func dialTarget(kind, clientAddr, host, port, method, url string) (net.Conn, *bu
 	if isSelfTarget(host, port) {
 		log.Printf("Refused %s from %s to %s: the proxy cannot connect to itself", method, clientAddr, net.JoinHostPort(host, port))
 		return nil, nil, nil, errors.New("destination is this proxy")
+	}
+	if err := blockCheck(kind, clientAddr, host, port, method, url); err != nil {
+		log.Printf("Blocked %s from %s to %s: %v", method, clientAddr, net.JoinHostPort(host, port), err)
+		return nil, nil, nil, err
 	}
 	route, ruleName := routeFor(host)
 	if route == nil {

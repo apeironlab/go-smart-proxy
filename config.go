@@ -150,6 +150,9 @@ type Configuration struct {
 	// Hosts maps a hostname to the IP address it must be dialed at, whatever the system DNS says
 	// (for instance when a VPN hands out a resolver that does not know an internal name).
 	Hosts map[string]string `yaml:"Hosts"`
+	// Blocking turns the proxy into an ad, tracker and malware blocker (see
+	// blocking.go); it works with or without a relay.
+	Blocking BlockingConfig `yaml:"Blocking,omitempty"`
 }
 
 var configuration Configuration

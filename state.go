@@ -22,6 +22,7 @@ const (
 	StateDone           ConnState = "done"
 	StateFailed         ConnState = "failed"
 	StateClosed         ConnState = "closed"
+	StateBlocked        ConnState = "blocked"
 )
 
 type ConnEvent struct {

@@ -394,6 +394,7 @@ func (r *relayClient) readState(ctrl net.Conn, sess *yamux.Session) {
 		r.dropRulesOfRemovedContactsLocked()
 		r.saveLocked()
 		r.mu.Unlock()
+		blockingRelayState(r.name, st.Policy)
 
 		if len(freshIncoming) > 0 {
 			// Contact requests are shown in the web UI (banner and Relay page).

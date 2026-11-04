@@ -49,6 +49,7 @@ func newAPIMux() *http.ServeMux {
 	m := http.NewServeMux()
 	registerRelayRoutes(m)
 	registerRuleRoutes(m)
+	registerBlockingRoutes(m)
 	m.HandleFunc("GET /api/state", apiState)
 	m.HandleFunc("GET /api/routes", apiListRoutes)
 	m.HandleFunc("POST /api/routes", apiSaveRoute)

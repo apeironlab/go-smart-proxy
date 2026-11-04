@@ -152,6 +152,11 @@ func handleSOCKS(client net.Conn) {
 
 	upstream, upstreamBr, rec, err := dialTarget("socks", client.RemoteAddr().String(), host, strconv.Itoa(port), "SOCKS5", "")
 	if err != nil {
+		var be *blockedError
+		if errors.As(err, &be) {
+			socksReply(client, 0x02) // connection not allowed by ruleset
+			return
+		}
 		socksReply(client, 0x01) // general failure
 		return
 	}
