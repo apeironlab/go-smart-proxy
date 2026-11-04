@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AppShell, Alert, Anchor, Badge, Burger, Code, Group, Menu, NavLink, ScrollArea, ThemeIcon, Title, Tooltip, ActionIcon, useMantineColorScheme } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
-import { IconKey, IconLanguage, IconMoon, IconSun, IconNetwork, IconRoute, IconRouteAltRight, IconPlugConnected, IconSettings } from '@tabler/icons-react'
+import { IconBell, IconKey, IconLanguage, IconMoon, IconSun, IconNetwork, IconRoute, IconRouteAltRight, IconPlugConnected, IconSettings } from '@tabler/icons-react'
 import ConnectionsPage from './pages/ConnectionsPage'
 import CredentialsPage from './pages/CredentialsPage'
 import ConfigPage from './pages/ConfigPage'
@@ -70,13 +70,13 @@ export default function App() {
           <Title order={4} visibleFrom="sm" fw={700}>Go Smart Proxy</Title>
           <Code visibleFrom="md" px="sm">{state?.address ?? '...'}</Code>
           <Tooltip label={t('Current network interface')}>
-            <Badge color="blue" variant="light" visibleFrom="md">{state?.iface || '...'}</Badge>
+            <Badge color="blue" variant="light" visibleFrom="md" tt="none">{state?.iface || '...'}</Badge>
           </Tooltip>
-          <Badge color={error ? 'red' : 'green'} variant="light" visibleFrom="sm">
+          <Badge color={error ? 'red' : 'green'} variant="light" visibleFrom="sm" tt="none">
             {state ? t('Active connections: {{count}}', { count: state.activeConns }) : '...'}
           </Badge>
           <Tooltip label={t('Forced route')}>
-            <Badge variant="outline" color="gray" visibleFrom="sm">{state?.forceRoute || t('Auto')}</Badge>
+            <Badge variant="outline" color="gray" visibleFrom="sm" tt="none">{state?.forceRoute || t('Auto')}</Badge>
           </Tooltip>
           <ActionIcon variant="subtle" color="gray" ml="auto" aria-label={t('Theme')} onClick={toggleColorScheme}>
             {colorScheme === 'dark' ? <IconSun size={18} /> : <IconMoon size={18} />}
@@ -121,9 +121,9 @@ export default function App() {
       </AppShell.Navbar>
       <AppShell.Main>
         {pending > 0 && page !== 'relay' && (
-          <Alert color="yellow" title={t('Pending requests')} mb="md">
+          <Alert variant="light" color="yellow" icon={<IconBell size={18} />} mb="lg" py="xs">
             {t('You have {{count}} pending requests.', { count: pending })}{' '}
-            <Anchor component="button" type="button" onClick={() => setPage('relay')} fw={600}>
+            <Anchor component="button" type="button" onClick={() => setPage('relay')} fw={600} fz="sm">
               {t('Open Relay')}
             </Anchor>
           </Alert>

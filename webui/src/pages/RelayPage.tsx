@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  ActionIcon, Alert, Badge, Button, Card, Code, Group, Modal, Stack, Table, Text, Textarea, TextInput, Title,
+  ActionIcon, Alert, Badge, Button, Code, Group, Modal, Stack, Table, Text, Textarea, TextInput,
 } from '@mantine/core'
-import { IconCheck, IconPencil, IconPlus, IconTrash, IconX } from '@tabler/icons-react'
+import { IconCheck, IconPencil, IconPlus, IconRouteAltRight, IconTrash, IconUsers, IconX } from '@tabler/icons-react'
 import { useTranslation } from 'react-i18next'
 import { api, ApiError } from '../api'
 import type { CertificatePrompt, RelayStatus } from '../api'
+import { EmptyState, PageHeader, Section } from '../components/ui'
 
 const formatFingerprint = (fp: string) =>
   fp.replace(/(..)(?!$)/g, '$1:').toUpperCase()
@@ -101,15 +102,15 @@ export default function RelayPage() {
   if (!st) return null
   if (!st.enabled || showEnroll) {
     return (
-      <Stack>
-        <Title order={3}>{t('Relay')}</Title>
-        {error && <Alert color="red" withCloseButton onClose={() => setError(null)}>{error}</Alert>}
+      <Stack gap={0}>
+        <PageHeader icon={IconRouteAltRight} title={t('Relay')}
+          description={t('Reach services through the network of your contacts, and let them reach yours, over an authenticated mTLS channel.')} />
+        {error && <Alert color="red" withCloseButton onClose={() => setError(null)} mb="md">{error}</Alert>}
         {enrollPhase === 'form' ? (
-          <Card withBorder>
-            <Text fw={700} mb="xs">{t('Connect this device to the relay')}</Text>
-            <Text size="sm" c="dimmed" mb="sm">
-              {t('Enter the enrollment endpoint address and your email. The relay will send a confirmation code; the certificate will be created locally and signed by the relay.')}
-            </Text>
+          <Section
+            title={t('Connect this device to the relay')}
+            description={t('Enter the enrollment endpoint address and your email. The relay will send a confirmation code; the certificate will be created locally and signed by the relay.')}
+          >
             <Stack gap="sm">
               <TextInput label={t('Relay address (enrollment)')} placeholder="relay.example.com:8444"
                 value={enrollAddress} onChange={(e) => setEnrollAddress(e.currentTarget.value)} />
@@ -126,13 +127,12 @@ export default function RelayPage() {
                 </Button>
               </Group>
             </Stack>
-          </Card>
+          </Section>
         ) : (
-          <Card withBorder>
-            <Text fw={700} mb="xs">{t('Code sent to {{email}}', { email: enrollEmail })}</Text>
-            <Text size="sm" c="dimmed" mb="sm">
-              {t('Check your email and enter the confirmation code here. The code expires after 15 minutes.')}
-            </Text>
+          <Section
+            title={t('Code sent to {{email}}', { email: enrollEmail })}
+            description={t('Check your email and enter the confirmation code here. The code expires after 15 minutes.')}
+          >
             <Group gap="xs" align="flex-end">
               <TextInput label={t('Code')} placeholder="ABCD-EFGH" value={enrollCode}
                 onChange={(e) => setEnrollCode(e.currentTarget.value)}
@@ -140,7 +140,7 @@ export default function RelayPage() {
               <Button onClick={confirmEnrollment} loading={busy} disabled={!enrollCode.trim()}>{t('Confirm')}</Button>
               <Button variant="subtle" onClick={() => setEnrollPhase('form')}>{t('Back')}</Button>
             </Group>
-          </Card>
+          </Section>
         )}
 
         <Modal opened={!!certPrompt} onClose={() => setCertPrompt(null)}
@@ -183,46 +183,47 @@ export default function RelayPage() {
   }
 
   return (
-    <Stack>
-      <Group justify="space-between">
-        <Title order={3}>{t('Relay')}</Title>
-        <Group gap="xs">
-          <Badge color={st.connected ? 'green' : 'red'} variant="light">
-            {st.connected ? t('connected') : t('not connected')}
-          </Badge>
-          <Code>{st.address}</Code>
-          {st.email && <Badge variant="outline" color="gray">{st.email}</Badge>}
-          {st.device && (
-            <Group gap={2} wrap="nowrap">
-              <Badge variant="outline" color="grape">{t('device {{id}}', { id: st.device })}</Badge>
-              <ActionIcon size="sm" variant="subtle" color="grape" title={t('Rename device')}
-                onClick={() => { setDeviceValue(st.device); setDeviceOpen(true) }}>
-                <IconPencil size={13} />
-              </ActionIcon>
-            </Group>
-          )}
-          {st.connected && st.route && <Badge variant="outline" color="gray">{t('via {{route}}', { route: st.route })}</Badge>}
-          <Button size="xs" variant="subtle" onClick={() => {
+    <Stack gap={0}>
+      <PageHeader
+        icon={IconRouteAltRight}
+        title={t('Relay')}
+        description={
+          <Group gap="xs">
+            <Badge color={st.connected ? 'green' : 'red'} variant="dot" size="lg" tt="none">
+              {st.connected ? t('connected') : t('not connected')}
+            </Badge>
+            <Code>{st.address}</Code>
+            {st.email && <Badge variant="outline" color="gray" tt="none">{st.email}</Badge>}
+            {st.device && (
+              <Group gap={2} wrap="nowrap">
+                <Badge variant="outline" color="grape" tt="none">{t('device {{id}}', { id: st.device })}</Badge>
+                <ActionIcon size="sm" variant="subtle" color="grape" title={t('Rename device')} aria-label={t('Rename device')}
+                  onClick={() => { setDeviceValue(st.device); setDeviceOpen(true) }}>
+                  <IconPencil size={13} />
+                </ActionIcon>
+              </Group>
+            )}
+            {st.connected && st.route && <Badge variant="outline" color="gray" tt="none">{t('via {{route}}', { route: st.route })}</Badge>}
+          </Group>
+        }
+        actions={
+          <Button variant="default" onClick={() => {
             setEnrollAddress(st.enrollUrl ?? '')
             setEnrollEmail(st.email ?? '')
             setShowEnroll(true)
           }}>{t('Reconfigure')}</Button>
-        </Group>
-      </Group>
+        }
+      />
 
-      {error && <Alert color="red" withCloseButton onClose={() => setError(null)}>{error}</Alert>}
-      {st.notice && <Alert color="yellow">{st.notice}</Alert>}
-      {!st.connected && st.error && <Alert color="red" title={t('Relay connection')}>{st.error}</Alert>}
+      {error && <Alert color="red" withCloseButton onClose={() => setError(null)} mb="md">{error}</Alert>}
+      {st.notice && <Alert color="yellow" mb="md">{st.notice}</Alert>}
+      {!st.connected && st.error && <Alert color="red" title={t('Relay connection')} mb="md">{st.error}</Alert>}
 
       {st.incoming.length > 0 && (
-        <Card withBorder style={{ borderColor: 'var(--mantine-color-yellow-6)' }}>
-          <Group justify="space-between" mb="xs">
-            <Text fw={700}>{t('Contact requests')}</Text>
-            <Badge color="yellow">{st.incoming.length}</Badge>
-          </Group>
-          <Text size="xs" c="dimmed" mb="xs">
-            {t('A user wants to add you to their address book. Accept or decline to clear the request.')}
-          </Text>
+        <Section accent="yellow" title={t('Contact requests')}
+          description={t('A user wants to add you to their address book. Accept or decline to clear the request.')}
+          right={<Badge color="yellow">{st.incoming.length}</Badge>}>
+          <Table.ScrollContainer minWidth={420}>
           <Table>
             <Table.Tbody>
               {st.incoming.map((e) => (
@@ -242,14 +243,13 @@ export default function RelayPage() {
               ))}
             </Table.Tbody>
           </Table>
-        </Card>
+          </Table.ScrollContainer>
+        </Section>
       )}
 
-      <Card withBorder>
-        <Text fw={700} mb="xs">{t('My devices')}</Text>
-        <Text size="xs" c="dimmed" mb="xs">
-          {t('Your devices can be used directly, without a contact request; outbound traffic will still require route approval.')}
-        </Text>
+      <Section title={t('My devices')}
+        description={t('Your devices can be used directly, without a contact request; outbound traffic will still require route approval.')}>
+        <Table.ScrollContainer minWidth={420}>
         <Table>
           <Table.Tbody>
             {(st.myDevices ?? []).map((d) => (
@@ -267,15 +267,14 @@ export default function RelayPage() {
             ))}
           </Table.Tbody>
         </Table>
-        {!(st.myDevices ?? []).length && <Text size="sm" c="dimmed">{t('No registered devices.')}</Text>}
-      </Card>
+        </Table.ScrollContainer>
+        {!(st.myDevices ?? []).length && <EmptyState icon={IconRouteAltRight} title={t('No registered devices.')} />}
+      </Section>
 
       {st.approvals.length > 0 && (
-        <Card withBorder>
-          <Text fw={700} mb="xs">{t('Route requests to approve')}</Text>
-          <Text size="xs" c="dimmed" mb="xs">
-            {t('A contact wants to exit your network toward this destination. Expires after 60 seconds.')}
-          </Text>
+        <Section accent="orange" title={t('Route requests to approve')}
+          description={t('A contact wants to exit your network toward this destination. Expires after 60 seconds.')}>
+          <Table.ScrollContainer minWidth={640}>
           <Table>
             <Table.Tbody>
               {st.approvals.map((a) => (
@@ -305,12 +304,11 @@ export default function RelayPage() {
               ))}
             </Table.Tbody>
           </Table>
-        </Card>
+          </Table.ScrollContainer>
+        </Section>
       )}
 
-      <Card withBorder>
-        <Group justify="space-between" mb="xs">
-          <Text fw={700}>{t('Contacts')}</Text>
+      <Section title={t('Contacts')} right={
           <form
             onSubmit={(ev) => {
               ev.preventDefault()
@@ -326,7 +324,8 @@ export default function RelayPage() {
               </Button>
             </Group>
           </form>
-        </Group>
+        }>
+        <Table.ScrollContainer minWidth={560}>
         <Table>
           <Table.Tbody>
             {st.contacts.map((c) => (
@@ -364,16 +363,20 @@ export default function RelayPage() {
             ))}
           </Table.Tbody>
         </Table>
-        {!st.contacts.length && !st.outgoing.length && <Text c="dimmed" size="sm">{t('No contacts')}</Text>}
+        </Table.ScrollContainer>
+        {!st.contacts.length && !st.outgoing.length && (
+          <EmptyState icon={IconUsers} title={t('No contacts')}
+            text={t('Send a request to a colleague to route traffic through each other\'s networks.')} />
+        )}
         <Text size="xs" c="dimmed" mt="xs">
           {t("To exit a contact's network, use")} <Code>relay://email/device</Code>{' '}
           {t('as the first proxy in a route chain. With only one device online,')} <Code>relay://email</Code>{' '}
           {t('is enough. Your devices can be used directly, without a contact request.')}
         </Text>
-      </Card>
+      </Section>
 
-      <Card withBorder>
-        <Text fw={700} mb="xs">{t('Approved routes (who can exit your network)')}</Text>
+      <Section title={t('Approved routes (who can exit your network)')}>
+        <Table.ScrollContainer minWidth={420}>
         <Table>
           <Table.Tbody>
             {st.rules.map((r) => (
@@ -392,8 +395,9 @@ export default function RelayPage() {
             ))}
           </Table.Tbody>
         </Table>
-        {!st.rules.length && <Text c="dimmed" size="sm">{t('No approved routes')}</Text>}
-      </Card>
+        </Table.ScrollContainer>
+        {!st.rules.length && <EmptyState icon={IconRouteAltRight} title={t('No approved routes')} />}
+      </Section>
 
       <Modal opened={deviceOpen} onClose={() => setDeviceOpen(false)} title={t('Device name')} centered>
         <Stack gap="sm">

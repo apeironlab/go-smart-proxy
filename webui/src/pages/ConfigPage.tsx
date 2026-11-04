@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ActionIcon, Alert, Autocomplete, Badge, Button, Card, Checkbox, Code, Divider, Group, Modal, Paper, Select, SimpleGrid, Stack, Switch, Table,
-  TagsInput, Text, Textarea, TextInput, Title, Tooltip, Accordion,
+  TagsInput, Text, Textarea, TextInput, Tabs, Tooltip, Accordion,
 } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
-import { IconArrowDown, IconArrowUp, IconPencil, IconPlus, IconRefresh, IconTrash } from '@tabler/icons-react'
+import {
+  IconAlertTriangle, IconArrowDown, IconArrowUp, IconClock, IconNetwork, IconPencil, IconPlugConnected, IconPlus,
+  IconRefresh, IconRoute, IconRouteAltRight, IconServer, IconSettings, IconTrash,
+} from '@tabler/icons-react'
 import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import type { Credential, Hop, RelayConfigInfo, RelayStatus, RouteInfo, StateInfo, SystemProxyState } from '../api'
+import { PageHeader, Section, StatCard } from '../components/ui'
 
 const pacColors: Record<string, string> = {
   none: 'gray',
@@ -17,13 +21,27 @@ const pacColors: Record<string, string> = {
   error: 'red',
 }
 
-function Info({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <Text size="xs" c="dimmed">{label}</Text>
-      <Text size="sm">{value || '-'}</Text>
-    </div>
-  )
+function fmtUptime(seconds: number) {
+  const m = Math.floor(seconds / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 48) return `${h}h ${m % 60}m`
+  return `${Math.floor(h / 24)}d ${h % 24}h`
+}
+
+const isLoopback = (addr: string) => {
+  const host = addr.trim().replace(/:\d+$/, '').replace(/^\[|\]$/g, '')
+  return !addr.trim() || host === 'localhost' || host === '::1' || /^127\./.test(host)
+}
+
+// Quick client-side check, mirrored by the server: host:port with a valid port.
+const addressProblem = (addr: string, optional: boolean): string | undefined => {
+  const v = addr.trim()
+  if (!v) return optional ? undefined : 'required'
+  const m = v.match(/^(\[[^\]]+\]|[^:\s]*):(\d+)$/)
+  if (!m) return 'host:port'
+  const port = Number(m[2])
+  return port >= 1 && port <= 65535 ? undefined : 'port 1-65535'
 }
 
 function chainText(r: RouteInfo, t: TFunction) {
@@ -68,6 +86,15 @@ export default function ConfigPage() {
   const [exclude, setExclude] = useState<string[]>([])
   const [forceChrome, setForceChrome] = useState(false)
   const [allowRemote, setAllowRemote] = useState(false)
+  const [tab, setTab] = useState<string>(() => {
+    try { return sessionStorage.getItem('gsp.configTab') || 'network' } catch { return 'network' }
+  })
+  const changeTab = (v: string) => {
+    setTab(v)
+    try { sessionStorage.setItem('gsp.configTab', v) } catch { /* ignore */ }
+  }
+  const addressError = address ? addressProblem(address, false) : undefined
+  const socksError = addressProblem(socksAddress, true)
   const [sysProxyState, setSysProxyState] = useState<SystemProxyState | null>(null)
   const [forceRoute, setForceRoute] = useState<string>('')
   const [configLoaded, setConfigLoaded] = useState(false)
@@ -306,88 +333,123 @@ export default function ConfigPage() {
 
   return (
     <>
-      <Title order={3} mb="md">{t('Configuration')}</Title>
-      {error && <Alert color="red" mb="md">{t('Error: {{error}}', { error })}</Alert>}
+      <PageHeader
+        icon={IconSettings}
+        title={t('Configuration')}
+        description={t('Listeners, system proxy, fixed hosts, routes and relay connection.')}
+      />
+      {error && <Alert color="red" mb="md" withCloseButton onClose={() => setError(null)}>{t('Error: {{error}}', { error })}</Alert>}
 
-      <Card withBorder mb="lg">
-        <Text fw={700} mb="sm">{t('Network')}</Text>
-        <SimpleGrid cols={{ base: 1, sm: 3, md: 5 }}>
-          <Info label={t('Current interface')} value={state?.iface ?? ''} />
-          <Info label={t('Gateway')} value={state?.gateway ?? ''} />
-          <Info label={t('Network')} value={state?.network ?? ''} />
-          <Info label={t('Uptime')} value={state ? `${Math.floor(state.uptimeSeconds / 60)}m` : ''} />
-          <Info label={t('Active connections')} value={String(state?.activeConns ?? 0)} />
-        </SimpleGrid>
-        <Group mt="md" align="flex-end">
-          <TextInput
-            label={t('Listen address')}
-            description={t('The listener restarts automatically')}
-            style={{ minWidth: 220 }}
-            value={address}
-            onChange={(e) => setAddress(e.currentTarget.value)}
-          />
-          <TextInput
-            label={t('SOCKS5')}
-            description={t('Empty = disabled')}
-            placeholder="127.0.0.1:1080"
-            style={{ minWidth: 200 }}
-            value={socksAddress}
-            onChange={(e) => setSocksAddress(e.currentTarget.value)}
-          />
-          <Button onClick={saveConfig} disabled={!address}>{t('Save')}</Button>
-          <Select
-            label={t('Forced route')}
+      <Tabs value={tab} onChange={(v) => changeTab(v ?? 'network')} keepMounted={false}>
+        <Tabs.List mb="lg" style={{ flexWrap: 'nowrap', overflowX: 'auto' }}>
+          <Tabs.Tab value="network" leftSection={<IconNetwork size={16} />}>{t('Network')}</Tabs.Tab>
+          <Tabs.Tab value="routes" leftSection={<IconRoute size={16} />}>{t('Routes')}</Tabs.Tab>
+          <Tabs.Tab value="hosts" leftSection={<IconServer size={16} />}>{t('Hosts and DNS')}</Tabs.Tab>
+          <Tabs.Tab value="relay" leftSection={<IconRouteAltRight size={16} />}>{t('Relay')}</Tabs.Tab>
+        </Tabs.List>
+
+        <Tabs.Panel value="network">
+          <SimpleGrid cols={{ base: 2, sm: 3, lg: 5 }} mb="lg">
+            <StatCard label={t('Current interface')} value={state?.iface || '-'} icon={IconNetwork} />
+            <StatCard label={t('Gateway')} value={state?.gateway || '-'} icon={IconRoute} color="cyan" />
+            <StatCard label={t('Network')} value={state?.network || '-'} icon={IconServer} color="grape" />
+            <StatCard label={t('Uptime')} value={state ? fmtUptime(state.uptimeSeconds) : '-'} icon={IconClock} color="teal" />
+            <StatCard label={t('Active connections')} value={String(state?.activeConns ?? 0)} icon={IconPlugConnected} color="orange" />
+          </SimpleGrid>
+
+          <Section
+            title={t('Listeners')}
+            description={t('Where the proxy accepts connections from your applications. The listener restarts automatically.')}
+          >
+            <SimpleGrid cols={{ base: 1, sm: 2 }}>
+              <TextInput
+                label={t('Listen address')}
+                description={t('HTTP proxy and web UI')}
+                placeholder="127.0.0.1:3128"
+                value={address}
+                error={addressError}
+                onChange={(e) => setAddress(e.currentTarget.value)}
+              />
+              <TextInput
+                label={t('SOCKS5')}
+                description={t('Empty = disabled')}
+                placeholder="127.0.0.1:1080"
+                value={socksAddress}
+                error={socksError}
+                onChange={(e) => setSocksAddress(e.currentTarget.value)}
+              />
+            </SimpleGrid>
+            <Group justify="flex-end" mt="md">
+              <Button onClick={saveConfig} disabled={!address || !!addressError || !!socksError}>{t('Save')}</Button>
+            </Group>
+            <Divider my="md" />
+            <Switch
+              color="red"
+              label={t('Allow other computers to use the proxy')}
+              description={t('Off by default. The proxy has no client authentication and uses your upstream credentials: enable it only on a trusted network, and only if you need to listen on a non-loopback address')}
+              checked={allowRemote}
+              onChange={(e) => {
+                const v = e.currentTarget.checked
+                setAllowRemote(v)
+                api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: exclude, forceChrome, allowRemoteClients: v })
+                  .then(load)
+                  .catch((err) => { setAllowRemote(!v); setError(String(err)) })
+              }}
+            />
+            {(!isLoopback(address) || !isLoopback(socksAddress)) && (
+              <Alert color="orange" mt="md" icon={<IconAlertTriangle size={18} />} title={t('Non-loopback address')}>
+                {t('This address is reachable from other machines. Without "Allow other computers to use the proxy" the API refuses to save it, and connections from other computers are dropped.')}
+              </Alert>
+            )}
+          </Section>
+
+          <Section
+            title={t('Route selection')}
             description={t('Empty = automatic. Destination rules are only evaluated in Auto.')}
-            style={{ minWidth: 220 }}
-            clearable
-            placeholder={t('Auto')}
-            data={selectableRoutes.map((r) => ({ value: r.name, label: r.name }))}
-            value={forceRoute || null}
-            onChange={(v) => applyForceRoute(v)}
-          />
-        </Group>
-        <Switch
-          mt="md"
-          color="red"
-          label={t('Allow other computers to use the proxy')}
-          description={t('Off by default. The proxy has no client authentication and uses your upstream credentials: enable it only on a trusted network, and only if you need to listen on a non-loopback address')}
-          checked={allowRemote}
-          onChange={(e) => {
-            const v = e.currentTarget.checked
-            setAllowRemote(v)
-            api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: exclude, forceChrome, allowRemoteClients: v })
-              .then(load)
-              .catch((err) => { setAllowRemote(!v); setError(String(err)) })
-          }}
-        />
-        <Switch
-          mt="md"
-          label={t('Reset system proxy on network change')}
-          description={t('With Pulse connected it only rewrites the runtime state of the Pulse service (via scutil, no conflict or reconnections); without VPN it uses networksetup')}
-          checked={sysProxy}
-          onChange={(e) => {
-            const v = e.currentTarget.checked
-            setSysProxy(v)
-            api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: v, systemProxyExclude: exclude, forceChrome })
-              .then(load)
-              .catch((err) => setError(String(err)))
-          }}
-        />
-        <TagsInput
-          mt="md"
-          label={t('System proxy exclusions')}
-          description={t('Interfaces or service names to leave alone (e.g. utun4, VPN): avoids conflicts with the VPN client that keeps reconnecting')}
-          placeholder="utun4"
-          value={exclude}
-          onChange={(v) => {
-            setExclude(v)
-            api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: v, forceChrome })
-              .then(load)
-              .catch((err) => setError(String(err)))
-          }}
-        />
+          >
+            <Select
+              label={t('Forced route')}
+              maw={360}
+              clearable
+              placeholder={t('Auto')}
+              data={selectableRoutes.map((r) => ({ value: r.name, label: r.name }))}
+              value={forceRoute || null}
+              onChange={(v) => applyForceRoute(v)}
+            />
+          </Section>
+
+          <Section
+            title={t('System proxy')}
+            description={t('Keep the operating system pointed at this proxy, even when a VPN client rewrites it.')}
+          >
+            <Switch
+              label={t('Reset system proxy on network change')}
+              description={t('With Pulse connected it only rewrites the runtime state of the Pulse service (via scutil, no conflict or reconnections); without VPN it uses networksetup')}
+              checked={sysProxy}
+              onChange={(e) => {
+                const v = e.currentTarget.checked
+                setSysProxy(v)
+                api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: v, systemProxyExclude: exclude, forceChrome })
+                  .then(load)
+                  .catch((err) => setError(String(err)))
+              }}
+            />
+            <TagsInput
+              mt="md"
+              label={t('System proxy exclusions')}
+              description={t('Interfaces or service names to leave alone (e.g. utun4, VPN): avoids conflicts with the VPN client that keeps reconnecting')}
+              placeholder="utun4"
+              value={exclude}
+              onChange={(v) => {
+                setExclude(v)
+                api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: v, forceChrome })
+                  .then(load)
+                  .catch((err) => setError(String(err)))
+              }}
+            />
         {sysProxyState && (
           <>
+            <Divider my="md" />
             <Group gap="xs" mt="sm">
               <Text size="sm" fw={600}>{t('Effective system proxy (as seen by Chrome):')}</Text>
               <Badge
@@ -431,118 +493,25 @@ export default function ConfigPage() {
             )}
           </>
         )}
-        <Text size="xs" c="dimmed" mt="sm">
-          {t('The configuration, including credentials and the relay private key, is encrypted in')}{' '}
-          <Code>config.yml.enc</Code>{' '}
-          {t('with the master password. On macOS the derived key can be unlocked with Touch ID through the Keychain.')}
-        </Text>
-      </Card>
+          </Section>
 
-      <Card withBorder mb="lg">
-        <Group justify="space-between" mb="xs">
-          <div>
-            <Text fw={700}>{t('Fixed hosts')}</Text>
-            <Text size="xs" c="dimmed">
-              {t('Resolve a hostname to a fixed IP, ignoring DNS (useful for internal names that cannot be resolved through the VPN). Leave empty to use normal DNS.')}
-            </Text>
-          </div>
-          <Button size="xs" leftSection={<IconPlus size={14} />}
-            onClick={() => setHosts([...hosts, { host: '', ip: '' }])}>
-            {t('Add')}
-          </Button>
-        </Group>
-        <Stack gap="xs">
-          {hosts.map((h, i) => (
-            <Group key={i} gap="xs" align="flex-end">
-              <TextInput style={{ flex: 2 }} label={i === 0 ? t('Host') : undefined}
-                placeholder="repo.intra.example.com" value={h.host}
-                onChange={(e) => setHostRow(i, { host: e.currentTarget.value })} />
-              <TextInput style={{ flex: 1 }} label={i === 0 ? t('IP') : undefined}
-                placeholder="192.0.2.40" value={h.ip}
-                onChange={(e) => setHostRow(i, { ip: e.currentTarget.value })} />
-              <ActionIcon variant="subtle" color="red" title={t('Remove')}
-                onClick={() => setHosts(hosts.filter((_, j) => j !== i))}>
-                <IconTrash size={16} />
-              </ActionIcon>
-            </Group>
-          ))}
-          {!hosts.length && <Text size="sm" c="dimmed">{t('No fixed hosts.')}</Text>}
-        </Stack>
-        <Group justify="flex-end" mt="sm">
-          <Button variant="light" onClick={saveConfig}>{t('Save hosts')}</Button>
-        </Group>
-      </Card>
-
-      <Card withBorder mb="lg">
-        <Group justify="space-between" mb="xs">
-          <div>
-            <Text fw={700}>{t('Relay')}</Text>
-            <Text size="xs" c="dimmed">
-              {t('mTLS connection configuration for the relay. To get the certificate by email use the Relay page; here you can also paste a manual certificate.')}
-            </Text>
-          </div>
-          <Badge color={relayCfg?.hasCertificate ? 'green' : 'gray'} variant="light">
-            {relayCfg?.hasCertificate ? t('certificate present') : t('certificate missing')}
-          </Badge>
-        </Group>
-        <SimpleGrid cols={{ base: 1, sm: 2 }} mb="sm">
-          <TextInput label={t('mTLS address')} placeholder="relay.example.com:8443"
-            value={relayAddress} onChange={(e) => setRelayAddress(e.currentTarget.value)} />
-          <Select label={t('Route to reach the relay')} clearable placeholder={t('Automatic')}
-            data={selectableRoutes.map((r) => ({ value: r.name, label: r.name }))}
-            value={relayRoute || null} onChange={(v) => setRelayRoute(v ?? '')} />
-        </SimpleGrid>
-        <Switch label={t('Allow contacts to reach services on this machine')}
-          description={t('AllowLocal: not recommended unless strictly necessary.')}
-          checked={relayAllowLocal} onChange={(e) => setRelayAllowLocal(e.currentTarget.checked)} />
-        <Group justify="space-between" mt="sm">
           <Text size="xs" c="dimmed">
-            {relayCfg?.device ? <>{t('Device:')} <Code>{relayCfg.device}</Code> {t('(editable from the Relay page)')}</> : t('Device not yet assigned')}
+            {t('The configuration, including credentials and the relay private key, is encrypted in')}{' '}
+            <Code>config.yml.enc</Code>{' '}
+            {t('with the master password. On macOS the derived key can be unlocked with Touch ID through the Keychain.')}
           </Text>
-          <Button variant="light" onClick={() => saveRelay(false)} disabled={!relayAddress.trim()}>
-            {t('Save relay')}
-          </Button>
-        </Group>
+        </Tabs.Panel>
 
-        <Accordion mt="sm" variant="contained">
-          <Accordion.Item value="cert">
-            <Accordion.Control>
-              <Text size="sm" fw={600}>{t('Manual certificate')}</Text>
-            </Accordion.Control>
-            <Accordion.Panel>
-              <Stack gap="xs">
-                <Text size="xs" c="dimmed">
-                  {t('Leave empty to keep the current certificate. The content is saved only in the encrypted config and is no longer returned by the API.')}
-                </Text>
-                <Textarea label={t('Client certificate (PEM)')} minRows={3} value={relayCert}
-                  onChange={(e) => setRelayCert(e.currentTarget.value)} autosize />
-                <Textarea label={t('Client private key (PEM)')} minRows={3} value={relayKey}
-                  onChange={(e) => setRelayKey(e.currentTarget.value)} autosize />
-                <Textarea label={t('Relay CA (PEM, optional)')} minRows={2} value={relayCA}
-                  onChange={(e) => setRelayCA(e.currentTarget.value)} autosize />
-                <Group justify="space-between">
-                  <Button variant="subtle" color="red"
-                    onClick={() => window.confirm(t('Remove the relay certificate and key?')) && saveRelay(true)}
-                    disabled={!relayCfg?.hasCertificate}>
-                    {t('Remove certificate')}
-                  </Button>
-                  <Button onClick={() => saveRelay(false)}
-                    disabled={(!relayCert && !relayKey && !relayCA) || !relayAddress.trim()}>
-                    {t('Save certificate')}
-                  </Button>
-                </Group>
-              </Stack>
-            </Accordion.Panel>
-          </Accordion.Item>
-        </Accordion>
-      </Card>
-
-      <Group justify="space-between" mb="sm">
-        <Title order={4}>{t('Routes')}</Title>
-        <Button leftSection={<IconPlus size={16} />} onClick={openNew}>{t('Add')}</Button>
-      </Group>
-
-      <Table striped highlightOnHover withTableBorder>
+        <Tabs.Panel value="routes">
+          <Group justify="space-between" mb="md" align="flex-end">
+            <Text size="sm" c="dimmed" maw={640}>
+              {t('Routes describe how traffic leaves this computer: directly, through a corporate proxy, a PAC file, a chain of hops or the relay. The first applicable route wins unless you force one.')}
+            </Text>
+            <Button leftSection={<IconPlus size={16} />} onClick={openNew}>{t('Add')}</Button>
+          </Group>
+          <Card withBorder padding={0}>
+            <Table.ScrollContainer minWidth={900}>
+      <Table highlightOnHover style={{ border: 0, borderRadius: 0 }}>
         <Table.Thead>
           <Table.Tr>
             <Table.Th>{t('Name')}</Table.Th>
@@ -613,15 +582,46 @@ export default function ConfigPage() {
           ))}
         </Table.Tbody>
       </Table>
+            </Table.ScrollContainer>
+          </Card>
+        </Tabs.Panel>
 
-      <Accordion mt="lg" variant="separated">
-        <Accordion.Item value="dns">
-          <Accordion.Control>
-            <Text fw={600}>{t('DNS cache ({{count}} entries)', { count: state?.dns.length ?? 0 })}</Text>
-          </Accordion.Control>
-          <Accordion.Panel>
-            {state?.dns.length ? (
-              <Table striped withTableBorder>
+        <Tabs.Panel value="hosts">
+          <Section
+            title={t('Fixed hosts')}
+            description={t('Resolve a hostname to a fixed IP, ignoring DNS (useful for internal names that cannot be resolved through the VPN). Leave empty to use normal DNS.')}
+            right={
+              <Button size="xs" variant="light" leftSection={<IconPlus size={14} />}
+                onClick={() => setHosts([...hosts, { host: '', ip: '' }])}>
+                {t('Add')}
+              </Button>
+            }
+          >
+        <Stack gap="xs">
+          {hosts.map((h, i) => (
+            <Group key={i} gap="xs" align="flex-end">
+              <TextInput style={{ flex: 2 }} label={i === 0 ? t('Host') : undefined}
+                placeholder="repo.intra.example.com" value={h.host}
+                onChange={(e) => setHostRow(i, { host: e.currentTarget.value })} />
+              <TextInput style={{ flex: 1 }} label={i === 0 ? t('IP') : undefined}
+                placeholder="192.0.2.40" value={h.ip}
+                onChange={(e) => setHostRow(i, { ip: e.currentTarget.value })} />
+              <ActionIcon variant="subtle" color="red" title={t('Remove')}
+                onClick={() => setHosts(hosts.filter((_, j) => j !== i))}>
+                <IconTrash size={16} />
+              </ActionIcon>
+            </Group>
+          ))}
+          {!hosts.length && <Text size="sm" c="dimmed">{t('No fixed hosts.')}</Text>}
+        </Stack>
+        <Group justify="flex-end" mt="sm">
+          <Button variant="light" onClick={saveConfig}>{t('Save hosts')}</Button>
+        </Group>
+          </Section>
+
+          <Section title={t('DNS cache ({{count}} entries)', { count: state?.dns.length ?? 0 })}>
+          {state?.dns.length ? (
+              <Table>
                 <Table.Thead>
                   <Table.Tr><Table.Th>{t('Host')}</Table.Th><Table.Th>{t('IP')}</Table.Th></Table.Tr>
                 </Table.Thead>
@@ -637,9 +637,72 @@ export default function ConfigPage() {
             ) : (
               <Text c="dimmed" size="sm">{t('No entries')}</Text>
             )}
-          </Accordion.Panel>
-        </Accordion.Item>
-      </Accordion>
+          </Section>
+        </Tabs.Panel>
+
+        <Tabs.Panel value="relay">
+          <Section
+            title={t('Relay')}
+            description={t('mTLS connection configuration for the relay. To get the certificate by email use the Relay page; here you can also paste a manual certificate.')}
+            right={
+              <Badge color={relayCfg?.hasCertificate ? 'green' : 'gray'} variant="light">
+                {relayCfg?.hasCertificate ? t('certificate present') : t('certificate missing')}
+              </Badge>
+            }
+          >
+        <SimpleGrid cols={{ base: 1, sm: 2 }} mb="sm">
+          <TextInput label={t('mTLS address')} placeholder="relay.example.com:8443"
+            value={relayAddress} onChange={(e) => setRelayAddress(e.currentTarget.value)} />
+          <Select label={t('Route to reach the relay')} clearable placeholder={t('Automatic')}
+            data={selectableRoutes.map((r) => ({ value: r.name, label: r.name }))}
+            value={relayRoute || null} onChange={(v) => setRelayRoute(v ?? '')} />
+        </SimpleGrid>
+        <Switch label={t('Allow contacts to reach services on this machine')}
+          description={t('AllowLocal: not recommended unless strictly necessary.')}
+          checked={relayAllowLocal} onChange={(e) => setRelayAllowLocal(e.currentTarget.checked)} />
+        <Group justify="space-between" mt="sm">
+          <Text size="xs" c="dimmed">
+            {relayCfg?.device ? <>{t('Device:')} <Code>{relayCfg.device}</Code> {t('(editable from the Relay page)')}</> : t('Device not yet assigned')}
+          </Text>
+          <Button variant="light" onClick={() => saveRelay(false)} disabled={!relayAddress.trim()}>
+            {t('Save relay')}
+          </Button>
+        </Group>
+
+        <Accordion mt="sm" variant="contained">
+          <Accordion.Item value="cert">
+            <Accordion.Control>
+              <Text size="sm" fw={600}>{t('Manual certificate')}</Text>
+            </Accordion.Control>
+            <Accordion.Panel>
+              <Stack gap="xs">
+                <Text size="xs" c="dimmed">
+                  {t('Leave empty to keep the current certificate. The content is saved only in the encrypted config and is no longer returned by the API.')}
+                </Text>
+                <Textarea label={t('Client certificate (PEM)')} minRows={3} value={relayCert}
+                  onChange={(e) => setRelayCert(e.currentTarget.value)} autosize />
+                <Textarea label={t('Client private key (PEM)')} minRows={3} value={relayKey}
+                  onChange={(e) => setRelayKey(e.currentTarget.value)} autosize />
+                <Textarea label={t('Relay CA (PEM, optional)')} minRows={2} value={relayCA}
+                  onChange={(e) => setRelayCA(e.currentTarget.value)} autosize />
+                <Group justify="space-between">
+                  <Button variant="subtle" color="red"
+                    onClick={() => window.confirm(t('Remove the relay certificate and key?')) && saveRelay(true)}
+                    disabled={!relayCfg?.hasCertificate}>
+                    {t('Remove certificate')}
+                  </Button>
+                  <Button onClick={() => saveRelay(false)}
+                    disabled={(!relayCert && !relayKey && !relayCA) || !relayAddress.trim()}>
+                    {t('Save certificate')}
+                  </Button>
+                </Group>
+              </Stack>
+            </Accordion.Panel>
+          </Accordion.Item>
+        </Accordion>
+          </Section>
+        </Tabs.Panel>
+      </Tabs>
 
       <Modal opened={opened} onClose={close} title={editing ? t('Edit {{name}}', { name: editing.name }) : t('New route')} centered size="xl">
         <Stack gap="sm">

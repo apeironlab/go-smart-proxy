@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  ActionIcon, Alert, Badge, Card, Code, Drawer, Group, SimpleGrid, Stack, Switch, Table, Text, TextInput, Title,
+  ActionIcon, Alert, Badge, Card, Code, Drawer, Group, SimpleGrid, Stack, Switch, Table, Text, TextInput,
 } from '@mantine/core'
-import { IconSearch, IconX } from '@tabler/icons-react'
+import {
+  IconArrowDown, IconArrowUp, IconPlugConnected, IconSearch, IconServer, IconUser, IconX,
+} from '@tabler/icons-react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../api'
 import type { ConnInfo } from '../api'
+import { Dot, EmptyState, Info, PageHeader, StatCard } from '../components/ui'
 
 const stateColors: Record<string, string> = {
   connecting: 'gray',
@@ -41,15 +44,6 @@ function fmtDur(conn: ConnInfo) {
 function fmtTime(t: string) {
   const d = new Date(t)
   return `${d.toLocaleTimeString('it-IT')}.${String(d.getMilliseconds()).padStart(3, '0')}`
-}
-
-function Info({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <Text size="xs" c="dimmed">{label}</Text>
-      <Text size="sm" style={{ wordBreak: 'break-all' }}>{value}</Text>
-    </div>
-  )
 }
 
 function ConnDetails({ conn }: { conn: ConnInfo }) {
@@ -140,90 +134,124 @@ export default function ConnectionsPage() {
 
   return (
     <>
-      <Group justify="space-between" mb="md">
-        <Title order={3}>{t('Connections')}</Title>
-        <Group>
-          <TextInput
-            placeholder={t('Filter by host, URL, proxy, route...')}
-            leftSection={<IconSearch size={14} />}
-            value={filter}
-            onChange={(e) => setFilter(e.currentTarget.value)}
-            rightSection={filter ? (
-              <ActionIcon size="sm" variant="subtle" color="gray" onClick={() => setFilter('')}>
-                <IconX size={12} />
-              </ActionIcon>
-            ) : null}
-            w={300}
-          />
-          <Switch
-            label={t('Show closed')}
-            checked={showClosed}
-            onChange={(e) => setShowClosed(e.currentTarget.checked)}
-          />
-        </Group>
-      </Group>
+      <PageHeader
+        icon={IconPlugConnected}
+        title={t('Connections')}
+        description={t('Live view of the traffic going through the proxy. Click a row for the details and the event log.')}
+        actions={
+          <>
+            <TextInput
+              placeholder={t('Filter by host, URL, proxy, route...')}
+              leftSection={<IconSearch size={14} />}
+              value={filter}
+              onChange={(e) => setFilter(e.currentTarget.value)}
+              rightSection={filter ? (
+                <ActionIcon size="sm" variant="subtle" color="gray" onClick={() => setFilter('')} aria-label={t('Clear')}>
+                  <IconX size={12} />
+                </ActionIcon>
+              ) : null}
+              w={{ base: '100%', sm: 300 }}
+            />
+            <Switch
+              label={t('Show closed')}
+              checked={showClosed}
+              onChange={(e) => setShowClosed(e.currentTarget.checked)}
+            />
+          </>
+        }
+      />
 
       {error && <Alert color="red" mb="md">{t('Failed to load: {{error}}', { error })}</Alert>}
 
-      <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }} mb="md">
-        <Card withBorder><Text size="sm" c="dimmed">{t('Active connections')}</Text><Text fw={700} size="xl">{active}</Text></Card>
-        <Card withBorder><Text size="sm" c="dimmed">Client → proxy</Text><Text fw={700} size="lg">{fmtBytes(totals.in)}</Text></Card>
-        <Card withBorder><Text size="sm" c="dimmed">Proxy → client</Text><Text fw={700} size="lg">{fmtBytes(totals.out)}</Text></Card>
-        <Card withBorder>
-          <Text size="sm" c="dimmed">Upstream in / out</Text>
-          <Text fw={700} size="lg">{fmtBytes(totals.upIn)} / {fmtBytes(totals.upOut)}</Text>
-        </Card>
+      <SimpleGrid cols={{ base: 2, md: 4 }} mb="lg">
+        <StatCard label={t('Active connections')} value={active} icon={IconPlugConnected} color="teal" />
+        <StatCard label="Client → proxy" value={fmtBytes(totals.in)} icon={IconUser} color="brand" />
+        <StatCard label="Proxy → client" value={fmtBytes(totals.out)} icon={IconUser} color="grape" />
+        <StatCard
+          label={t('Upstream in / out')}
+          value={`${fmtBytes(totals.upIn)} / ${fmtBytes(totals.upOut)}`}
+          icon={IconServer}
+          color="cyan"
+        />
       </SimpleGrid>
 
-      <Table striped highlightOnHover withTableBorder stickyHeader stickyHeaderOffset={0}>
-        <Table.Thead>
-          <Table.Tr>
-            <Table.Th>#</Table.Th>
-            <Table.Th>{t('Type')}</Table.Th>
-            <Table.Th>{t('From')}</Table.Th>
-            <Table.Th>{t('Requested host')}</Table.Th>
-            <Table.Th>{t('To')}</Table.Th>
-            <Table.Th>Proxy</Table.Th>
-            <Table.Th>Route</Table.Th>
-            <Table.Th>Auth</Table.Th>
-            <Table.Th>{t('State')}</Table.Th>
-            <Table.Th>↓ client</Table.Th>
-            <Table.Th>↑ client</Table.Th>
-            <Table.Th>↓ upstream</Table.Th>
-            <Table.Th>↑ upstream</Table.Th>
-            <Table.Th>{t('Duration')}</Table.Th>
-            <Table.Th />
-          </Table.Tr>
-        </Table.Thead>
-        <Table.Tbody>
-          {filtered.map((c) => (
-            <Table.Tr key={c.id} onClick={() => setSelectedId(c.id)} style={{ cursor: 'pointer' }}>
-              <Table.Td>{c.id}</Table.Td>
-              <Table.Td><Badge variant="light" color="gray" size="sm">{c.type}</Badge></Table.Td>
-              <Table.Td><Text size="sm" truncate="end" maw={130}>{c.client || '-'}</Text></Table.Td>
-              <Table.Td><Text size="sm" truncate="end" maw={220} title={c.host}>{c.host || '-'}</Text></Table.Td>
-              <Table.Td><Text size="sm" truncate="end" maw={170}>{c.target || '-'}</Text></Table.Td>
-              <Table.Td><Text size="sm" truncate="end" maw={130}>{c.proxy || '-'}</Text></Table.Td>
-              <Table.Td><Text size="sm" truncate="end" maw={110}>{c.route || '-'}</Text></Table.Td>
-              <Table.Td><Badge size="sm" color={authColors[c.auth] ?? 'gray'} variant="light">{c.auth}</Badge></Table.Td>
-              <Table.Td><Badge size="sm" color={stateColors[c.state] ?? 'gray'} variant="light">{c.state}</Badge></Table.Td>
-              <Table.Td><Text size="xs">{fmtBytes(c.bytesClientIn)}</Text></Table.Td>
-              <Table.Td><Text size="xs">{fmtBytes(c.bytesClientOut)}</Text></Table.Td>
-              <Table.Td><Text size="xs">{fmtBytes(c.bytesUpIn)}</Text></Table.Td>
-              <Table.Td><Text size="xs">{fmtBytes(c.bytesUpOut)}</Text></Table.Td>
-              <Table.Td><Text size="xs">{fmtDur(c)}</Text></Table.Td>
-              <Table.Td onClick={(e) => e.stopPropagation()}>
-                {!c.ended && (
-                  <ActionIcon size="sm" color="red" variant="subtle" title={t('Close connection')}
-                    onClick={() => api.closeConnection(c.id)}>
-                    <IconX size={14} />
-                  </ActionIcon>
-                )}
-              </Table.Td>
-            </Table.Tr>
-          ))}
-        </Table.Tbody>
-      </Table>
+      <Card withBorder padding={0}>
+        {filtered.length === 0 ? (
+          <EmptyState
+            icon={IconPlugConnected}
+            title={filter ? t('No connection matches the filter') : t('No connections yet')}
+            text={filter ? undefined : t('Traffic will appear here as soon as an application uses the proxy.')}
+          />
+        ) : (
+          <Table.ScrollContainer minWidth={900}>
+            <Table highlightOnHover style={{ border: 0, borderRadius: 0 }}>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>#</Table.Th>
+                  <Table.Th>{t('Destination')}</Table.Th>
+                  <Table.Th>{t('Route')}</Table.Th>
+                  <Table.Th>{t('State')}</Table.Th>
+                  <Table.Th>{t('Traffic')}</Table.Th>
+                  <Table.Th>{t('Duration')}</Table.Th>
+                  <Table.Th />
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {filtered.map((c) => (
+                  <Table.Tr key={c.id} onClick={() => setSelectedId(c.id)} style={{ cursor: 'pointer' }}>
+                    <Table.Td c="dimmed">{c.id}</Table.Td>
+                    <Table.Td>
+                      <Group gap={8} wrap="nowrap">
+                        <Badge variant="light" color="gray" size="sm" radius="sm">{c.type}</Badge>
+                        <div style={{ minWidth: 0 }}>
+                          <Text size="sm" fw={600} truncate="end" maw={280} title={c.host || c.target}>
+                            {c.host || c.target || '-'}
+                          </Text>
+                          <Text size="xs" c="dimmed" truncate="end" maw={280}>
+                            {t('from')} {c.client || '-'}{c.target && c.host ? ` · ${c.target}` : ''}
+                          </Text>
+                        </div>
+                      </Group>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text size="sm" truncate="end" maw={180}>{c.route || '-'}</Text>
+                      <Text size="xs" c="dimmed" truncate="end" maw={180}>{c.proxy || t('direct')}</Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Group gap={6} wrap="nowrap">
+                        <Dot color={stateColors[c.state] ?? 'gray'} />
+                        <Text size="sm">{c.state}</Text>
+                      </Group>
+                      <Badge size="xs" mt={2} color={authColors[c.auth] ?? 'gray'} variant="light" radius="sm">{c.auth}</Badge>
+                    </Table.Td>
+                    <Table.Td>
+                      <Group gap={10} wrap="nowrap">
+                        <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
+                          <IconArrowDown size={11} style={{ verticalAlign: -1 }} /> {fmtBytes(c.bytesClientIn)}
+                          {' '}
+                          <IconArrowUp size={11} style={{ verticalAlign: -1 }} /> {fmtBytes(c.bytesClientOut)}
+                        </Text>
+                      </Group>
+                      <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }} title="upstream">
+                        <IconServer size={11} style={{ verticalAlign: -1 }} /> {fmtBytes(c.bytesUpIn)} / {fmtBytes(c.bytesUpOut)}
+                      </Text>
+                    </Table.Td>
+                    <Table.Td><Text size="sm" style={{ whiteSpace: 'nowrap' }}>{fmtDur(c)}</Text></Table.Td>
+                    <Table.Td onClick={(e) => e.stopPropagation()}>
+                      {!c.ended && (
+                        <ActionIcon size="sm" color="red" variant="subtle" title={t('Close connection')}
+                          aria-label={t('Close connection')} onClick={() => api.closeConnection(c.id)}>
+                          <IconX size={14} />
+                        </ActionIcon>
+                      )}
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          </Table.ScrollContainer>
+        )}
+      </Card>
 
       <Drawer
         opened={!!selected}
