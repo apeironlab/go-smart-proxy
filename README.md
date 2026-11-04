@@ -867,6 +867,20 @@ Main `serve` flags:
 | `-smtp-user`, `-smtp-pass` | SMTP credentials (password also via env) |
 | `-smtp-tls` | `starttls` (default), `tls`, or `none` |
 | `-smtp-auth` | `auto` (default), `plain`, `login`, or `none` |
+| `-revoked` | Revocation list file (e-mail or `serial:HEX` per line); needed by the management interface |
+| `-auth-config` | YAML file with the sign-in methods (see below) |
+| `-trust-forwarded-for` | Take the client address from `X-Forwarded-For` (only behind a trusted proxy) |
+| `-apps` | YAML file with the applications catalog (read-only) |
+| `-admin-db` | Enable the management interface, with this SQLite database |
+| `-admin-groups`, `-admin-emails` | Who may sign in to the interface |
+| `-admin-methods` | Sign-in method ids allowed for administrators (default: all) |
+| `-admin-session` | Administrator session lifetime (default `8h`) |
+
+Other commands: `proxyrelay ca gateway` (gateway certificate), `revoke` /
+`unrevoke` (edit the revocation list), `user add` (add a user to a password
+users file; the password comes from a prompt, stdin or `PROXYRELAY_PASSWORD`,
+never from an argument) and `admin user` (create a local user in the
+management interface database).
 
 The relay exits cleanly rather than serving a broken enrollment if SMTP is not
 configured; it logs `enrollment disabled` and keeps the mTLS relay running.
@@ -992,13 +1006,9 @@ methods:
       require_groups: [vpn-users]
 ```
 
-**Wiring.** The enrollment server takes it as `EnrollConfig.Auth`:
-
-```go
-auth, err := relay.LoadAuthConfig("/data/auth.yml") // e.g. a new -auth-config flag
-// ...
-relay.NewEnrollServer(relay.EnrollConfig{ /* as before */, Auth: auth, PublicURL: "https://proxy.intra.example.com" })
-```
+**Wiring.** Pass the file to `proxyrelay serve -auth-config auth.yml`. (From Go
+code the enrollment server takes it as `EnrollConfig.Auth`, loaded with
+`relay.LoadAuthConfig`.)
 
 `PublicURL` (`-public-url`) must be the address users and identity providers
 reach the enrollment endpoint at: it builds the return addresses
@@ -1105,7 +1115,7 @@ serves. It connects *out* to the relay (no inbound port) with a **service
 certificate**, is told by the relay which applications it serves, and connects
 only to the targets in that catalog, never to anything a user asks for. Issue
 the certificate from the management interface (Applications → New gateway; the
-private key is shown once) or with `relay.IssueGateway`, then run:
+private key is shown once) or with `proxyrelay ca gateway -dir ca -out gw -id hq`, then run:
 
 ```bash
 proxygateway -relay relay.example.com:8443 -cert gateway.pem -key gateway-key.pem -ca ca.pem
@@ -1140,8 +1150,10 @@ An application with no group, address or `everyone` is open to nobody. The
 catalog is read from a file (`relay.LoadCatalogFile`; it is watched and changes
 reach users and gateways within seconds) or, when the management interface is
 enabled, edited there and kept in its database (`admin.SetCatalog`). Wire it
-with `srv.AttachCatalog(catalog)`, and give `EnrollConfig.Store` the server's
-`Store` so that the groups reported at sign-in are remembered.
+with `proxyrelay serve -apps apps.yml` (a file) or, with `-admin-db`, from the
+interface. The command sets `EnrollConfig.Store` so that the groups reported at
+sign-in are remembered (from Go code: `srv.AttachCatalog(catalog)`,
+`admin.SetCatalog(catalog)` and `EnrollConfig.Store`).
 
 **What users learn.** Only the name, description, host name and whether the
 gateway is online, and only for applications they may open. Targets, gateways
@@ -1169,8 +1181,19 @@ addresses; an identity can always be revoked in the interface.
 ### Relay administration interface (optional)
 
 A web interface to see and manage the relay. It is **off by default**: without
-it the relay works exactly as before, from its files. Switch it on (in your
-relay's `main`) by creating an `Admin` and passing it to the enrollment server:
+it the relay works exactly as before, from its files. Switch it on with
+`-admin-db`:
+
+```bash
+proxyrelay admin user -db /data/admin.db -name root -email root@example.com -groups relay-admins
+proxyrelay serve ... -enroll-listen :8444 -public-url https://enroll.example.com \
+  -revoked /data/revoked.txt -auth-config /data/auth.yml \
+  -admin-db /data/admin.db -admin-groups relay-admins
+```
+
+(`auth.yml` needs a password method with `database: true` for that local user,
+or an OpenID Connect / SAML / LDAP method whose users are in `relay-admins`.)
+From Go code the same is:
 
 ```go
 rev := relay.NewRevocations("/data/revoked.txt")

@@ -563,3 +563,21 @@ func (a *Admin) fail(w http.ResponseWriter, err error) {
 	a.log.Printf("admin: %v", err)
 	writeError(w, http.StatusInternalServerError, "internal error")
 }
+
+// AddUserToAdminDB creates (or updates) a local password user in the database
+// of the management interface without starting the relay: how the first
+// administrator is created from the command line.
+func AddUserToAdminDB(dbPath, username, password, email string, groups ...string) error {
+	db, err := openAdminDB(dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := db.addUser(username, password, email, groups); err != nil {
+		if errors.Is(err, errUserExists) {
+			return db.updateUser(username, password, firstNonEmpty(email, username), groups)
+		}
+		return err
+	}
+	return nil
+}
