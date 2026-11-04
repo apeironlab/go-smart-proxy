@@ -181,6 +181,12 @@ func firstRuleRoute(host string) (*ProxyRoute, string) {
 // destination rules, then the default selection. The second value is the name
 // of the matching rule, if any.
 func routeFor(host string) (*ProxyRoute, string) {
+	// An application published by a relay always goes to that relay: not even
+	// a forced route or a rule sends it elsewhere, since nothing else could
+	// reach it.
+	if rt, name := appRoute(host); rt != nil {
+		return rt, "application " + name
+	}
 	if getForceRoute() == nil {
 		if rt, rule := firstRuleRoute(host); rt != nil {
 			// A rule selects the route explicitly: use the whole chain,

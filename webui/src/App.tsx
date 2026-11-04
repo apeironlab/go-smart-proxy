@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AppShell, Alert, Anchor, Badge, Burger, Code, Group, Menu, NavLink, ScrollArea, ThemeIcon, Title, Tooltip, ActionIcon, useMantineColorScheme } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
-import { IconBell, IconKey, IconLanguage, IconMoon, IconSun, IconNetwork, IconRoute, IconRouteAltRight, IconPlugConnected, IconSettings } from '@tabler/icons-react'
+import { IconBell, IconKey, IconLanguage, IconMoon, IconSun, IconNetwork, IconRoute, IconRouteAltRight, IconPlugConnected, IconSettings, IconApps } from '@tabler/icons-react'
 import ConnectionsPage from './pages/ConnectionsPage'
 import CredentialsPage from './pages/CredentialsPage'
 import ConfigPage from './pages/ConfigPage'
 import OnboardingPage from './pages/OnboardingPage'
+import AppsPage from './pages/AppsPage'
 import RelayPage from './pages/RelayPage'
 import RulesPage from './pages/RulesPage'
 import { api } from './api'
@@ -21,6 +22,7 @@ export default function App() {
   const [state, setState] = useState<StateInfo | null>(null)
   const [error, setError] = useState(false)
   const [pending, setPending] = useState(0)
+  const [appCount, setAppCount] = useState(0)
 
   useEffect(() => {
     const load = () =>
@@ -37,14 +39,19 @@ export default function App() {
       api.relays().then((all) => setPending(all.reduce((n, r) => n + r.approvals.length + r.incoming.length, 0))).catch(() => {})
     loadRelay()
     const relayTimer = setInterval(loadRelay, 3000)
+    const loadApps = () => api.apps().then((a) => setAppCount(a.length)).catch(() => {})
+    loadApps()
+    const appsTimer = setInterval(loadApps, 5000)
     return () => {
       clearInterval(timer)
       clearInterval(relayTimer)
+      clearInterval(appsTimer)
     }
   }, [])
 
   const pages = [
     { id: 'connections', label: t('Connections'), icon: IconPlugConnected, comp: <ConnectionsPage /> },
+    ...(appCount > 0 ? [{ id: 'apps', label: t('Applications'), icon: IconApps, comp: <AppsPage state={state} />, badge: 0 }] : []),
     { id: 'rules', label: t('Rules'), icon: IconRoute, comp: <RulesPage /> },
     { id: 'relay', label: t('Relay'), icon: IconRouteAltRight, comp: <RelayPage />, badge: pending },
     { id: 'credentials', label: t('Credentials'), icon: IconKey, comp: <CredentialsPage /> },

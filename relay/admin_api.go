@@ -58,6 +58,13 @@ func (a *Admin) handleOverview(w http.ResponseWriter, r *http.Request, _ *adminS
 			return online[i].Device < online[j].Device
 		})
 	}
+	appCount, gwOnline := 0, 0
+	if c := a.cat(); c != nil {
+		appCount = len(c.Apps())
+	}
+	if srv := a.srv(); srv != nil {
+		gwOnline = len(srv.OnlineGateways())
+	}
 	people := map[string]bool{}
 	for _, d := range online {
 		people[d.Email] = true
@@ -71,6 +78,7 @@ func (a *Admin) handleOverview(w http.ResponseWriter, r *http.Request, _ *adminS
 		"counts": map[string]int{
 			"devices": len(online), "users": len(people), "certs": active, "revokedCerts": revoked,
 			"expiring": expiring, "pending": a.enroll.pendingCount(), "localUsers": len(locals), "revokedUsers": len(emails),
+			"apps": appCount, "gateways": gwOnline,
 		},
 		"online": online,
 		"recent": recent,

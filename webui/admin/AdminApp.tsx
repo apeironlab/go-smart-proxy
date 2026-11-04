@@ -6,7 +6,7 @@ import {
 } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
 import {
-  IconActivity, IconHistory, IconLanguage, IconLogout, IconMoon, IconServerCog, IconShieldLock, IconSun, IconUsers,
+  IconActivity, IconApps, IconHistory, IconLanguage, IconLogout, IconMoon, IconServerCog, IconShieldLock, IconSun, IconUsers,
 } from '@tabler/icons-react'
 import { languages, loadLanguage } from '../src/i18n'
 import { adminApi, setAuthLostHandler, setCsrf } from './api'
@@ -15,6 +15,7 @@ import LoginPage from './pages/LoginPage'
 import OverviewPage from './pages/OverviewPage'
 import UsersPage from './pages/UsersPage'
 import AccessPage from './pages/AccessPage'
+import AppsPage from './pages/AppsPage'
 import AuditPage from './pages/AuditPage'
 
 export default function AdminApp() {
@@ -54,6 +55,7 @@ export default function AdminApp() {
   const pages = [
     { id: 'overview', label: t('Overview'), icon: IconActivity, comp: <OverviewPage /> },
     { id: 'users', label: t('Users and certificates'), icon: IconUsers, comp: <UsersPage self={session.email ?? ''} /> },
+    { id: 'apps', label: t('Applications'), icon: IconApps, comp: <AppsPage /> },
     { id: 'access', label: t('Access and enrollment'), icon: IconShieldLock, comp: <AccessPage /> },
     { id: 'audit', label: t('Audit log'), icon: IconHistory, comp: <AuditPage /> },
   ]

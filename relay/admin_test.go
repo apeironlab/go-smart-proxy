@@ -803,3 +803,122 @@ func mustStore(t *testing.T) *Store {
 	}
 	return s
 }
+
+func TestAdminManagesApplicationsAndGateways(t *testing.T) {
+	dir := t.TempDir()
+	f := newAdminFixture(t, adminOpts{dir: dir})
+	cat := NewCatalog()
+	srv := NewServer(mustStore(t))
+	srv.AttachCatalog(cat)
+	f.admin.SetServer(srv)
+	if err := f.admin.SetCatalog(cat); err != nil {
+		t.Fatal(err)
+	}
+	b := f.loggedIn(t)
+
+	var got struct {
+		Enabled  bool  `json:"enabled"`
+		ReadOnly bool  `json:"readOnly"`
+		Apps     []App `json:"apps"`
+	}
+	b.get("/admin/api/apps", &got, 200)
+	if !got.Enabled || got.ReadOnly || len(got.Apps) != 0 {
+		t.Fatalf("apps: %+v", got)
+	}
+	app := App{ID: "crm", Name: "CRM", Host: "crm.apps", Kind: "http", Gateway: "g1", Target: "http://10.0.0.5:8080", Groups: []string{"sales"}}
+	b.send("PUT", "/admin/api/apps", map[string]any{"apps": []App{app}}, &got, 200)
+	if len(got.Apps) != 1 || got.Apps[0].ID != "crm" || len(cat.Apps()) != 1 {
+		t.Fatalf("saved: %+v", got)
+	}
+	// invalid catalogs are refused and change nothing
+	bad := app
+	bad.Host = "10.0.0.1"
+	b.send("PUT", "/admin/api/apps", map[string]any{"apps": []App{bad}}, nil, 400)
+	b.send("PUT", "/admin/api/apps", map[string]any{"apps": []App{app, app}}, nil, 400)
+	if len(cat.Apps()) != 1 {
+		t.Fatal("a refused catalog changed the live one")
+	}
+
+	// gateways: issue (the key is shown once), see it, revoke it
+	var issued struct {
+		Serial, CertPem, KeyPem, CaPem string
+	}
+	b.send("POST", "/admin/api/gateways", map[string]string{"id": "g1"}, &issued, 200)
+	if issued.Serial == "" || !strings.Contains(issued.KeyPem, "PRIVATE KEY") || !strings.Contains(issued.CertPem, "CERTIFICATE") {
+		t.Fatalf("issued: %+v", issued)
+	}
+	if id, ok := GatewayFromCert(parseCert(t, issued.CertPem)); !ok || id != "g1" {
+		t.Fatalf("certificate identity: %q %v", id, ok)
+	}
+	b.send("POST", "/admin/api/gateways", map[string]string{"id": "Bad Id"}, nil, 400)
+	var gws []GatewayInfo
+	b.get("/admin/api/gateways", &gws, 200)
+	if len(gws) != 1 || gws[0].ID != "g1" || gws[0].Online || gws[0].Apps != 1 || len(gws[0].Certs) != 1 || gws[0].Certs[0].Revoked {
+		t.Fatalf("gateways: %+v", gws)
+	}
+	if strings.Contains(mustJSON(gws), "PRIVATE KEY") {
+		t.Fatal("the key is kept")
+	}
+	b.send("POST", "/admin/api/gateways/g1/revoke", nil, nil, 200)
+	if !NewRevocations(f.rev).Revoked(parseCert(t, issued.CertPem)) {
+		t.Fatal("the gateway certificate is not revoked")
+	}
+	b.get("/admin/api/gateways", &gws, 200)
+	if !gws[0].Certs[0].Revoked {
+		t.Fatalf("gateways after revoke: %+v", gws)
+	}
+	b.send("POST", "/admin/api/gateways/Bad%20Id/revoke", nil, nil, 400)
+
+	var kinds []Event
+	b.get("/admin/api/events?kind=admin.&limit=50", &kinds, 200)
+	seen := map[string]bool{}
+	for _, e := range kinds {
+		seen[e.Kind] = true
+	}
+	for _, k := range []string{"admin.app.save", "admin.gateway.issue", "admin.gateway.revoke"} {
+		if !seen[k] {
+			t.Fatalf("no %s event: %v", k, seen)
+		}
+	}
+
+	// the catalog survives a restart
+	f.admin.Close()
+	f2 := newAdminFixture(t, adminOpts{dir: dir})
+	cat2 := NewCatalog()
+	if err := f2.admin.SetCatalog(cat2); err != nil {
+		t.Fatal(err)
+	}
+	if len(cat2.Apps()) != 1 || cat2.Apps()[0].Target != "http://10.0.0.5:8080" {
+		t.Fatalf("after restart: %+v", cat2.Apps())
+	}
+
+	// a catalog kept in a file is shown but not edited
+	path := filepath.Join(t.TempDir(), "apps.yaml")
+	os.WriteFile(path, []byte("apps: []\n"), 0o600)
+	fc, err := LoadCatalogFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fc.Close()
+	f3 := newAdminFixture(t, adminOpts{})
+	f3.admin.SetCatalog(fc)
+	b3 := f3.loggedIn(t)
+	b3.get("/admin/api/apps", &got, 200)
+	if !got.ReadOnly {
+		t.Fatalf("file catalog: %+v", got)
+	}
+	b3.send("PUT", "/admin/api/apps", map[string]any{"apps": []App{app}}, nil, 400)
+}
+
+func TestAppsAreNotAvailableWithoutACatalog(t *testing.T) {
+	f := newAdminFixture(t, adminOpts{})
+	b := f.loggedIn(t)
+	var got struct {
+		Enabled bool `json:"enabled"`
+	}
+	b.get("/admin/api/apps", &got, 200)
+	if got.Enabled {
+		t.Fatal("apps enabled without a catalog")
+	}
+	b.send("PUT", "/admin/api/apps", map[string]any{"apps": []App{}}, nil, 404)
+}

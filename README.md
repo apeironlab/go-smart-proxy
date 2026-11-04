@@ -42,6 +42,7 @@ English as fallback; code, comments and this README are in English.
   - [Relay server](#relay-server)
   - [Manual certificate provisioning](#manual-certificate-provisioning)
   - [Enrollment over email](#enrollment-over-email)
+  - [Applications (remote access to protected apps)](#applications-remote-access-to-protected-apps)
   - [Relay administration interface (optional)](#relay-administration-interface-optional)
   - [Kubernetes deployment](#kubernetes-deployment)
 - [Security](#security)
@@ -1084,6 +1085,87 @@ shows the confirmation code to type there after you sign in, and continues by
 itself when you are done. Relays that predate this feature
 simply offer the e-mail code.
 
+### Applications (remote access to protected apps)
+
+Besides reaching a colleague's network, the relay can publish **applications**:
+web apps and network services (RDP, SSH, databases...) that live behind a
+gateway. It works like a small Citrix-style portal built on the proxy: the relay
+pushes a catalog to each user, the user sees it in the **Applications** page of
+the proxy UI, and the proxy sends connections to those host names to the relay
+by itself. No route or rule is set up on the user's side, and a forced route
+does not override it.
+
+```
+browser / RDP client  ->  local proxy  ->  relay  ->  gateway  ->  application
+                          (mTLS, automatic)   (checks who may open it)  (only catalog targets)
+```
+
+**Gateway.** One per application, or one per site, installed next to what it
+serves. It connects *out* to the relay (no inbound port) with a **service
+certificate**, is told by the relay which applications it serves, and connects
+only to the targets in that catalog, never to anything a user asks for. Issue
+the certificate from the management interface (Applications → New gateway; the
+private key is shown once) or with `relay.IssueGateway`, then run:
+
+```bash
+proxygateway -relay relay.example.com:8443 -cert gateway.pem -key gateway-key.pem -ca ca.pem
+```
+
+**Catalog.** Each application has an id, a name, a description, a host name
+(what users type; it need not exist in DNS), a gateway, a target and who may
+open it:
+
+```yaml
+apps:
+  - id: crm
+    name: CRM
+    description: Customer database
+    host: crm.apps.example.com
+    kind: http                     # a reverse proxy to the URL in target
+    gateway: hq
+    target: https://crm.internal:8443
+    groups: [sales]                # members of these groups ...
+    emails: [boss@example.com]     # ... and these addresses
+    set_headers: {X-Remote-User: gateway}   # optional, http only
+  - id: files-rdp
+    name: File server (RDP)
+    host: rdp.apps.example.com
+    kind: tcp                      # bytes are passed on to host:port
+    gateway: hq
+    target: 10.0.0.20:3389
+    everyone: true                 # every signed-in user
+```
+
+An application with no group, address or `everyone` is open to nobody. The
+catalog is read from a file (`relay.LoadCatalogFile`; it is watched and changes
+reach users and gateways within seconds) or, when the management interface is
+enabled, edited there and kept in its database (`admin.SetCatalog`). Wire it
+with `srv.AttachCatalog(catalog)`, and give `EnrollConfig.Store` the server's
+`Store` so that the groups reported at sign-in are remembered.
+
+**What users learn.** Only the name, description, host name and whether the
+gateway is online, and only for applications they may open. Targets, gateways
+and rules are never sent to them; an application they may not open is
+indistinguishable from one that does not exist, and a backend that is down is
+reported without saying where it is.
+
+**http applications** are reverse-proxied by the gateway: `Host`, `Origin` and
+`Referer` are rewritten to the backend, redirects and cookie domains of the
+answers go back to the name the user typed, and `set_headers` are added.
+Users open them with `http://host/`: the leg to the relay is already
+encrypted, and the gateway uses `https` toward the backend when the target is
+an `https://` URL. **tcp applications** need a client that can use a proxy:
+point it at the name and set SOCKS5 to the proxy's address (the page shows it).
+
+**Security notes.** A gateway certificate carries a URI identity that
+enrollment can never produce, so nobody can pose as a gateway, and a gateway
+cannot act as a user. Revoking its certificate (or the gateway in the
+interface) cuts it at once. Access is checked by the relay on every open, so a
+change to the catalog applies to the next connection. Groups are those the
+identity provider reported when the user last enrolled (the e-mail code
+reports none), so for fast revocation use short certificate lifetimes or list
+addresses; an identity can always be revoked in the interface.
+
 ### Relay administration interface (optional)
 
 A web interface to see and manage the relay. It is **off by default**: without
@@ -1461,6 +1543,8 @@ that the `relay` package builds without Node.
 | `relay/` | Relay protocol, server, store, CA, enrollment, SMTP, sign-in methods, administration interface |
 | `webui/admin/` | React app of the relay administration interface (built into `relay/adminui/static`) |
 | `cmd/proxyrelay/` | Relay server CLI |
+| `cmd/proxygateway/` | Application gateway (serves applications published by a relay) |
+| `relayapps.go` | Applications published by relays: automatic routing and `/api/apps` |
 | `webui/` | React management UI |
 | `deploy/` | Kubernetes example |
 | `Dockerfile.relay` | Relay image |

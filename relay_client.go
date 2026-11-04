@@ -446,6 +446,23 @@ func (r *relayClient) SetDevice(device string) {
 // Dial opens a connection to target through the network of contact email. An
 // empty device means any online device of that contact.
 func (r *relayClient) Dial(email, device, target string) (net.Conn, error) {
+	return r.dialRequest(relay.DialReq{T: relay.TDial, Via: email, ViaDevice: device, Target: target})
+}
+
+// DialApp opens a catalog application. The relay checks the user may open it
+// and connects to it through its gateway; the proxy does not say where.
+func (r *relayClient) DialApp(id string) (net.Conn, error) {
+	return r.dialRequest(relay.DialReq{T: relay.TDial, App: id})
+}
+
+// appInfos returns the applications the relay last said this user may open.
+func (r *relayClient) appInfos() []relay.AppInfo {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]relay.AppInfo{}, r.state.Apps...)
+}
+
+func (r *relayClient) dialRequest(req relay.DialReq) (net.Conn, error) {
 	r.mu.Lock()
 	sess := r.sess
 	r.mu.Unlock()
@@ -456,7 +473,7 @@ func (r *relayClient) Dial(email, device, target string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := relay.WriteLine(st, relay.DialReq{T: relay.TDial, Via: email, ViaDevice: device, Target: target}); err != nil {
+	if err := relay.WriteLine(st, req); err != nil {
 		st.Close()
 		return nil, err
 	}

@@ -38,6 +38,15 @@ CREATE TABLE IF NOT EXISTS certs (
 	revoked_by TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS certs_email ON certs(email);
+CREATE TABLE IF NOT EXISTS gateways (
+	serial     TEXT PRIMARY KEY,
+	id         TEXT NOT NULL,
+	issued     INTEGER NOT NULL,
+	expires    INTEGER NOT NULL,
+	revoked    INTEGER NOT NULL DEFAULT 0,
+	revoked_by TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS gateways_id ON gateways(id);
 CREATE TABLE IF NOT EXISTS events (
 	id      INTEGER PRIMARY KEY AUTOINCREMENT,
 	ts      INTEGER NOT NULL,
@@ -393,5 +402,47 @@ func (d *adminDB) setSetting(key string, v any) error {
 		return err
 	}
 	_, err = d.db.Exec(`INSERT INTO settings(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, string(b))
+	return err
+}
+
+// ---- gateways ---------------------------------------------------------
+
+// GatewayCert is a certificate issued to an application gateway.
+type GatewayCert struct {
+	Serial    string    `json:"serial"`
+	ID        string    `json:"id"`
+	Issued    time.Time `json:"issued"`
+	Expires   time.Time `json:"expires"`
+	Revoked   bool      `json:"revoked"`
+	RevokedBy string    `json:"revokedBy,omitempty"`
+}
+
+func (d *adminDB) recordGateway(g GatewayCert) error {
+	_, err := d.db.Exec(`INSERT OR REPLACE INTO gateways(serial, id, issued, expires) VALUES(?,?,?,?)`,
+		g.Serial, g.ID, g.Issued.Unix(), g.Expires.Unix())
+	return err
+}
+
+func (d *adminDB) gatewayCerts() ([]GatewayCert, error) {
+	rows, err := d.db.Query(`SELECT serial, id, issued, expires, revoked, revoked_by FROM gateways ORDER BY id, issued DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []GatewayCert{}
+	for rows.Next() {
+		var g GatewayCert
+		var issued, expires, revoked int64
+		if err := rows.Scan(&g.Serial, &g.ID, &issued, &expires, &revoked, &g.RevokedBy); err != nil {
+			return nil, err
+		}
+		g.Issued, g.Expires, g.Revoked = time.Unix(issued, 0), time.Unix(expires, 0), revoked != 0
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+func (d *adminDB) markGateway(serial string, by string) error {
+	_, err := d.db.Exec(`UPDATE gateways SET revoked = 1, revoked_by = ? WHERE serial = ?`, by, serial)
 	return err
 }

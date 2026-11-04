@@ -42,7 +42,7 @@ func newAppRelay(t *testing.T) (*appEnv, func(email string) *testClient, func(id
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ln.Close() })
-	store := mustStore(t)
+	store, _ := NewStore("") // no file: sessions end after the test and would write into a removed directory
 	srv := NewServer(store)
 	cat := NewCatalog()
 	srv.AttachCatalog(cat)

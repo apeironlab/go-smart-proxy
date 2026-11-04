@@ -63,6 +63,7 @@ type Admin struct {
 	mu       sync.Mutex
 	enroll   *EnrollServer
 	server   *Server
+	catalog  *Catalog
 	sessions map[string]*adminSession // by hash of the cookie
 	started  time.Time
 	events   int
@@ -114,6 +115,37 @@ func (a *Admin) SetServer(s *Server) {
 	a.server = s
 	a.mu.Unlock()
 	s.Audit = a.Record
+}
+
+const appsSetting = "apps"
+
+// SetCatalog makes the interface the owner of the catalog: applications are
+// edited here and kept in the database. A catalog read from a file stays
+// read-only (and is only shown).
+func (a *Admin) SetCatalog(c *Catalog) error {
+	a.mu.Lock()
+	a.catalog = c
+	a.mu.Unlock()
+	if c.ReadOnly() {
+		return nil
+	}
+	var apps []App
+	if _, err := a.db.getSetting(appsSetting, &apps); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.persist = func(apps []App) error { return a.db.setSetting(appsSetting, apps) }
+	c.mu.Unlock()
+	if len(apps) > 0 {
+		return c.Set(apps)
+	}
+	return nil
+}
+
+func (a *Admin) cat() *Catalog {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.catalog
 }
 
 func (a *Admin) srv() *Server {
@@ -216,6 +248,12 @@ func (a *Admin) mount(m *http.ServeMux) {
 	m.HandleFunc("POST /admin/api/local-users", a.protect(a.handleLocalUserAdd))
 	m.HandleFunc("PUT /admin/api/local-users/{name}", a.protect(a.handleLocalUserEdit))
 	m.HandleFunc("DELETE /admin/api/local-users/{name}", a.protect(a.handleLocalUserDelete))
+
+	m.HandleFunc("GET /admin/api/apps", a.protect(a.handleApps))
+	m.HandleFunc("PUT /admin/api/apps", a.protect(a.handleAppsPut))
+	m.HandleFunc("GET /admin/api/gateways", a.protect(a.handleGateways))
+	m.HandleFunc("POST /admin/api/gateways", a.protect(a.handleGatewayIssue))
+	m.HandleFunc("POST /admin/api/gateways/{id}/revoke", a.protect(a.handleGatewayRevoke))
 
 	m.HandleFunc("GET /admin/api/rules", a.protect(a.handleRulesGet))
 	m.HandleFunc("PUT /admin/api/rules", a.protect(a.handleRulesPut))

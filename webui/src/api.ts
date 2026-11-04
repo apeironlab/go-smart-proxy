@@ -218,7 +218,19 @@ const post = <T = unknown>(path: string, body: unknown) =>
     body: JSON.stringify(body),
   })
 
+export interface AppEntry {
+  relay: string
+  id: string
+  name: string
+  description: string
+  host: string
+  kind: 'tcp' | 'http'
+  online: boolean
+  url: string
+}
+
 export const api = {
+  apps: () => req<AppEntry[]>('/api/apps'),
   state: () => req<StateInfo>('/api/state'),
   routes: () => req<RouteInfo[]>('/api/routes'),
   reorderRoutes: (names: string[]) => post('/api/routes/order', { names }),

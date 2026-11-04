@@ -44,7 +44,7 @@ export interface AdminEvent {
 export interface Overview {
   now: string
   uptime: number
-  counts: Record<'devices' | 'users' | 'certs' | 'revokedCerts' | 'expiring' | 'pending' | 'localUsers' | 'revokedUsers', number>
+  counts: Record<'apps' | 'gateways' | 'devices' | 'users' | 'certs' | 'revokedCerts' | 'expiring' | 'pending' | 'localUsers' | 'revokedUsers', number>
   online: OnlineDevice[]
   recent: AdminEvent[]
 }
@@ -93,6 +93,45 @@ export interface SmtpRules {
   tls: string
   auth: string
   hasPass: boolean
+}
+
+export interface AppDef {
+  id: string
+  name: string
+  description?: string
+  host: string
+  kind: 'tcp' | 'http'
+  gateway: string
+  target: string
+  everyone?: boolean
+  emails?: string[]
+  groups?: string[]
+  setHeaders?: Record<string, string>
+  disabled?: boolean
+}
+
+export interface GatewayCert {
+  serial: string
+  id: string
+  issued: string
+  expires: string
+  revoked: boolean
+}
+
+export interface GatewayInfo {
+  id: string
+  online: boolean
+  apps: number
+  certs: GatewayCert[]
+}
+
+export interface GatewayIssued {
+  id: string
+  serial: string
+  expires: string
+  certPem: string
+  keyPem: string
+  caPem: string
 }
 
 export interface Rules {
@@ -171,6 +210,11 @@ export const adminApi = {
 
   rules: () => req<Rules>('GET', '/admin/api/rules'),
   saveRules: (r: RulesUpdate) => req<Rules>('PUT', '/admin/api/rules', r),
+  apps: () => req<{ enabled: boolean; readOnly?: boolean; apps: AppDef[] }>('GET', '/admin/api/apps'),
+  saveApps: (apps: AppDef[]) => req<{ enabled: boolean; readOnly?: boolean; apps: AppDef[] }>('PUT', '/admin/api/apps', { apps }),
+  gateways: () => req<GatewayInfo[]>('GET', '/admin/api/gateways'),
+  issueGateway: (id: string) => req<GatewayIssued>('POST', '/admin/api/gateways', { id }),
+  revokeGateway: (id: string) => req<{ ok: boolean; revoked: number }>('POST', `/admin/api/gateways/${encodeURIComponent(id)}/revoke`),
   events: (f: { kind?: string; q?: string; before?: number; limit?: number }) =>
     req<AdminEvent[]>('GET', `/admin/api/events${q(f)}`),
 }

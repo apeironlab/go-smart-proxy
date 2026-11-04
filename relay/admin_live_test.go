@@ -27,7 +27,8 @@ func TestAdminSeesAndDisconnectsLiveSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ln.Close() })
-	srv := NewServer(mustStore(t))
+	store, _ := NewStore("")
+	srv := NewServer(store)
 	srv.Revoked = NewRevocations(f.rev)
 	f.admin.SetServer(srv)
 	go srv.Serve(ln)

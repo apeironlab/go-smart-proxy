@@ -116,6 +116,8 @@ func registerRelayRoutes(m *http.ServeMux) {
 		}
 		writeJSON(w, out)
 	})
+	// The applications the relays publish to this user.
+	m.HandleFunc("GET /api/apps", appsHandler)
 	m.HandleFunc("GET /api/relay/config", func(w http.ResponseWriter, r *http.Request) {
 		configMu.Lock()
 		var cfg *RelayConfig

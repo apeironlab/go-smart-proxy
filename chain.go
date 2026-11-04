@@ -320,6 +320,17 @@ func dialChain(route *ProxyRoute, target, host string, rec *ConnInfo) (net.Conn,
 	if hops[0].scheme == "pac" {
 		return nil, nil, errors.New("a PAC hop cannot be dialed as a proxy chain")
 	}
+	if hops[0].scheme == "relayapp" {
+		// An application published by the relay: the relay takes the
+		// connection to its gateway. The target says nothing here.
+		rec.event(fmt.Sprintf("application %s on relay %s", hops[0].device, hops[0].relayName))
+		raw, err := relayHub.DialApp(hops[0].relayName, hops[0].device)
+		if err != nil {
+			return nil, nil, fmt.Errorf("application: %w", err)
+		}
+		conn := &countingConn{Conn: raw, in: &rec.bytesUpIn, out: &rec.bytesUpOut}
+		return conn, bufio.NewReader(conn), nil
+	}
 	relayIdx := -1
 	for i, h := range hops {
 		if h.scheme == "relay" {
