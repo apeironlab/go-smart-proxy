@@ -76,18 +76,21 @@ type relayClient struct {
 	ctrl      net.Conn
 	connected bool
 	started   bool
-	lastErr   string
-	route     string
-	device    string
-	email     string
-	state     relay.State
-	notice    string
-	noticeAt  time.Time
-	approvals map[int64]*relayApproval
-	rules     []relayRule
-	nextID    int64
-	sendMu    sync.Mutex
-	file      string // persisted state, relayStateFile by default
+	// the certificate in use
+	certExpires time.Time
+	deviceBound bool
+	lastErr     string
+	route       string
+	device      string
+	email       string
+	state       relay.State
+	notice      string
+	noticeAt    time.Time
+	approvals   map[int64]*relayApproval
+	rules       []relayRule
+	nextID      int64
+	sendMu      sync.Mutex
+	file        string // persisted state, relayStateFile by default
 }
 
 // stop disconnects the relay and ends its reconnection loop.
@@ -250,12 +253,23 @@ func (r *relayClient) connectOnce() error {
 	if err != nil {
 		return fmt.Errorf("client certificate: %w", err)
 	}
+	var renewLeaf *x509.Certificate
 	if leaf, err := x509.ParseCertificate(cert.Certificate[0]); err == nil {
 		if email, ok := relay.EmailFromCert(leaf); ok {
 			r.mu.Lock()
 			r.email = email
 			r.mu.Unlock()
 		}
+		// A certificate issued for a device is that device's identity.
+		if d := relay.DeviceFromCert(leaf); d != "" {
+			r.mu.Lock()
+			r.device = d
+			r.mu.Unlock()
+		}
+		renewLeaf = leaf
+		r.mu.Lock()
+		r.certExpires, r.deviceBound = leaf.NotAfter, relay.DeviceFromCert(leaf) != ""
+		r.mu.Unlock()
 	}
 	tlsCfg := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 	if cfg.CAPEM != "" {
@@ -335,6 +349,9 @@ func (r *relayClient) connectOnce() error {
 	log.Printf("relay: connected to %s via route %q", addr, route.name)
 
 	go r.readState(ctrl, sess)
+	if renewLeaf != nil {
+		go r.renewLoop(sess, renewLeaf)
+	}
 	go func() { // reconnect when the network (and so the selected route) changes
 		t := time.NewTicker(5 * time.Second)
 		defer t.Stop()
@@ -733,22 +750,26 @@ func (r *relayClient) RemoveRule(id int64) {
 }
 
 type relayStatusJSON struct {
-	Name      string             `json:"name"`
-	Enabled   bool               `json:"enabled"`
-	Connected bool               `json:"connected"`
-	Address   string             `json:"address"`
-	Route     string             `json:"route"`
-	Email     string             `json:"email"`
-	Device    string             `json:"device"`
-	EnrollURL string             `json:"enrollUrl,omitempty"`
-	Error     string             `json:"error,omitempty"`
-	Notice    string             `json:"notice,omitempty"`
-	Contacts  []relay.Contact    `json:"contacts"`
-	MyDevices []relay.DeviceInfo `json:"myDevices"`
-	Incoming  []string           `json:"incoming"`
-	Outgoing  []string           `json:"outgoing"`
-	Approvals []*relayApproval   `json:"approvals"`
-	Rules     []relayRule        `json:"rules"`
+	Name      string `json:"name"`
+	Enabled   bool   `json:"enabled"`
+	Connected bool   `json:"connected"`
+	Address   string `json:"address"`
+	Route     string `json:"route"`
+	Email     string `json:"email"`
+	Device    string `json:"device"`
+	EnrollURL string `json:"enrollUrl,omitempty"`
+	// CertExpires is when the certificate in use ends; DeviceBound says the
+	// device code is part of it (so it cannot be edited).
+	CertExpires time.Time          `json:"certExpires,omitempty"`
+	DeviceBound bool               `json:"deviceBound,omitempty"`
+	Error       string             `json:"error,omitempty"`
+	Notice      string             `json:"notice,omitempty"`
+	Contacts    []relay.Contact    `json:"contacts"`
+	MyDevices   []relay.DeviceInfo `json:"myDevices"`
+	Incoming    []string           `json:"incoming"`
+	Outgoing    []string           `json:"outgoing"`
+	Approvals   []*relayApproval   `json:"approvals"`
+	Rules       []relayRule        `json:"rules"`
 }
 
 func (r *relayClient) Status() relayStatusJSON {
@@ -773,6 +794,7 @@ func (r *relayClient) Status() relayStatusJSON {
 		st.EnrollURL = r.cfg.EnrollURL
 	}
 	st.Device = r.device
+	st.CertExpires, st.DeviceBound = r.certExpires, r.deviceBound
 	if time.Since(r.noticeAt) < relayNoticeTTL {
 		st.Notice = r.notice
 	}

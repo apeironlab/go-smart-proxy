@@ -254,3 +254,59 @@ func (s *Server) handleAppDial(sess *session, st net.Conn, br *bufio.Reader, req
 	s.audit("app.open", sess.email, app.ID, fromDevice)
 	Pipe(st, br, ps, pbr)
 }
+
+// SetRenewer enables certificate renewal while the server may be running.
+func (s *Server) SetRenewer(fn func(c RenewContext, csrPEM []byte) (string, error)) {
+	s.mu.Lock()
+	s.Renewer = fn
+	s.mu.Unlock()
+}
+
+// RenewContext is what the relay knows about the certificate asking for renewal.
+type RenewContext struct {
+	Email      string
+	Device     string // the device of the session
+	Serial     string // of the certificate in use
+	CertDevice string // the device it is bound to ("" if none)
+	NotBefore  time.Time
+	NotAfter   time.Time
+	Addr       string
+}
+
+// handleRenew answers a request for a new certificate made over an already
+// authenticated connection: whoever holds the certificate and its key, and is
+// not revoked, may get the next one while the rules allow it.
+func (s *Server) handleRenew(sess *session, st net.Conn, req RenewReq) {
+	defer st.Close()
+	reply := func(r RenewResp) {
+		st.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		WriteLine(st, r)
+	}
+	select {
+	case <-sess.ready:
+	case <-time.After(5 * time.Second):
+		reply(RenewResp{Error: "control stream not ready"})
+		return
+	}
+	s.mu.Lock()
+	renewer := s.Renewer
+	s.mu.Unlock()
+	if renewer == nil {
+		reply(RenewResp{Error: "this relay does not renew certificates"})
+		return
+	}
+	sess.mu.Lock()
+	device := sess.device
+	sess.mu.Unlock()
+	cert, err := renewer(RenewContext{
+		Email: sess.email, Device: device, Serial: sess.serial, CertDevice: sess.certDevice,
+		NotBefore: sess.notBefore, NotAfter: sess.notAfter, Addr: sess.addr,
+	}, []byte(req.CSR))
+	if err != nil {
+		s.Log.Printf("%s/%s: renewal refused: %v", sess.email, device, err)
+		s.audit("cert.renew.refused", sess.email, device, err.Error())
+		reply(RenewResp{Error: err.Error()})
+		return
+	}
+	reply(RenewResp{OK: true, CertPEM: cert})
+}

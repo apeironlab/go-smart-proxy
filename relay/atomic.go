@@ -38,3 +38,9 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	}
 	return nil
 }
+
+// ReadPEMFile returns the contents of a PEM file as text.
+func ReadPEMFile(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	return string(b), err
+}

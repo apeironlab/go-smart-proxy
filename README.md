@@ -45,6 +45,7 @@ English as fallback; code, comments and this README are in English.
   - [Enrollment over email](#enrollment-over-email)
   - [Applications (remote access to protected apps)](#applications-remote-access-to-protected-apps)
   - [Notifications and self-service revocation](#notifications-and-self-service-revocation)
+  - [Device certificates and automatic renewal](#device-certificates-and-automatic-renewal)
   - [Relay administration interface (optional)](#relay-administration-interface-optional)
   - [Kubernetes deployment](#kubernetes-deployment)
 - [Security](#security)
@@ -941,6 +942,7 @@ Main `serve` flags:
 | `-smtp-user`, `-smtp-pass` | SMTP credentials (password also via env) |
 | `-smtp-tls` | `starttls` (default), `tls`, or `none` |
 | `-smtp-auth` | `auto` (default), `plain`, `login`, or `none` |
+| `-max-renew-age` | How long a certificate may be renewed without signing in again (default `365d`) |
 | `-revoked` | Revocation list file (e-mail or `serial:HEX` per line); needed by the management interface |
 | `-auth-config` | YAML file with the sign-in methods (see below) |
 | `-trust-forwarded-for` | Take the client address from `X-Forwarded-For` (only behind a trusted proxy) |
@@ -1285,6 +1287,38 @@ issues (in the `-enroll-state` file) to show them; certificates issued by hand
 with `ca client` are not in it and are revoked by an administrator
 (`proxyrelay revoke`). Old certificates leave the ledger 30 days after they
 expire.
+
+### Device certificates and automatic renewal
+
+**Each certificate is for one device.** The enrollment request names the
+device, and the relay puts it in the certificate (a `urn:gsp:device:<code>`
+identifier next to the e-mail address). From then on the relay takes the device
+from the certificate, whatever the client says: a device cannot be passed off as
+another of the same user, the device code can only be changed by enrolling
+again, and revoking a certificate revokes exactly that device (the interface
+lists them, and so does the page where users revoke their own). Certificates
+issued earlier, or by hand with `ca client`, have no device and work as before.
+
+**The proxy renews its certificate by itself.** When the certificate is in the
+last third of its life (and at least the last week), the proxy asks the relay,
+over the connection that certificate secures, for a new one made with a new key.
+No code, no sign-in. The relay issues it only if:
+
+- the certificate is not revoked and the user's domain is still allowed;
+- it is in that last part of its life, so a stolen certificate cannot be swapped
+  for fresh ones at will;
+- the chain of renewals began less than `-max-renew-age` ago (a year by default):
+  after that the user signs in again, which is when an identity provider gets to
+  say the account was disabled.
+
+The owner is e-mailed about each renewal (with the revoke link), so one they did
+not expect is noticed; the audit log records `cert.renew` and refusals as
+`cert.renew.refused`. The old certificate keeps working until it expires or is
+revoked, so a failed renewal leaves the device connected. The proxy checks every
+six hours while connected, switches only to a certificate that matches its key,
+address and device, and saves it in the encrypted configuration before
+reconnecting. A relay that predates renewal just closes the stream: the proxy
+logs it and keeps its certificate.
 
 ### Relay administration interface (optional)
 

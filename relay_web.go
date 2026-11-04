@@ -421,6 +421,11 @@ func registerRelayRoutes(m *http.ServeMux) {
 			writeAPIError(w, http.StatusBadRequest, "relay not configured")
 			return
 		}
+		if bound := certDeviceOf(cfg); bound != "" && bound != device {
+			configMu.Unlock()
+			writeAPIError(w, http.StatusConflict, "the device code is part of the certificate: to change it, enroll again with the new code")
+			return
+		}
 		cfg.Device = device
 		err := persistConfigurationLocked()
 		configMu.Unlock()

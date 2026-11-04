@@ -385,6 +385,8 @@ export interface RelayRule {
 }
 
 export interface RelayStatus {
+  certExpires?: string
+  deviceBound?: boolean
   name: string
   enabled: boolean
   connected: boolean

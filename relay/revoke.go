@@ -70,6 +70,18 @@ func (r *Revocations) reload() {
 	r.mtime, r.size = info.ModTime(), info.Size()
 }
 
+// IsRevoked reports whether a certificate serial (lowercase hex) or the e-mail
+// identity is revoked, for a certificate that is not at hand.
+func (r *Revocations) IsRevoked(email, serial string) bool {
+	if r == nil || r.path == "" {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reload()
+	return r.serials[strings.ToLower(serial)] || r.emails[email]
+}
+
 // Revoked reports whether the certificate (or the e-mail identity it carries)
 // has been revoked.
 func (r *Revocations) Revoked(cert *x509.Certificate) bool {

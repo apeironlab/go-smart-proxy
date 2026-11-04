@@ -70,6 +70,9 @@ type EnrollConfig struct {
 	// revoke them themselves (the page at /revoke). nil turns that off. Pass
 	// the list the relay Server consults.
 	Revoked *Revocations
+	// MaxRenewAge is how long a device's certificate may be renewed without a
+	// new sign-in (default one year).
+	MaxRenewAge time.Duration
 	// Disconnect, when set, is called after a revocation to cut the
 	// connections that use the revoked certificates (Server.Kick).
 	Disconnect func(email, serial string) int

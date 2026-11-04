@@ -480,13 +480,20 @@ export default function RelayPage() {
             {st.device && (
               <Group gap={2} wrap="nowrap">
                 <Badge variant="outline" color="grape" tt="none">{t('device {{id}}', { id: st.device })}</Badge>
-                <ActionIcon size="sm" variant="subtle" color="grape" title={t('Rename device')} aria-label={t('Rename device')}
-                  onClick={() => { setDeviceValue(st.device); setDeviceOpen(true) }}>
-                  <IconPencil size={13} />
-                </ActionIcon>
+                {!st.deviceBound && (
+                  <ActionIcon size="sm" variant="subtle" color="grape" title={t('Rename device')} aria-label={t('Rename device')}
+                    onClick={() => { setDeviceValue(st.device); setDeviceOpen(true) }}>
+                    <IconPencil size={13} />
+                  </ActionIcon>
+                )}
               </Group>
             )}
             {st.connected && st.route && <Badge variant="outline" color="gray" tt="none">{t('via {{route}}', { route: st.route })}</Badge>}
+            {st.certExpires && !st.certExpires.startsWith('0001') && (
+              <Badge variant="outline" color="gray" tt="none">
+                {t('certificate until {{date}}, renewed automatically', { date: new Date(st.certExpires).toLocaleDateString() })}
+              </Badge>
+            )}
             {st.connected && (
               <Group gap={4} wrap="nowrap">
                 <Text size="xs" c="dimmed">{t('relay latency')}</Text>

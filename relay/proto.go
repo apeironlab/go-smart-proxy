@@ -27,6 +27,7 @@ const (
 	TContext        = "context"         // client -> relay: the network context this device shares
 	TGateway        = "gateway"         // first line of an application gateway's control stream
 	TGatewayState   = "gwstate"         // relay -> gateway: the applications it serves
+	TRenew          = "renew"           // first line on a stream that asks for a new certificate
 )
 
 // NetContext is what a device chooses to tell its contacts about the network
@@ -122,6 +123,20 @@ type DialReq struct {
 	// Context, on the control stream hello, is the network context the device
 	// shares from the start (nil: nothing).
 	Context *NetContext `json:"context,omitempty"`
+}
+
+// RenewReq asks, over the authenticated connection, for a new certificate for
+// the same user and device.
+type RenewReq struct {
+	T   string `json:"t"`
+	CSR string `json:"csr"` // PEM
+}
+
+// RenewResp is the answer to a RenewReq.
+type RenewResp struct {
+	OK      bool   `json:"ok"`
+	Error   string `json:"error,omitempty"`
+	CertPEM string `json:"certPem,omitempty"`
 }
 
 // DialResp is the answer to a DialReq.

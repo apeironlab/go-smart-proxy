@@ -596,5 +596,6 @@
   "Nothing blocked yet": "Nothing blocked yet",
   "Most blocked": "Most blocked",
   "Latest": "Latest",
-  "By": "By"
+  "By": "By",
+  "certificate until {{date}}, renewed automatically": "certificate until {{date}}, renewed automatically"
 }

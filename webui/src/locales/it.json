@@ -596,5 +596,6 @@
   "Nothing blocked yet": "Ancora nulla di bloccato",
   "Most blocked": "Più bloccati",
   "Latest": "Ultimi",
-  "By": "Da"
+  "By": "Da",
+  "certificate until {{date}}, renewed automatically": "certificato valido fino al {{date}}, rinnovato in automatico"
 }

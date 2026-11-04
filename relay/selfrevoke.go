@@ -29,6 +29,9 @@ type IssuedCert struct {
 	Issued  time.Time `json:"issued"`
 	Expires time.Time `json:"expires"`
 	Revoked bool      `json:"revoked,omitempty"`
+	// Origin is when the user last signed in for this device: renewals carry
+	// it over, and a chain of renewals ends when it is too old.
+	Origin time.Time `json:"origin,omitempty"`
 }
 
 const (

@@ -35,6 +35,9 @@ type Server struct {
 	// Catalog lists the applications users can open through gateways. nil
 	// means the relay serves no applications.
 	Catalog *Catalog
+	// Renewer, when set, issues a new certificate for a connected device that
+	// asks for one (see EnrollServer.RenewCertificate). nil refuses renewals.
+	Renewer func(c RenewContext, csrPEM []byte) (certPEM string, err error)
 	// Policy lists what the relay refuses to connect to and tells proxies to
 	// block. nil means nothing is blocked.
 	Policy *Policy
@@ -53,8 +56,12 @@ type session struct {
 	ctx    *NetContext   // what this device shares about its network, nil = nothing
 	ready  chan struct{} // closed once the control stream has registered the device
 	serial string        // serial number (hex) of the client certificate
-	addr   string
-	since  time.Time
+	// certDevice is the device the certificate is bound to ("" if none);
+	// notBefore and notAfter are its validity.
+	certDevice          string
+	notBefore, notAfter time.Time
+	addr                string
+	since               time.Time
 }
 
 // SetAudit sets Audit while the server may already be running.
@@ -199,6 +206,8 @@ func (s *Server) handleConn(c net.Conn) {
 	if peers[0].SerialNumber != nil {
 		sess.serial = strings.ToLower(peers[0].SerialNumber.Text(16))
 	}
+	sess.certDevice = DeviceFromCert(peers[0])
+	sess.notBefore, sess.notAfter = peers[0].NotBefore, peers[0].NotAfter
 	defer func() {
 		ys.Close()
 		s.unregister(sess)
@@ -417,6 +426,13 @@ func (s *Server) handleStream(sess *session, st net.Conn) {
 			return
 		}
 		s.handlePing(sess, st, req)
+	case TRenew:
+		var req RenewReq
+		if err := json.Unmarshal(line, &req); err != nil {
+			st.Close()
+			return
+		}
+		s.handleRenew(sess, st, req)
 	default:
 		st.Close()
 	}
@@ -427,6 +443,14 @@ func (s *Server) handleControl(sess *session, st net.Conn, br *bufio.Reader, hel
 	if !ok {
 		st.Close()
 		return
+	}
+	if sess.certDevice != "" {
+		// The certificate was issued for this device: that is the device,
+		// whatever the client claims.
+		if device != "" && device != sess.certDevice {
+			s.Log.Printf("%s claimed device %q but its certificate is for %q", sess.email, device, sess.certDevice)
+		}
+		device = sess.certDevice
 	}
 	if device == "" {
 		device = "default" // clients that predate device identities

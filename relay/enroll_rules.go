@@ -226,9 +226,19 @@ func (s *EnrollServer) certTTL() time.Duration {
 
 // sign issues a certificate for an authenticated request and records it.
 func (s *EnrollServer) sign(csr []byte, email, device, method, ip string) (string, error) {
-	signed, err := SignCSR(s.cfg.CADir, csr, email, s.certTTL())
+	return s.signFor(csr, email, device, method, ip, time.Time{}, true)
+}
+
+// signFor issues a certificate bound to the device. origin is when the chain of
+// renewals started, a zero time for a fresh sign-in; notify says whether the
+// owner is e-mailed about a new device.
+func (s *EnrollServer) signFor(csr []byte, email, device, method, ip string, origin time.Time, notify bool) (string, error) {
+	signed, err := SignCSRForDevice(s.cfg.CADir, csr, email, device, s.certTTL())
 	if err != nil {
 		return "", err
+	}
+	if origin.IsZero() {
+		origin = time.Now()
 	}
 	if method == "" {
 		method = "email"
@@ -246,9 +256,11 @@ func (s *EnrollServer) sign(csr []byte, email, device, method, ip string) (strin
 	}
 	s.audit("enroll.issued", email, serial, method)
 	if serial != "" {
-		s.recordIssued(&IssuedCert{Serial: serial, Email: email, Device: device, Method: method, IP: ip, Issued: time.Now(), Expires: notAfter})
+		s.recordIssued(&IssuedCert{Serial: serial, Email: email, Device: device, Method: method, IP: ip, Issued: time.Now(), Expires: notAfter, Origin: origin})
 	}
-	s.notifyDevice(email, device, method, ip, notAfter)
+	if notify {
+		s.notifyDevice(email, device, method, ip, notAfter)
+	}
 	return string(signed), nil
 }
 

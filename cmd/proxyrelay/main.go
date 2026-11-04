@@ -185,6 +185,7 @@ func runServe(args []string) error {
 	caDir := fs.String("ca-dir", "", "directory with ca.pem and ca-key.pem (default: dir of -ca)")
 	enrollState := fs.String("enroll-state", "relay-enroll.json", "pending enrollment state file")
 	certTTL := fs.String("cert-ttl", "90d", "client certificate lifetime (e.g. 90d, 720h)")
+	maxRenew := fs.String("max-renew-age", "365d", "how long a device's certificate may be renewed without signing in again")
 	revoked := fs.String("revoked", "", "revocation list file, e-mail or serial:HEX per line (default: revoked.txt next to -state)")
 	authConfig := fs.String("auth-config", "", "YAML file with the sign-in methods (password, ldap, oidc, saml)")
 	trustXFF := fs.Bool("trust-forwarded-for", false, "take the client address from X-Forwarded-For (only behind a trusted proxy)")
@@ -205,6 +206,10 @@ func runServe(args []string) error {
 	ttl, err := parseTTL(*certTTL)
 	if err != nil {
 		return err
+	}
+	renewAge, err := parseTTL(*maxRenew)
+	if err != nil {
+		return fmt.Errorf("-max-renew-age: %w", err)
 	}
 	tlsCfg, err := relay.TLSConfig(*certFile, *keyFile, *caFile)
 	if err != nil {
@@ -297,7 +302,7 @@ func runServe(args []string) error {
 		cfg := relay.EnrollConfig{
 			CADir: firstNonEmpty(*caDir, filepath.Dir(*caFile)), PublicRelay: *publicRelay, PublicURL: *publicURL, DownloadURL: *downloadURL,
 			AllowedDomains: splitList(*allowDomains), StatePath: *enrollState, CertTTL: ttl,
-			TrustForwardedFor: *trustXFF, Admin: admin, Store: store,
+			TrustForwardedFor: *trustXFF, Admin: admin, Store: store, MaxRenewAge: renewAge,
 			Revoked: rev, Disconnect: srv.Kick,
 		}
 		smtp.apply(&cfg)
@@ -318,6 +323,7 @@ func runServe(args []string) error {
 				log.Printf("the management interface is served by the enrollment listener and is disabled too")
 			}
 		} else {
+			srv.SetRenewer(es.RenewCertificate)
 			enrollSrv = &http.Server{
 				Addr: *enrollListen, Handler: es.Handler(),
 				ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,

@@ -161,6 +161,34 @@ func IssueServer(caDir, outDir string, hosts []string) error {
 // certificate always comes from the verified e-mail; the CSR must ask for the
 // same identity, and its signature and public key are validated.
 func SignCSR(caDir string, csrPEM []byte, email string, ttl time.Duration) ([]byte, error) {
+	return SignCSRForDevice(caDir, csrPEM, email, "", ttl)
+}
+
+// deviceURIPrefix marks, in a client certificate, the device it was issued
+// for. The relay then takes that device as the certificate's, whatever the
+// client says: a certificate cannot be used to pose as another device of the
+// same user, and revoking it revokes exactly that device.
+const deviceURIPrefix = "urn:gsp:device:"
+
+// DeviceFromCert returns the device a client certificate is bound to ("" for
+// certificates issued before devices were bound, or by hand).
+func DeviceFromCert(c *x509.Certificate) string {
+	for _, u := range c.URIs {
+		if code, ok := strings.CutPrefix(u.String(), deviceURIPrefix); ok {
+			if d, ok := NormalizeDevice(code); ok {
+				return d
+			}
+		}
+	}
+	return ""
+}
+
+// SignCSRForDevice is SignCSR for a certificate bound to a device ("" for none).
+func SignCSRForDevice(caDir string, csrPEM []byte, email, device string, ttl time.Duration) ([]byte, error) {
+	device, dok := NormalizeDevice(device)
+	if !dok {
+		return nil, errors.New("invalid device code")
+	}
 	email, ok := NormalizeEmail(email)
 	if !ok {
 		return nil, fmt.Errorf("invalid e-mail address")
@@ -221,6 +249,10 @@ func SignCSR(caDir string, csrPEM []byte, email string, ttl time.Duration) ([]by
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
+	}
+	if device != "" {
+		u, _ := url.Parse(deviceURIPrefix + device)
+		tpl.URIs = []*url.URL{u}
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tpl, ca, csr.PublicKey, caPriv)
 	if err != nil {
