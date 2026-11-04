@@ -177,7 +177,7 @@ func TestPasswordMethod(t *testing.T) {
 	if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
 		t.Fatalf("users file mode %v", info.Mode().Perm())
 	}
-	m, err := newPasswordMethod(&PasswordConfig{UsersFile: path})
+	m, err := newPasswordMethod(&PasswordConfig{UsersFile: path}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestPasswordMethod(t *testing.T) {
 		t.Error("a user name with spaces is refused")
 	}
 	os.WriteFile(path, []byte("broken line\n"), 0o600)
-	if _, err := newPasswordMethod(&PasswordConfig{UsersFile: path}); err == nil {
+	if _, err := newPasswordMethod(&PasswordConfig{UsersFile: path}, nil); err == nil {
 		t.Error("a malformed users file is an error at start-up")
 	}
 }

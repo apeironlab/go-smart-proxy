@@ -42,6 +42,7 @@ English as fallback; code, comments and this README are in English.
   - [Relay server](#relay-server)
   - [Manual certificate provisioning](#manual-certificate-provisioning)
   - [Enrollment over email](#enrollment-over-email)
+  - [Relay administration interface (optional)](#relay-administration-interface-optional)
   - [Kubernetes deployment](#kubernetes-deployment)
 - [Security](#security)
 - [Environment variables](#environment-variables)
@@ -1083,6 +1084,83 @@ shows the confirmation code to type there after you sign in, and continues by
 itself when you are done. Relays that predate this feature
 simply offer the e-mail code.
 
+### Relay administration interface (optional)
+
+A web interface to see and manage the relay. It is **off by default**: without
+it the relay works exactly as before, from its files. Switch it on (in your
+relay's `main`) by creating an `Admin` and passing it to the enrollment server:
+
+```go
+rev := relay.NewRevocations("/data/revoked.txt")
+admin, err := relay.NewAdmin(relay.AdminConfig{
+    DBPath:  "/data/admin.db",          // SQLite, created private (0600)
+    Groups:  []string{"relay-admins"},  // who may sign in ...
+    Emails:  []string{"boss@example.com"}, // ... and/or these addresses
+    Revoked: rev,                       // the same list the server consults
+})
+enroll, err := relay.NewEnrollServer(relay.EnrollConfig{ /* ... */ Auth: auth, Admin: admin})
+srv := relay.NewServer(store)
+srv.Revoked = rev
+admin.SetServer(srv)                    // live sessions, disconnect, connection events
+```
+
+The interface is served by the enrollment listener under `/admin/`. It is the
+React app in `webui/admin`, which shares theme and components with the proxy UI
+and is embedded in the `relay` package (`relay/adminui/static`; rebuild it with
+`npm run build:admin` in `webui/`).
+
+**Signing in.** Administrators use the same methods as enrollment (password,
+LDAP, OpenID Connect, SAML; the e-mail code is not accepted, it only proves an
+address). Whoever signs in must be listed in `Emails` or belong to one of
+`Groups` (group names as reported by the method, for LDAP also the CN of a
+distinguished name). `Methods` can restrict which methods may be used. With no
+identity provider, use a password method stored in the database and create the
+first administrator with `admin.AddLocalUser("root", password, "root@example.com", "relay-admins")`.
+
+**Local users in the database.** A password method with `database: true`
+(instead of `users_file`) keeps its users in the interface's database, where
+they are added, edited, reset and deleted:
+
+```yaml
+methods:
+  - id: local
+    type: password
+    password:
+      database: true
+```
+
+**What it offers.**
+
+- *Overview*: devices and people online, valid and expiring certificates,
+  pending requests, revocations, the latest events; refreshed every 3 seconds.
+  Any user can be disconnected from here.
+- *Users and certificates*: everybody who got a certificate, with each
+  certificate (device, method, issue and expiry dates). Revoke one certificate
+  or a whole identity (live connections are cut at once; you cannot revoke
+  yourself), and allow it again. Local password users are managed in a second
+  tab.
+- *Access and enrollment*: switch methods on and off, required groups per
+  method, allowed e-mail domains, certificate lifetime and the SMTP settings.
+  They apply at once to new requests and, once saved, are kept in the database
+  and take precedence over the configuration file after a restart. The SMTP
+  password is stored in the database (hence its 0600 mode) and is never sent
+  back to the browser.
+- *Audit log*: enrollment requests, certificates issued, refused sign-ins,
+  administrator actions (sign-ins, revocations, user and rules changes) and
+  device connections, with filter, search and paging. The newest 100 000 entries
+  are kept. Passwords and codes are never written to it.
+
+**Security.** The session cookie is `HttpOnly`, `SameSite=Strict`, scoped to
+`/admin`, `Secure` over HTTPS (or behind a trusted proxy that sets
+`X-Forwarded-Proto`), lasts at most 8 hours and ends after 30 minutes idle. Every change needs a
+per-session CSRF token, a JSON body and a same-origin request. Browser sign-ins
+(OpenID Connect, SAML) are tied to the browser that started them by a cookie, so
+a sign-in link opened elsewhere grants nothing; sign-in attempts are
+rate-limited per account and address. The page is served with a strict
+Content-Security-Policy and cannot be framed. Reach `/admin/` only where you
+mean to: you can block the path on the public reverse proxy and use it from the
+intranet.
+
 ### Kubernetes deployment
 
 [`deploy/relay-k8s.example.yaml`](deploy/relay-k8s.example.yaml) contains an
@@ -1356,7 +1434,11 @@ and SMTP auth primitives.
   official languages of the European Union, with English as fallback.
 
 If you change the UI, run `npm run build` in `webui/` or `make webui`; then
-rebuild the Go binary so the new assets are embedded.
+rebuild the Go binary so the new assets are embedded. The relay administration
+interface is a second app in the same project: `npm run dev:admin` for
+development (set `ADMIN_BACKEND` to the relay's enrollment address) and
+`npm run build:admin` to rebuild `relay/adminui/static`, which is committed so
+that the `relay` package builds without Node.
 
 ---
 
@@ -1376,7 +1458,8 @@ rebuild the Go binary so the new assets are embedded.
 | `socks.go` | SOCKS5 listener and handler |
 | `device.go` | Per-installation device code generation |
 | `notify.go` | Desktop notifications |
-| `relay/` | Relay protocol, server, store, CA, enrollment, SMTP |
+| `relay/` | Relay protocol, server, store, CA, enrollment, SMTP, sign-in methods, administration interface |
+| `webui/admin/` | React app of the relay administration interface (built into `relay/adminui/static`) |
 | `cmd/proxyrelay/` | Relay server CLI |
 | `webui/` | React management UI |
 | `deploy/` | Kubernetes example |

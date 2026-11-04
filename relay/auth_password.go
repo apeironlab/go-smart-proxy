@@ -20,14 +20,19 @@ import (
 // The e-mail may be left out when the user name already is an address. Lines
 // starting with # are comments. The file is re-read when it changes, so users
 // can be added or removed without restarting the relay.
+//
+// With database: true the users are kept in the management interface's
+// database instead (see AdminConfig), and are added and removed from there.
 type PasswordConfig struct {
 	UsersFile     string   `yaml:"users_file"`
+	Database      bool     `yaml:"database"`
 	RequireGroups []string `yaml:"require_groups"`
 }
 
 func (c *PasswordConfig) validate() error {
-	if strings.TrimSpace(c.UsersFile) == "" {
-		return errors.New("users_file is required")
+	hasFile := strings.TrimSpace(c.UsersFile) != ""
+	if hasFile == c.Database {
+		return errors.New("set exactly one of users_file and database")
 	}
 	return nil
 }
@@ -81,6 +86,7 @@ type passwordUser struct {
 
 type passwordMethod struct {
 	cfg *PasswordConfig
+	db  *adminDB // users in the database instead of the file
 
 	mu    sync.Mutex
 	mtime time.Time
@@ -88,8 +94,15 @@ type passwordMethod struct {
 	users map[string]passwordUser
 }
 
-func newPasswordMethod(cfg *PasswordConfig) (*passwordMethod, error) {
+func newPasswordMethod(cfg *PasswordConfig, admin *Admin) (*passwordMethod, error) {
 	m := &passwordMethod{cfg: cfg}
+	if cfg.Database {
+		if admin == nil {
+			return nil, errors.New("database users need the management interface to be enabled")
+		}
+		m.db = admin.db
+		return m, nil
+	}
 	if _, err := m.load(); err != nil {
 		return nil, err
 	}
@@ -161,11 +174,23 @@ func dummyPasswordHash() []byte {
 }
 
 func (m *passwordMethod) Authenticate(_ context.Context, username, password string) (Identity, error) {
-	users, err := m.load()
-	if err != nil {
-		return Identity{}, fmt.Errorf("users file: %w", err)
+	var (
+		u  passwordUser
+		ok bool
+	)
+	name := strings.ToLower(strings.TrimSpace(username))
+	if m.db != nil {
+		var err error
+		if u, ok, err = m.db.lookupUser(name); err != nil {
+			return Identity{}, fmt.Errorf("users database: %w", err)
+		}
+	} else {
+		users, err := m.load()
+		if err != nil {
+			return Identity{}, fmt.Errorf("users file: %w", err)
+		}
+		u, ok = users[name]
 	}
-	u, ok := users[strings.ToLower(strings.TrimSpace(username))]
 	hash := u.hash
 	if !ok {
 		hash = dummyPasswordHash()

@@ -146,7 +146,9 @@ func (m *oidcMethod) Begin(ctx context.Context, e *Enrollment) (string, error) {
 	opts := []oauth2.AuthCodeOption{
 		oauth2.S256ChallengeOption(e.Verifier),
 		oidc.Nonce(e.Nonce),
-		oauth2.SetAuthURLParam("login_hint", e.Email),
+	}
+	if e.Email != "" {
+		opts = append(opts, oauth2.SetAuthURLParam("login_hint", e.Email))
 	}
 	return m.oauth(p).AuthCodeURL(e.State, opts...), nil
 }

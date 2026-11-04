@@ -47,7 +47,7 @@ func (s *EnrollServer) buildMethods() error {
 		e := &methodEntry{AuthMethod: m}
 		switch m.Type {
 		case "password":
-			pm, err := newPasswordMethod(m.Password)
+			pm, err := newPasswordMethod(m.Password, s.cfg.Admin)
 			if err != nil {
 				return fmt.Errorf("auth method %q: %w", m.ID, err)
 			}
@@ -91,11 +91,14 @@ type methodInfo struct {
 // methodInfos lists how a user can enroll, e-mail code first.
 func (s *EnrollServer) methodInfos() []methodInfo {
 	out := []methodInfo{}
-	if s.cfg.Auth == nil || !s.cfg.Auth.DisableEmail {
+	if !s.emailDisabled() {
 		out = append(out, methodInfo{ID: "email", Type: "email", Label: "E-mail", Flow: "code"})
 	}
 	for _, id := range s.methodOrder {
 		m := s.methods[id]
+		if s.methodDisabled(id) {
+			continue
+		}
 		flow := "form"
 		if m.browser != nil {
 			flow = "browser"
@@ -109,7 +112,18 @@ func (s *EnrollServer) methodInfos() []methodInfo {
 // answered with the list of methods. A relay with no sign-in methods besides
 // the e-mail code keeps answering as it always did.
 func (s *EnrollServer) authRequired() bool {
-	return s.cfg.Auth != nil && (len(s.methods) > 0 || s.cfg.Auth.DisableEmail)
+	if s.emailDisabled() {
+		return true
+	}
+	if s.cfg.Auth == nil {
+		return false
+	}
+	for id := range s.methods {
+		if !s.methodDisabled(id) {
+			return true
+		}
+	}
+	return false
 }
 
 // challengeHeader is the WWW-Authenticate value that announces a method. The
@@ -151,10 +165,11 @@ func (s *EnrollServer) checkIdentity(m *methodEntry, id Identity, want string) e
 	if email != want {
 		return fmt.Errorf("signed in as %s, but the certificate was requested for %s", email, want)
 	}
-	if !allowedDomain(email, s.cfg.AllowedDomains) {
+	rules := s.Rules()
+	if !allowedDomain(email, rules.AllowedDomains) {
 		return fmt.Errorf("%s: domain not allowed", email)
 	}
-	if !groupMatches(id.Groups, m.requireGroups()) {
+	if !groupMatches(id.Groups, s.requiredGroups(m)) {
 		return fmt.Errorf("%s is not in any of the required groups", email)
 	}
 	return nil
@@ -162,20 +177,12 @@ func (s *EnrollServer) checkIdentity(m *methodEntry, id Identity, want string) e
 
 // issue signs the certificate for an authenticated user.
 func (s *EnrollServer) issue(it *Enrollment) (string, error) {
-	ttl := s.cfg.CertTTL
-	if ttl <= 0 {
-		ttl = 90 * 24 * time.Hour
-	}
-	signed, err := SignCSR(s.cfg.CADir, []byte(it.CSRPEM), it.Email, ttl)
-	if err != nil {
-		return "", err
-	}
-	return string(signed), nil
+	return s.sign([]byte(it.CSRPEM), it.Email, it.Device, it.Method)
 }
 
 func (s *EnrollServer) method(w http.ResponseWriter, r *http.Request) (*methodEntry, bool) {
 	m := s.methods[r.PathValue("method")]
-	if m == nil {
+	if m == nil || s.methodDisabled(m.ID) {
 		writeError(w, http.StatusNotFound, "metodo non trovato")
 		return nil, false
 	}
@@ -214,6 +221,7 @@ func (s *EnrollServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, ErrInvalidCredentials) {
 			s.log.Printf("enrollment: %s: failed sign-in of %q for %s from %s", m.ID, user, pr.email, s.clientIP(r))
+			s.audit("enroll.denied", pr.email, m.ID, "wrong credentials for "+user+" from "+s.clientIP(r))
 			w.Header().Add("WWW-Authenticate", challengeHeader(methodInfo{ID: m.ID, Type: m.Type, Label: m.label(), Flow: "form"}))
 			writeError(w, http.StatusUnauthorized, "utente o password non validi")
 			return
@@ -224,6 +232,7 @@ func (s *EnrollServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.checkIdentity(m, id, pr.email); err != nil {
 		s.log.Printf("enrollment: %s: %q refused: %v", m.ID, user, err)
+		s.audit("enroll.denied", pr.email, m.ID, err.Error())
 		writeError(w, http.StatusForbidden, "accesso non consentito")
 		return
 	}
@@ -338,11 +347,21 @@ func (s *EnrollServer) finishBrowser(w http.ResponseWriter, r *http.Request, m *
 	ctx, cancel := context.WithTimeout(r.Context(), authTimeout+5*time.Second)
 	defer cancel()
 	ident, err := m.browser.Complete(ctx, r, it)
+	if err == nil && it.Admin {
+		s.cfg.Admin.finishLogin(w, r, m, it, ident)
+		return
+	}
 	if err == nil {
 		err = s.checkIdentity(m, ident, it.Email)
 	}
 	if err != nil {
+		if it.Admin {
+			s.cfg.Admin.Record("admin.denied", "", m.ID, err.Error())
+			adminResultPage(w, false)
+			return
+		}
 		s.log.Printf("enrollment: %s: sign-in of %s refused: %v", m.ID, it.Email, err)
+		s.audit("enroll.denied", it.Email, m.ID, err.Error())
 		resultPage(w, false)
 		return
 	}
@@ -398,6 +417,7 @@ func (s *EnrollServer) handleVerify(w http.ResponseWriter, r *http.Request) {
 		email := it.Email
 		s.mu.Unlock()
 		s.log.Printf("enrollment: %s: wrong device code for %s from %s (%d left)", m.ID, email, s.clientIP(r), left)
+		s.audit("enroll.denied", email, m.ID, "wrong device code from "+s.clientIP(r))
 		if left <= 0 {
 			resultPage(w, false)
 			return

@@ -29,6 +29,9 @@ type Server struct {
 	// Revoked, when set, is consulted after the TLS handshake: connections
 	// whose client certificate it rejects are closed.
 	Revoked *Revocations
+	// Audit, when set, is told about connections and refusals (the admin
+	// interface keeps them in its event log).
+	Audit func(kind, actor, subject, detail string)
 
 	mu       sync.Mutex
 	sessions map[string]*session
@@ -42,6 +45,59 @@ type session struct {
 	ctrl   net.Conn
 	ctx    *NetContext   // what this device shares about its network, nil = nothing
 	ready  chan struct{} // closed once the control stream has registered the device
+	serial string        // serial number (hex) of the client certificate
+	addr   string
+	since  time.Time
+}
+
+func (s *Server) audit(kind, actor, subject, detail string) {
+	if s.Audit != nil {
+		s.Audit(kind, actor, subject, detail)
+	}
+}
+
+// OnlineDevice describes a connected device.
+type OnlineDevice struct {
+	Email   string      `json:"email"`
+	Device  string      `json:"device"`
+	Addr    string      `json:"addr"`
+	Serial  string      `json:"serial"`
+	Since   time.Time   `json:"since"`
+	Context *NetContext `json:"context,omitempty"`
+}
+
+// Online lists the devices that are connected now.
+func (s *Server) Online() []OnlineDevice {
+	s.mu.Lock()
+	all := make([]*session, 0, len(s.sessions))
+	for _, sess := range s.sessions {
+		all = append(all, sess)
+	}
+	s.mu.Unlock()
+	out := make([]OnlineDevice, 0, len(all))
+	for _, sess := range all {
+		sess.mu.Lock()
+		out = append(out, OnlineDevice{Email: sess.email, Device: sess.device, Addr: sess.addr, Serial: sess.serial, Since: sess.since, Context: sess.ctx})
+		sess.mu.Unlock()
+	}
+	return out
+}
+
+// Kick closes the connections of a user (all of them when serial is empty,
+// else only those using that certificate) and returns how many it closed.
+func (s *Server) Kick(email, serial string) int {
+	s.mu.Lock()
+	var hit []*session
+	for _, sess := range s.sessions {
+		if sess.email == email && (serial == "" || sess.serial == serial) {
+			hit = append(hit, sess)
+		}
+	}
+	s.mu.Unlock()
+	for _, sess := range hit {
+		sess.ys.Close()
+	}
+	return len(hit)
 }
 
 func NewServer(store *Store) *Server {
@@ -98,6 +154,9 @@ func (s *Server) handleConn(c net.Conn) {
 	}
 	if s.Revoked.Revoked(peers[0]) {
 		s.Log.Printf("revoked certificate from %s refused", c.RemoteAddr())
+		if e, ok := EmailFromCert(peers[0]); ok {
+			s.audit("session.refused", e, "", "revoked certificate from "+c.RemoteAddr().String())
+		}
 		c.Close()
 		return
 	}
@@ -115,7 +174,10 @@ func (s *Server) handleConn(c net.Conn) {
 		c.Close()
 		return
 	}
-	sess := &session{email: email, ys: ys, ready: make(chan struct{})}
+	sess := &session{email: email, ys: ys, ready: make(chan struct{}), addr: c.RemoteAddr().String(), since: time.Now()}
+	if peers[0].SerialNumber != nil {
+		sess.serial = strings.ToLower(peers[0].SerialNumber.Text(16))
+	}
 	defer func() {
 		ys.Close()
 		s.unregister(sess)
@@ -149,6 +211,7 @@ func (s *Server) unregister(sess *session) {
 	email, device := sess.email, sess.device
 	sess.mu.Unlock()
 	s.Log.Printf("%s/%s disconnected", email, device)
+	s.audit("session.close", email, device, "")
 	s.Store.Seen(email, time.Now())
 	s.notifyPresence(email)
 	s.pushState(email, "")
@@ -370,6 +433,7 @@ func (s *Server) handleControl(sess *session, st net.Conn, br *bufio.Reader, hel
 	close(sess.ready)
 	s.Store.RememberDevice(sess.email, device)
 	s.Log.Printf("%s/%s connected", sess.email, device)
+	s.audit("session.open", sess.email, device, sess.addr)
 	s.pushState(sess.email, "")
 	s.notifyPresence(sess.email)
 

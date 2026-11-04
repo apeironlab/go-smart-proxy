@@ -56,7 +56,12 @@ type EnrollConfig struct {
 	TrustForwardedFor bool
 	// Auth adds sign-in methods (password, LDAP, OpenID Connect, SAML) to the
 	// e-mail code. nil offers only the e-mail code.
-	Auth   *AuthConfig
+	Auth *AuthConfig
+	// Admin, when set, mounts the management interface under /admin/, keeps
+	// the audit log and the issued certificates in its database, and lets the
+	// rules be edited from there. nil leaves the relay exactly as configured
+	// by files.
+	Admin  *Admin
 	Logger *log.Logger
 	// SendMail is used by tests; when nil, SMTP is used.
 	SendMail func(to, subject, body string) error
@@ -88,6 +93,10 @@ type Enrollment struct {
 	Approved   bool      `json:"approved"`
 	CertPEM    string    `json:"certPem,omitempty"`
 	Known      bool      `json:"known"`
+	// Admin marks a sign-in to the management interface (not a certificate
+	// request); LoginHash ties it to the browser that started it.
+	Admin     bool   `json:"-"`
+	LoginHash string `json:"-"`
 }
 
 type enrollFile struct {
@@ -104,6 +113,9 @@ type EnrollServer struct {
 	items map[string]*Enrollment
 	users map[string]bool
 	rate  map[string][]time.Time
+
+	rulesMu sync.RWMutex
+	rules   EnrollRules
 	// lastPrune is the last time expired state was swept.
 	lastPrune time.Time
 
@@ -131,15 +143,9 @@ func NewEnrollServer(cfg EnrollConfig) (*EnrollServer, error) {
 	if cfg.CADir == "" {
 		return nil, errors.New("enrollment: CA directory is required")
 	}
+	s.rules = s.initialRules()
 	if _, _, err := loadCA(cfg.CADir); err != nil {
 		return nil, fmt.Errorf("enrollment CA: %w", err)
-	}
-	emailOff := cfg.Auth != nil && cfg.Auth.DisableEmail
-	if cfg.SMTPAddr == "" && cfg.SendMail == nil && !emailOff {
-		return nil, errors.New("enrollment: SMTP is not configured")
-	}
-	if cfg.SMTPFrom == "" && cfg.SendMail == nil && !emailOff {
-		return nil, errors.New("enrollment: SMTP from address is not configured")
 	}
 	if cfg.PublicRelay == "" {
 		return nil, errors.New("enrollment: public relay address is required")
@@ -147,10 +153,25 @@ func NewEnrollServer(cfg EnrollConfig) (*EnrollServer, error) {
 	if u, err := url.Parse(cfg.PublicRelay); err == nil && u.Host != "" {
 		cfg.PublicRelay = u.Host
 	}
+	s.cfg = cfg
 	if err := s.buildMethods(); err != nil {
 		return nil, err
 	}
-	if len(cfg.AllowedDomains) == 0 {
+	if err := s.loadSavedRules(); err != nil {
+		return nil, fmt.Errorf("enrollment rules: %w", err)
+	}
+	if r := s.Rules(); !s.emailDisabled() && cfg.SendMail == nil {
+		if r.SMTP.Addr == "" {
+			return nil, errors.New("enrollment: SMTP is not configured")
+		}
+		if r.SMTP.From == "" {
+			return nil, errors.New("enrollment: SMTP from address is not configured")
+		}
+	}
+	if cfg.Admin != nil {
+		cfg.Admin.attach(s)
+	}
+	if len(s.Rules().AllowedDomains) == 0 {
 		s.log.Printf("WARNING: enrollment is open to every e-mail domain (set -allow-domains to restrict it)")
 	}
 	if cfg.StatePath != "" {
@@ -184,6 +205,9 @@ func (s *EnrollServer) Handler() http.Handler {
 	m.HandleFunc("GET /enroll-auth/{method}/metadata", s.handleSAMLMetadata)
 	m.HandleFunc("GET /enroll/{id}", s.handleStatus)
 	m.HandleFunc("POST /enroll/{id}/confirm", s.handleConfirm)
+	if s.cfg.Admin != nil {
+		s.cfg.Admin.mount(m)
+	}
 	return m
 }
 
@@ -193,7 +217,9 @@ func (s *EnrollServer) saveLocked() {
 	}
 	f := enrollFile{}
 	for _, it := range s.items {
-		f.Items = append(f.Items, it)
+		if !it.Admin {
+			f.Items = append(f.Items, it)
+		}
 	}
 	for u := range s.users {
 		f.Users = append(f.Users, u)
@@ -368,7 +394,7 @@ func (s *EnrollServer) parseEnrollRequest(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "indirizzo e-mail non valido")
 		return nil, false
 	}
-	if !allowedDomain(email, s.cfg.AllowedDomains) {
+	if !allowedDomain(email, s.Rules().AllowedDomains) {
 		writeError(w, http.StatusForbidden, "dominio non abilitato")
 		return nil, false
 	}
@@ -420,7 +446,7 @@ func (s *EnrollServer) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "questo metodo non usa /enroll: vedi l'elenco restituito dal relay")
 		return
 	}
-	if s.cfg.Auth != nil && s.cfg.Auth.DisableEmail {
+	if s.emailDisabled() {
 		writeError(w, http.StatusForbidden, "il codice via e-mail non è abilitato: usa uno degli altri metodi")
 		return
 	}
@@ -449,7 +475,7 @@ func (s *EnrollServer) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	s.saveLocked()
 	s.mu.Unlock()
 
-	subject, body := enrollmentEmail(email, code, s.cfg, known)
+	subject, body := enrollmentEmail(email, code, s.mailConfig(), known)
 	if err := s.send(email, subject, body); err != nil {
 		s.mu.Lock()
 		delete(s.items, id)
@@ -459,6 +485,7 @@ func (s *EnrollServer) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "invio dell'e-mail non riuscito")
 		return
 	}
+	s.audit("enroll.request", email, "", "e-mail code, from "+ip)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":           id,
 		"pollToken":    pollToken,
@@ -522,7 +549,7 @@ func (s *EnrollServer) send(to, subject, body string) error {
 	if s.cfg.SendMail != nil {
 		return s.cfg.SendMail(to, subject, body)
 	}
-	return sendSMTP(s.cfg, to, subject, body)
+	return sendSMTP(s.mailConfig(), to, subject, body)
 }
 
 // smtpAuth chooses the authentication mechanism. In auto mode it prefers
@@ -734,6 +761,7 @@ func (s *EnrollServer) handleConfirm(w http.ResponseWriter, r *http.Request) {
 			s.saveLocked()
 			left := enrollMaxTries - it.Attempts
 			s.mu.Unlock()
+			s.audit("enroll.denied", it.Email, "email", "wrong e-mail code from "+s.clientIP(r))
 			writeError(w, http.StatusForbidden, fmt.Sprintf("codice non valido (%d tentativi rimasti)", left))
 			return
 		}
@@ -743,11 +771,7 @@ func (s *EnrollServer) handleConfirm(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	if !approved {
-		ttl := s.cfg.CertTTL
-		if ttl <= 0 {
-			ttl = 90 * 24 * time.Hour
-		}
-		signed, err := SignCSR(s.cfg.CADir, csr, email, ttl)
+		signed, err := s.sign(csr, email, it.Device, "email")
 		if err != nil {
 			s.log.Printf("enrollment signing for %s failed: %v", email, err)
 			writeError(w, http.StatusInternalServerError, "firma del certificato non riuscita")
@@ -755,12 +779,12 @@ func (s *EnrollServer) handleConfirm(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Lock()
 		it.Approved = true
-		it.CertPEM = string(signed)
+		it.CertPEM = signed
 		it.CodeHash = ""
 		s.users[email] = true
 		s.saveLocked()
 		s.mu.Unlock()
-		certPEM = string(signed)
+		certPEM = signed
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"certPem":      certPEM,

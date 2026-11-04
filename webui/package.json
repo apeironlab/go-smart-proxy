@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "dev:admin": "vite -c vite.admin.config.ts",
+    "build:admin": "tsc -b && vite build -c vite.admin.config.ts"
   },
   "dependencies": {
     "@mantine/core": "^9.6.1",
