@@ -43,6 +43,35 @@ type systemProxyStateJSON struct {
 	VPNHTTPSProxy  string `json:"vpnHttpsProxy"`
 	VPNHTTPSPort   string `json:"vpnHttpsPort"`
 	VPNPACEnable   bool   `json:"vpnPacEnabled"`
+
+	// Interfaces is the proxy configuration of every active interface.
+	Interfaces []ifaceProxyJSON `json:"interfaces"`
+
+	// Transparent is the state of the transparent routing (macOS).
+	Transparent transparentStatusJSON `json:"transparent"`
+}
+
+type transparentStatusJSON struct {
+	Configured []string `json:"configured"` // selectors in the configuration
+	Interfaces []string `json:"interfaces"` // interfaces they resolve to now
+	Loaded     bool     `json:"loaded"`     // the packet filter rules are loaded
+	Error      string   `json:"error"`      // last problem
+	Hint       string   `json:"hint"`       // what to do about it
+}
+
+type ifaceProxyJSON struct {
+	Service     string `json:"service"`
+	Iface       string `json:"iface"`
+	Primary     bool   `json:"primary"`
+	Dynamic     bool   `json:"dynamic"`
+	Excluded    bool   `json:"excluded"`
+	HTTPEnable  bool   `json:"httpEnabled"`
+	HTTPProxy   string `json:"httpProxy"`
+	HTTPPort    int    `json:"httpPort"`
+	HTTPSEnable bool   `json:"httpsEnabled"`
+	HTTPSProxy  string `json:"httpsProxy"`
+	HTTPSPort   int    `json:"httpsPort"`
+	PACEnable   bool   `json:"pacEnabled"`
 }
 
 func newAPIMux() *http.ServeMux {
@@ -72,7 +101,9 @@ func newAPIMux() *http.ServeMux {
 }
 
 func apiSystemProxy(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, systemProxyState())
+	st := systemProxyState()
+	st.Transparent = transparentStatus()
+	writeJSON(w, st)
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
@@ -150,6 +181,7 @@ type stateJSON struct {
 	ForceRoute         string            `json:"forceRoute"`
 	SystemProxy        bool              `json:"systemProxy"`
 	SystemProxyExclude []string          `json:"systemProxyExclude"`
+	TransparentRoute   []string          `json:"transparentRoute"`
 	ForceChrome        bool              `json:"forceChrome"`
 	AllowRemoteClients bool              `json:"allowRemoteClients"`
 	Hosts              map[string]string `json:"hosts"`
@@ -168,6 +200,7 @@ func apiState(w http.ResponseWriter, r *http.Request) {
 	socksAddress := configuration.SocksAddress
 	systemProxy := configuration.SystemProxy
 	systemProxyExclude := append([]string(nil), configuration.SystemProxyExclude...)
+	transparentRoute := append([]string{}, configuration.TransparentRoute...)
 	forceChrome := configuration.ForceChrome
 	allowRemote := configuration.AllowRemoteClients
 	onboarding := configuration.OnboardingDone != nil && !*configuration.OnboardingDone
@@ -195,6 +228,7 @@ func apiState(w http.ResponseWriter, r *http.Request) {
 		},
 		SystemProxy:        systemProxy,
 		SystemProxyExclude: systemProxyExclude,
+		TransparentRoute:   transparentRoute,
 		ForceChrome:        forceChrome,
 		AllowRemoteClients: allowRemote,
 		Hosts:              hosts,
@@ -559,6 +593,7 @@ func apiGetConfig(w http.ResponseWriter, r *http.Request) {
 	socksAddress := configuration.SocksAddress
 	systemProxy := configuration.SystemProxy
 	systemProxyExclude := append([]string(nil), configuration.SystemProxyExclude...)
+	transparentRoute := append([]string{}, configuration.TransparentRoute...)
 	forceChrome := configuration.ForceChrome
 	allowRemote := configuration.AllowRemoteClients
 	configMu.Unlock()
@@ -574,6 +609,7 @@ func apiGetConfig(w http.ResponseWriter, r *http.Request) {
 		"hosts":              hosts,
 		"systemProxy":        systemProxy,
 		"systemProxyExclude": systemProxyExclude,
+		"transparentRoute":   transparentRoute,
 		"forceChrome":        forceChrome,
 		"allowRemoteClients": allowRemote,
 	})
@@ -585,6 +621,7 @@ type configFormJSON struct {
 	Hosts              *map[string]string `json:"hosts"`
 	SystemProxy        *bool              `json:"systemProxy"`
 	SystemProxyExclude *[]string          `json:"systemProxyExclude"`
+	TransparentRoute   *[]string          `json:"transparentRoute"`
 	ForceChrome        *bool              `json:"forceChrome"`
 	AllowRemoteClients *bool              `json:"allowRemoteClients"`
 }
@@ -670,6 +707,9 @@ func apiSaveConfig(w http.ResponseWriter, r *http.Request) {
 	if form.SystemProxyExclude != nil {
 		configuration.SystemProxyExclude = append([]string(nil), (*form.SystemProxyExclude)...)
 	}
+	if form.TransparentRoute != nil {
+		configuration.TransparentRoute = append([]string(nil), (*form.TransparentRoute)...)
+	}
 	forceChromeChanged := false
 	if form.ForceChrome != nil && *form.ForceChrome != configuration.ForceChrome {
 		configuration.ForceChrome = *form.ForceChrome
@@ -704,6 +744,7 @@ func apiSaveConfig(w http.ResponseWriter, r *http.Request) {
 	} else {
 		go restoreSystemProxy()
 	}
+	go applyTransparentRouting()
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 

@@ -310,7 +310,7 @@ func dialChain(route *ProxyRoute, target, host string, rec *ConnInfo) (net.Conn,
 	if len(hops) == 0 {
 		// A dynamic hop with no matching rule: connect to the target from the
 		// point reached so far, which is the local machine.
-		raw, err := net.DialTimeout("tcp", target, dialTimeout)
+		raw, err := dialTCP("tcp", target, dialTimeout)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -354,7 +354,7 @@ func dialChain(route *ProxyRoute, target, host string, rec *ConnInfo) (net.Conn,
 		conn = &countingConn{Conn: raw, in: &rec.bytesUpIn, out: &rec.bytesUpOut}
 		first = relayIdx + 1
 	} else {
-		raw, err := net.DialTimeout("tcp", hops[0].addr, dialTimeout)
+		raw, err := dialTCP("tcp", hops[0].addr, dialTimeout)
 		if err != nil {
 			return nil, nil, fmt.Errorf("hop 1 (%s): %w", hops[0].addr, err)
 		}

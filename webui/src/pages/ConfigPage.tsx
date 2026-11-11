@@ -95,6 +95,7 @@ export default function ConfigPage() {
   const [sysProxy, setSysProxy] = useState(false)
   const [exclude, setExclude] = useState<string[]>([])
   const [forceChrome, setForceChrome] = useState(false)
+  const [transparent, setTransparent] = useState<string[]>([])
   const [allowRemote, setAllowRemote] = useState(false)
   const [tab, setTab] = useState<string>(() => {
     try { return sessionStorage.getItem('gsp.configTab') || 'network' } catch { return 'network' }
@@ -126,6 +127,7 @@ export default function ConfigPage() {
         setSysProxy(s.systemProxy)
         setExclude(s.systemProxyExclude ?? [])
         setForceChrome(s.forceChrome)
+        setTransparent(s.transparentRoute ?? [])
         setAllowRemote(s.allowRemoteClients)
         setForceRoute(s.forceRoute || '')
         setConfigLoaded(true)
@@ -523,6 +525,53 @@ export default function ConfigPage() {
                   .catch((err) => setError(String(err)))
               }}
             />
+            <Switch
+              mt="md"
+              label={t('Force Chrome to use this proxy')}
+              description={t("Sets a Chrome policy that does not depend on the system proxy, so it keeps working when a VPN client overwrites it. Restart Chrome to apply.")}
+              checked={forceChrome}
+              onChange={(e) => {
+                const v = e.currentTarget.checked
+                setForceChrome(v)
+                api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: exclude, forceChrome: v })
+                  .then(load)
+                  .catch((err) => setError(String(err)))
+              }}
+            />
+            <TagsInput
+              mt="md"
+              label={t('Transparent routing (macOS)')}
+              description={t('Services or interfaces (e.g. pulse, en0) whose web traffic (HTTP/HTTPS) is redirected to the proxy by the firewall, without touching the system proxy: it works with VPN clients that forbid changing it. Needs a one-time sudo permission, see the log.')}
+              placeholder="pulse"
+              value={transparent}
+              onChange={(v) => {
+                setTransparent(v)
+                api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: exclude, forceChrome, transparentRoute: v })
+                  .then(() => { load(); setTimeout(load, 2500) })
+                  .catch((err) => setError(String(err)))
+              }}
+            />
+            {transparent.length > 0 && (
+              <Stack gap={4} mt="xs">
+                <Group gap="xs">
+                  <Badge size="sm" variant="light" color={sysProxyState?.transparent?.loaded ? 'green' : 'red'} tt="none">
+                    {sysProxyState?.transparent?.loaded ? t('Firewall rules loaded') : t('Firewall rules NOT loaded')}
+                  </Badge>
+                  <Text size="xs" c="dimmed">
+                    {t('Interfaces:')} <Code>{(sysProxyState?.transparent?.interfaces ?? []).join(', ') || t('none')}</Code>
+                  </Text>
+                </Group>
+                {sysProxyState?.transparent?.error && (
+                  <Alert color="red" title={t('Transparent routing')}>
+                    <Text size="sm">{sysProxyState.transparent.error}</Text>
+                    {sysProxyState.transparent.hint && <Code block mt="xs">{sysProxyState.transparent.hint}</Code>}
+                  </Alert>
+                )}
+                {!sysProxyState?.transparent?.error && sysProxyState?.transparent?.hint && (
+                  <Text size="xs" c="dimmed">{sysProxyState.transparent.hint}</Text>
+                )}
+              </Stack>
+            )}
         {sysProxyState && (
           <>
             <Divider my="md" />
@@ -559,6 +608,26 @@ export default function ConfigPage() {
                 </>
               )}
             </Text>
+            {(sysProxyState.interfaces ?? []).length > 0 && (
+              <Stack gap={4} mt="sm">
+                <Text size="sm" fw={600}>{t('System proxy on each active interface:')}</Text>
+                {(sysProxyState.interfaces ?? []).map((i) => (
+                  <Group key={`${i.service}-${i.iface}`} gap="xs">
+                    <Code>{i.service} ({i.iface})</Code>
+                    {i.primary && <Badge size="xs" color="teal" variant="light" tt="none">{t('primary')}</Badge>}
+                    {i.dynamic && <Badge size="xs" color="grape" variant="light" tt="none">VPN</Badge>}
+                    {i.excluded && <Badge size="xs" color="gray" variant="outline" tt="none">{t('excluded')}</Badge>}
+                    <Badge size="xs" variant="light" color={i.httpEnabled ? 'green' : 'red'} tt="none">
+                      HTTP: {i.httpEnabled ? `${i.httpProxy}:${i.httpPort}` : t('disabled')}
+                    </Badge>
+                    <Badge size="xs" variant="light" color={i.httpsEnabled ? 'green' : 'red'} tt="none">
+                      HTTPS: {i.httpsEnabled ? `${i.httpsProxy}:${i.httpsPort}` : t('disabled')}
+                    </Badge>
+                    {i.pacEnabled && <Badge size="xs" variant="light" color="red" tt="none">PAC</Badge>}
+                  </Group>
+                ))}
+              </Stack>
+            )}
             <Text size="xs" c="dimmed" mt={4}>
               {t('Exclusions (bypass):')} {(sysProxyState.exceptions ?? []).join(', ') || t('none')}
             </Text>

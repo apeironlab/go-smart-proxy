@@ -94,6 +94,7 @@ var pacFetchClient = &http.Client{
 		DialContext: (&net.Dialer{
 			Timeout:   pacFetchTo,
 			KeepAlive: 30 * time.Second,
+			Control:   markEgress,
 		}).DialContext,
 		MaxIdleConns:          4,
 		IdleConnTimeout:       90 * time.Second,
@@ -380,6 +381,7 @@ func discoverNetwork() {
 	if !firstRun {
 		resetConnections()
 		go applySystemProxy()
+		go applyTransparentRouting()
 		// Contacts see whether this device is on a VPN: tell them it changed.
 		go relayHub.PublishContext()
 	}
@@ -733,6 +735,7 @@ func (p *ProxyRoute) getRoundTripper(direct bool, proxyAddr string, auth bool) h
 				Timeout:   10 * time.Second,
 				KeepAlive: 30 * time.Second,
 				DualStack: true,
+				Control:   markEgress,
 			}).DialContext(ctx, network, addr)
 			if err != nil {
 				return nil, err

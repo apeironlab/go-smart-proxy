@@ -139,6 +139,11 @@ type Configuration struct {
 	SystemProxy        bool               `yaml:"SystemProxy"`
 	SystemProxyExclude []string           `yaml:"SystemProxyExclude"`
 	ForceChrome        bool               `yaml:"ForceChrome"`
+	// TransparentRoute lists network services or interfaces (substring of the
+	// service name or of the interface name, e.g. "pulse", "en0") whose
+	// outgoing HTTP/HTTPS traffic is redirected to the proxy by the packet
+	// filter (macOS). Empty = disabled.
+	TransparentRoute []string `yaml:"TransparentRoute,omitempty"`
 	// AllowRemoteClients lets machines other than this one use the HTTP and
 	// SOCKS5 listeners. The proxy has no client authentication and forwards with
 	// your upstream credentials, so it is off unless you explicitly enable it.

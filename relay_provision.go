@@ -237,7 +237,7 @@ func probeCertificate(base *url.URL) (certificateInfo, error) {
 		port = "443"
 	}
 	addr := net.JoinHostPort(base.Hostname(), port)
-	d := &net.Dialer{Timeout: 10 * time.Second}
+	d := &net.Dialer{Timeout: 10 * time.Second, Control: markEgress}
 	conn, err := tls.DialWithDialer(d, "tcp", addr, &tls.Config{
 		InsecureSkipVerify: true,
 		ServerName:         base.Hostname(),

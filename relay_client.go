@@ -607,7 +607,7 @@ func (r *relayClient) handleIncoming(st net.Conn) {
 	if ip := resolveHost(host); ip != "" {
 		target = net.JoinHostPort(ip, portStr)
 	}
-	d := net.Dialer{Timeout: dialTimeout, Control: r.guard}
+	d := net.Dialer{Timeout: dialTimeout, Control: chainControl(r.guard, markEgress)}
 	conn, err := d.Dial("tcp", target)
 	if err != nil {
 		deny(err.Error())
@@ -809,7 +809,7 @@ func (r *relayClient) Status() relayStatusJSON {
 func dialViaRoute(route *ProxyRoute, addr string, rec *ConnInfo) (net.Conn, error) {
 	proxy := route.FindProxy("https://" + addr + "/")
 	if proxy.Type == "DIRECT" {
-		c, err := net.DialTimeout("tcp", addr, dialTimeout)
+		c, err := dialTCP("tcp", addr, dialTimeout)
 		if err != nil {
 			return nil, err
 		}

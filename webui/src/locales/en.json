@@ -646,5 +646,16 @@
   "This interface needs the access token.": "This interface needs the access token.",
   "Your organization requires the access token.": "Your organization requires the access token.",
   "Access token": "Access token",
-  "Open the interface from the tray icon (it signs you in), or copy the token from the file": "Open the interface from the tray icon (it signs you in), or copy the token from the file"
+  "Open the interface from the tray icon (it signs you in), or copy the token from the file": "Open the interface from the tray icon (it signs you in), or copy the token from the file",
+  "System proxy on each active interface:": "System proxy on each active interface:",
+  "primary": "primary",
+  "excluded": "excluded",
+  "Force Chrome to use this proxy": "Force Chrome to use this proxy",
+  "Sets a Chrome policy that does not depend on the system proxy, so it keeps working when a VPN client overwrites it. Restart Chrome to apply.": "Sets a Chrome policy that does not depend on the system proxy, so it keeps working when a VPN client overwrites it. Restart Chrome to apply.",
+  "Transparent routing (macOS)": "Transparent routing (macOS)",
+  "Services or interfaces (e.g. pulse, en0) whose web traffic (HTTP/HTTPS) is redirected to the proxy by the firewall, without touching the system proxy: it works with VPN clients that forbid changing it. Needs a one-time sudo permission, see the log.": "Services or interfaces (e.g. pulse, en0) whose web traffic (HTTP/HTTPS) is redirected to the proxy by the firewall, without touching the system proxy: it works with VPN clients that forbid changing it. Needs a one-time sudo permission, see the log.",
+  "Firewall rules loaded": "Firewall rules loaded",
+  "Firewall rules NOT loaded": "Firewall rules NOT loaded",
+  "Interfaces:": "Interfaces:",
+  "Transparent routing": "Transparent routing"
 }

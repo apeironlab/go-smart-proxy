@@ -170,9 +170,11 @@ func main() {
 	applyChromePolicy()
 	go watchSystemProxy()
 	go applySystemProxy()
+	go applyTransparentRouting()
 
 	go serve()
 	go serveSOCKS()
+	go serveTransparent()
 
 	systray.Run(systrayReady, systrayExit)
 
@@ -245,6 +247,7 @@ func watchSystemProxy() {
 	defer ticker.Stop()
 	for range ticker.C {
 		applySystemProxy()
+		applyTransparentRouting()
 	}
 }
 
@@ -556,7 +559,7 @@ func dialTarget(kind, clientAddr, host, port, method, url string) (net.Conn, *bu
 	var upstreamBr *bufio.Reader
 	var err error
 	if proxy.Type == "DIRECT" {
-		upstream, err = net.DialTimeout("tcp", target, dialTimeout)
+		upstream, err = dialTCP("tcp", target, dialTimeout)
 		if err == nil {
 			upstream = &countingConn{Conn: upstream, in: &rec.bytesUpIn, out: &rec.bytesUpOut}
 			upstreamBr = bufio.NewReader(upstream)
@@ -582,7 +585,7 @@ func dialProxyAndConnect(route *ProxyRoute, proxy *gpac.Proxy, target, host stri
 	if len(route.chain) > 0 {
 		return dialChain(route, target, host, rec)
 	}
-	upstream, err := net.DialTimeout("tcp", proxy.Address, dialTimeout)
+	upstream, err := dialTCP("tcp", proxy.Address, dialTimeout)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -931,6 +934,7 @@ func systrayReact(quit *systray.MenuItem) {
 	select {
 	case <-quit.ClickedCh:
 		restoreSystemProxy() // Windows: put the system's proxy settings back
+		removeTransparentRouting()
 		os.Exit(0)
 	}
 }

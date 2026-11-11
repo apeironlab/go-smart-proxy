@@ -2046,3 +2046,18 @@ Issues and pull requests are welcome.
 Copyright the Go Smart Proxy contributors.
 
 Licensed under the **Apache License 2.0**. See [LICENSE](LICENSE).
+
+## Transparent routing (macOS, experimental)
+
+For VPN clients that forbid changing the system proxy (Pulse/Ivanti
+disconnects when it is modified), `TransparentRoute` (a list of substrings of a
+network service name or interface, e.g. `pulse`, `en0`; also in the web UI)
+redirects the HTTP/HTTPS connections leaving through those interfaces to the
+proxy, with a `pf` anchor (`com.apple/250.ProxyRoute`). The destination is read
+from the SNI / the `Host` header. The connections the proxy itself opens carry
+a TOS mark (`0x20`) that the rules let through, which avoids loops.
+
+Loading rules needs root: the program runs `sudo -n pfctl` and logs the
+`sudoers` line to add (with `visudo -f /etc/sudoers.d/proxyroute`) if it is not
+allowed. Emergency stop: `sudo pfctl -a com.apple/250.ProxyRoute -F all`.
+Limits: TCP 80/443 only, IPv4, no destination without SNI/Host.

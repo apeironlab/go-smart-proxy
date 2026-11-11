@@ -3,7 +3,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"net"
 	"os/exec"
@@ -16,6 +15,7 @@ import (
 var (
 	proxyApplyMu   sync.Mutex
 	lastProxyApply time.Time
+	lastVPNSkipLog time.Time
 )
 
 // networkServices returns the services configured in System Settings, as
@@ -36,6 +36,73 @@ func networkServices() []string {
 	return services
 }
 
+// scutilRun feeds a script to scutil and returns its output.
+func scutilRun(script string) string {
+	cmd := exec.Command("scutil")
+	cmd.Stdin = strings.NewReader(script)
+	out, _ := cmd.CombinedOutput()
+	return string(out)
+}
+
+// activeService is a network service that currently has an address.
+type activeService struct {
+	ID      string // key in the dynamic store
+	Name    string // name shown in System Settings (the ID for dynamic VPN services)
+	Iface   string // BSD interface (en0, utun4...)
+	Dynamic bool   // not configured in System Settings (VPN clients): no networksetup
+}
+
+// activeServices lists the services that have an IPv4/IPv6 address, i.e. the
+// active interfaces.
+func activeServices() []activeService {
+	out := scutilRun("list State:/Network/Service/[^/]+/IPv[46]\n")
+	seen := map[string]bool{}
+	var services []activeService
+	for _, line := range strings.Split(out, "\n") {
+		_, key, ok := strings.Cut(line, " = ")
+		if !ok {
+			continue
+		}
+		parts := strings.Split(strings.TrimSpace(key), "/")
+		// State: / Network / Service / <ID> / IPv4
+		if len(parts) < 5 || parts[3] == "" || seen[parts[3]] {
+			continue
+		}
+		id := parts[3]
+		seen[id] = true
+		svc := activeService{ID: id, Name: id, Dynamic: true}
+		for _, l := range strings.Split(scutilRun("show "+strings.TrimSpace(key)+"\n"), "\n") {
+			if k, v, ok := strings.Cut(strings.TrimSpace(l), " : "); ok && k == "InterfaceName" {
+				svc.Iface = v
+			}
+		}
+		if svc.Iface == "" {
+			continue
+		}
+		for _, l := range strings.Split(scutilRun("show Setup:/Network/Service/"+id+"\n"), "\n") {
+			if k, v, ok := strings.Cut(strings.TrimSpace(l), " : "); ok && k == "UserDefinedName" {
+				svc.Name = v
+				svc.Dynamic = false
+			}
+		}
+		services = append(services, svc)
+	}
+
+	// The primary service is always included: VPN clients (Pulse/Ivanti) do
+	// not necessarily publish an IPv4 key under their own service id.
+	if id, iface := primaryService(); id != "" && !seen[id] {
+		svc := activeService{ID: id, Name: id, Iface: iface, Dynamic: true}
+		for _, l := range strings.Split(scutilRun("show Setup:/Network/Service/"+id+"\n"), "\n") {
+			if k, v, ok := strings.Cut(strings.TrimSpace(l), " : "); ok && k == "UserDefinedName" {
+				svc.Name = v
+				svc.Dynamic = false
+			}
+		}
+		services = append(services, svc)
+	}
+	return services
+}
+
 // vpnService returns the primary service key when it is a dynamic VPN
 // service (i.e. not configured in System Settings): for those services the
 // effective proxy comes from the service runtime state, which VPN clients
@@ -45,21 +112,34 @@ func vpnService() (string, bool) {
 	if primary == "" {
 		return "", false
 	}
-	for _, s := range networkServices() {
-		if s == primary {
-			return "", false
+	for _, s := range activeServices() {
+		if s.ID == primary {
+			return primary, s.Dynamic
 		}
 	}
-	return primary, true
+	return "", false
 }
 
-// serviceProxies reads the runtime proxy dict of a network service.
-func serviceProxies(serviceKey string) (httpEnable, httpsEnable, pacEnable bool, httpProxy, httpsProxy, httpPort, httpsPort string) {
-	out, err := exec.Command("scutil", "show", "State:/Network/Service/"+serviceKey+"/Proxies").Output()
-	if err != nil {
-		return
+func serviceExcluded(svc activeService, exclude []string) bool {
+	for _, e := range exclude {
+		e = strings.ToLower(e)
+		if e != "" && (strings.Contains(strings.ToLower(svc.Name), e) || strings.Contains(strings.ToLower(svc.Iface), e)) {
+			return true
+		}
 	}
-	for _, line := range strings.Split(string(out), "\n") {
+	return false
+}
+
+// serviceProxies reads the proxy dict of a network service.
+func serviceProxies(serviceKey string) (httpEnable, httpsEnable, pacEnable bool, httpProxy, httpsProxy, httpPort, httpsPort string) {
+	// Dynamic services (VPN) keep their proxies in the runtime state; the
+	// services configured in System Settings only in the setup (the global
+	// "effective" proxy that Chrome sees is then derived from the primary one).
+	out := scutilRun("show State:/Network/Service/" + serviceKey + "/Proxies\n")
+	if strings.Contains(out, "No such key") {
+		out = scutilRun("show Setup:/Network/Service/" + serviceKey + "/Proxies\n")
+	}
+	for _, line := range strings.Split(out, "\n") {
 		trimmed := strings.TrimSpace(line)
 		k, v, ok := strings.Cut(trimmed, " : ")
 		if !ok {
@@ -85,58 +165,27 @@ func serviceProxies(serviceKey string) (httpEnable, httpsEnable, pacEnable bool,
 	return
 }
 
-// applyServiceProxyOverride rewrites the runtime proxy state of a dynamic
-// VPN service so that the effective system proxy points at this proxy while
-// the VPN is up. The service configuration the VPN client monitors is never
-// touched, so the tunnel does not restart.
-func applyServiceProxyOverride(serviceKey, host, port string) {
-	he, hse, pac, hp, hsp, hport, hsport := serviceProxies(serviceKey)
-	if he && hse && !pac && hp == host && hport == port && hsp == host && hsport == port {
-		return // already correct
-	}
-
-	// The values are interpolated into an scutil script: refuse anything that
-	// could add a command (line breaks, spaces, quotes...).
-	if !safeConfigToken(serviceKey) || !safeConfigToken(host) || !safeConfigToken(port) {
-		log.Printf("VPN proxy override refused: unsafe value in service %q, host %q or port %q", serviceKey, host, port)
-		return
-	}
-
-	script := fmt.Sprintf(`d.init
-d.add HTTPEnable 1
-d.add HTTPPort %s
-d.add HTTPProxy %s
-d.add HTTPSEnable 1
-d.add HTTPSPort %s
-d.add HTTPSProxy %s
-d.add ProxyAutoConfigEnable 0
-d.add ProxyAutoDiscoveryEnable 0
-set State:/Network/Service/%s/Proxies
-quit
-`, port, host, port, host, serviceKey)
-
-	cmd := exec.Command("scutil")
-	cmd.Stdin = strings.NewReader(script)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		log.Printf("VPN proxy override failed: %v (%s)", err, strings.TrimSpace(string(out)))
-		return
-	}
-	log.Printf("VPN proxy override applied on %s: %s:%s", serviceKey, host, port)
+// serviceCorrect reports whether the runtime proxy state of a service already
+// points at host:port with the PAC off.
+func serviceCorrect(id, host, port string) bool {
+	he, hse, pac, hp, hsp, hport, hsport := serviceProxies(id)
+	return he && hse && !pac && hp == host && hport == port && hsp == host && hsport == port
 }
 
-// applySystemProxy re-sets the macOS system HTTP/HTTPS proxy to this proxy
-// on every network service. Corporate VPN clients overwrite the system proxy
-// when they connect; re-applying it on network changes keeps browsers
-// pointing at the local proxy.
+// applySystemProxy sets the macOS system HTTP/HTTPS proxy to this proxy on
+// every active interface (every network service that has an address).
+// Corporate VPN clients overwrite the system proxy when they connect;
+// re-applying it on network changes keeps browsers pointing at the local
+// proxy.
 //
-// While a dynamic VPN service is primary, the underlying services are left
-// alone and only the VPN service runtime proxy state is rewritten (via
-// scutil): that is the effective proxy the system uses, and the VPN client
-// does not watch it.
+// Dynamic VPN services (not configured in System Settings) only get their
+// runtime proxy state rewritten (via scutil): the VPN client does not watch
+// it, so the tunnel does not restart. The other services are set with
+// networksetup.
 //
-// Services listed in SystemProxyExclude are never touched; the work is
-// skipped when the effective configuration is already correct; writes are
-// throttled.
+// Interfaces matching SystemProxyExclude (by service or interface name) are
+// never touched; a service already correct is left alone; networksetup
+// writes are throttled.
 func applySystemProxy() {
 	configMu.Lock()
 	enabled := configuration.SystemProxy
@@ -154,27 +203,38 @@ func applySystemProxy() {
 		port = "3128"
 	}
 
-	ifaceName := strings.ToLower(getNetState().iface.Name)
-	for _, e := range exclude {
-		if e != "" && strings.Contains(ifaceName, strings.ToLower(e)) {
-			log.Printf("System proxy: default interface %q is excluded, skipping", getNetState().iface.Name)
+	primary := primaryServiceName()
+	services := activeServices()
+
+	// With a dynamic VPN service primary nothing is written at all: the
+	// effective proxy comes from that service, and clients such as
+	// Pulse/Ivanti monitor it and drop the tunnel as soon as it is modified
+	// (the global proxy key is owned by configd and cannot be written). The
+	// same goes for the other services: networksetup changes make the VPN
+	// client re-establish the tunnel in a loop.
+	for _, svc := range services {
+		if svc.Dynamic && svc.ID == primary {
+			if time.Since(lastVPNSkipLog) > 10*time.Minute {
+				lastVPNSkipLog = time.Now()
+				log.Printf("System proxy: VPN service %s (%s) is primary, leaving the system proxy alone", svc.Name, svc.Iface)
+			}
 			return
 		}
 	}
 
-	// Dynamic VPN service is primary: only rewrite its runtime proxy state.
-	if key, ok := vpnService(); ok {
-		applyServiceProxyOverride(key, host, port)
-		return
+	var pending []activeService
+	for _, svc := range services {
+		if serviceExcluded(svc, exclude) {
+			continue
+		}
+		if svc.Dynamic {
+			continue // dynamic services belong to their VPN client: never written
+		}
+		if !serviceCorrect(svc.ID, host, port) {
+			pending = append(pending, svc)
+		}
 	}
-
-	// Idempotency: if the effective configuration already points here and the
-	// PAC is off, there is nothing to do (and nothing for the VPN to react to).
-	st := systemProxyState()
-	portNum, _ := strconv.Atoi(port)
-	if st.HTTPEnable && st.HTTPProxy == host && st.HTTPPort == portNum &&
-		st.HTTPSEnable && st.HTTPSProxy == host && st.HTTPSPort == portNum &&
-		!st.PACEnable {
+	if len(pending) == 0 {
 		return
 	}
 
@@ -186,53 +246,50 @@ func applySystemProxy() {
 	lastProxyApply = time.Now()
 	proxyApplyMu.Unlock()
 
-	for _, service := range networkServices() {
-		skip := false
-		for _, e := range exclude {
-			if e != "" && strings.Contains(strings.ToLower(service), strings.ToLower(e)) {
-				skip = true
-				break
-			}
-		}
-		if skip {
-			log.Printf("System proxy: service %q excluded, not touching it", service)
-			continue
-		}
+	for _, svc := range pending {
 		commands := [][]string{
-			{"-setwebproxy", service, host, port},
-			{"-setsecurewebproxy", service, host, port},
-			{"-setwebproxystate", service, "on"},
-			{"-setsecurewebproxystate", service, "on"},
+			{"-setwebproxy", svc.Name, host, port},
+			{"-setsecurewebproxy", svc.Name, host, port},
+			{"-setwebproxystate", svc.Name, "on"},
+			{"-setsecurewebproxystate", svc.Name, "on"},
 			// A PAC (auto-config) takes precedence over the manual proxy on
 			// macOS: disable it, otherwise browsers would keep using the PAC
 			// (e.g. the corporate wpad.dat) instead of this proxy.
-			{"-setautoproxystate", service, "off"},
-			{"-setproxyautodiscovery", service, "off"},
+			{"-setautoproxystate", svc.Name, "off"},
+			{"-setproxyautodiscovery", svc.Name, "off"},
 		}
 		for _, args := range commands {
 			if out, err := exec.Command("networksetup", args...).CombinedOutput(); err != nil {
 				log.Printf("networksetup %v failed: %v (%s)", args, err, strings.TrimSpace(string(out)))
 			}
 		}
+		log.Printf("System proxy set to %s:%s on %s (%s)", host, port, svc.Name, svc.Iface)
 	}
-	log.Printf("System proxy set to %s:%s", host, port)
 }
 
 // primaryServiceName returns the network service currently marked primary
 // (the one whose proxy configuration the system actually uses).
 func primaryServiceName() string {
-	out, err := exec.Command("scutil", "--get", "State:/Network/Global/IPv4").Output()
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		trimmed := strings.TrimSpace(line)
-		k, v, ok := strings.Cut(trimmed, " : ")
-		if ok && k == "PrimaryService" {
-			return v
+	id, _ := primaryService()
+	return id
+}
+
+// primaryService returns the primary service and its interface.
+func primaryService() (id, iface string) {
+	out := scutilRun("show State:/Network/Global/IPv4\n")
+	for _, line := range strings.Split(out, "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), " : ")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "PrimaryService":
+			id = v
+		case "PrimaryInterface":
+			iface = v
 		}
 	}
-	return ""
+	return
 }
 
 // systemProxyState reads the effective system proxy configuration, the very
@@ -288,6 +345,20 @@ func systemProxyState() systemProxyStateJSON {
 	}
 
 	st.PrimaryService = primaryServiceName()
+	configMu.Lock()
+	exclude := append([]string(nil), configuration.SystemProxyExclude...)
+	configMu.Unlock()
+	for _, svc := range activeServices() {
+		he, hse, pac, hp, hsp, hport, hsport := serviceProxies(svc.ID)
+		hn, _ := strconv.Atoi(hport)
+		hsn, _ := strconv.Atoi(hsport)
+		st.Interfaces = append(st.Interfaces, ifaceProxyJSON{
+			Service: svc.Name, Iface: svc.Iface, Primary: svc.ID == st.PrimaryService,
+			Dynamic: svc.Dynamic, Excluded: serviceExcluded(svc, exclude),
+			HTTPEnable: he, HTTPProxy: hp, HTTPPort: hn,
+			HTTPSEnable: hse, HTTPSProxy: hsp, HTTPSPort: hsn, PACEnable: pac,
+		})
+	}
 	if key, ok := vpnService(); ok {
 		st.VPNService = key
 		he, hse, pac, hp, hsp, hport, hsport := serviceProxies(key)

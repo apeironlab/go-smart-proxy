@@ -646,5 +646,16 @@
   "This interface needs the access token.": "Questa interfaccia richiede il token di accesso.",
   "Your organization requires the access token.": "La tua organizzazione richiede il token di accesso.",
   "Access token": "Token di accesso",
-  "Open the interface from the tray icon (it signs you in), or copy the token from the file": "Apri l'interfaccia dall'icona nella barra (ti fa accedere), oppure copia il token dal file"
+  "Open the interface from the tray icon (it signs you in), or copy the token from the file": "Apri l'interfaccia dall'icona nella barra (ti fa accedere), oppure copia il token dal file",
+  "System proxy on each active interface:": "Proxy di sistema su ogni interfaccia attiva:",
+  "primary": "primario",
+  "excluded": "escluso",
+  "Force Chrome to use this proxy": "Forza Chrome a usare questo proxy",
+  "Sets a Chrome policy that does not depend on the system proxy, so it keeps working when a VPN client overwrites it. Restart Chrome to apply.": "Imposta una policy di Chrome che non dipende dal proxy di sistema, così funziona anche quando un client VPN lo sovrascrive. Riavvia Chrome per applicarla.",
+  "Transparent routing (macOS)": "Instradamento trasparente (macOS)",
+  "Services or interfaces (e.g. pulse, en0) whose web traffic (HTTP/HTTPS) is redirected to the proxy by the firewall, without touching the system proxy: it works with VPN clients that forbid changing it. Needs a one-time sudo permission, see the log.": "Servizi o interfacce (es. pulse, en0) il cui traffico web (HTTP/HTTPS) viene reindirizzato al proxy dal firewall, senza toccare il proxy di sistema: funziona con i client VPN che ne vietano la modifica. Richiede un permesso sudo una tantum, vedi il log.",
+  "Firewall rules loaded": "Regole del firewall caricate",
+  "Firewall rules NOT loaded": "Regole del firewall NON caricate",
+  "Interfaces:": "Interfacce:",
+  "Transparent routing": "Instradamento trasparente"
 }

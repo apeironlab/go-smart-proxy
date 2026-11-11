@@ -84,6 +84,31 @@ export interface SystemProxyState {
   vpnHttpsProxy: string
   vpnHttpsPort: string
   vpnPacEnabled: boolean
+  interfaces?: IfaceProxy[] | null
+  transparent?: TransparentStatus
+}
+
+export interface TransparentStatus {
+  configured: string[]
+  interfaces: string[]
+  loaded: boolean
+  error: string
+  hint: string
+}
+
+export interface IfaceProxy {
+  service: string
+  iface: string
+  primary: boolean
+  dynamic: boolean
+  excluded: boolean
+  httpEnabled: boolean
+  httpProxy: string
+  httpPort: number
+  httpsEnabled: boolean
+  httpsProxy: string
+  httpsPort: number
+  pacEnabled: boolean
 }
 
 export interface IfaceStatus {
@@ -115,6 +140,7 @@ export interface StateInfo {
   forceRoute: string
   systemProxy: boolean
   systemProxyExclude: string[]
+  transparentRoute: string[]
   forceChrome: boolean
   allowRemoteClients: boolean
   uptimeSeconds: number
@@ -325,6 +351,7 @@ export const api = {
     hosts: Record<string, string>
     systemProxy: boolean
     systemProxyExclude: string[]
+    transparentRoute?: string[]
     forceChrome: boolean
     allowRemoteClients?: boolean
   }) => post('/api/config', form),
