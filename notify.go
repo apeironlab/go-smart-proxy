@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 )
 
@@ -18,6 +19,9 @@ var (
 // notifyDesktop shows a best-effort desktop notification. Rapid notifications
 // are throttled so a burst of requests cannot flood the desktop.
 func notifyDesktop(title, body string) {
+	if testing.Testing() {
+		return // tests must never pop up real notifications
+	}
 	notifyMu.Lock()
 	if time.Since(lastNotify) < 1500*time.Millisecond {
 		notifyMu.Unlock()
