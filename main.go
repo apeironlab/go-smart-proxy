@@ -148,6 +148,9 @@ const (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--pf-helper" {
+		os.Exit(runPFHelper(os.Args[2:]))
+	}
 	prepareWorkingDirectory()
 
 	dnsCache = expirablelru.NewExpirableLRU(500, nil, 1*time.Hour, 2*time.Hour)

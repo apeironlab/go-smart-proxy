@@ -94,6 +94,8 @@ export interface TransparentStatus {
   loaded: boolean
   error: string
   hint: string
+  needsAuth: boolean
+  mode: string
 }
 
 export interface IfaceProxy {
@@ -141,6 +143,7 @@ export interface StateInfo {
   systemProxy: boolean
   systemProxyExclude: string[]
   transparentRoute: string[]
+  transparentMode: string
   forceChrome: boolean
   allowRemoteClients: boolean
   uptimeSeconds: number
@@ -352,10 +355,12 @@ export const api = {
     systemProxy: boolean
     systemProxyExclude: string[]
     transparentRoute?: string[]
+    transparentMode?: string
     forceChrome: boolean
     allowRemoteClients?: boolean
   }) => post('/api/config', form),
   finishOnboarding: () => post('/api/onboarding', {}),
+  authorizeTransparent: () => post('/api/transparent/authorize', {}),
   // Every relay call can name the relay it is about; without a name the first one is used.
   relay: (relay?: string) => req<RelayStatus>('/api/relay' + rq(relay)),
   // All relays at once.

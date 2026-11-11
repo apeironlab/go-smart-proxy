@@ -22,6 +22,10 @@ import (
 // listens on the loopback only.
 const transparentAddr = "127.0.0.1:3129"
 
+// sniffWait is how long the first bytes of a client are waited for, to read
+// a name from them.
+const sniffWait = 250 * time.Millisecond
+
 // serveTransparent keeps the transparent listener open while at least one
 // interface is selected in the configuration.
 func serveTransparent() {
@@ -67,13 +71,27 @@ func handleTransparent(client net.Conn) {
 	defer activeConns.remove(client)
 	defer client.Close()
 
-	client.SetReadDeadline(time.Now().Add(handshakeTimeout))
 	br := bufio.NewReaderSize(client, 16*1024+8)
-	host, port, err := sniffDestination(br)
-	client.SetReadDeadline(time.Time{})
-	if err != nil {
-		log.Printf("Transparent connection from %s: no destination (%v)", client.RemoteAddr(), err)
-		return
+	host, port, err := lookupOriginalDst(client.RemoteAddr().String())
+	if err == nil {
+		// The address is known, whatever the protocol. If the client speaks
+		// first and it is TLS or HTTP, its name is better than the address
+		// (the routing rules work on names); a server-first protocol stays
+		// silent, so the wait is short.
+		client.SetReadDeadline(time.Now().Add(sniffWait))
+		if name, _, serr := sniffDestination(br); serr == nil {
+			host = name
+		}
+		client.SetReadDeadline(time.Time{})
+	} else {
+		// No helper answer: only HTTP and HTTPS can be recognised.
+		client.SetReadDeadline(time.Now().Add(handshakeTimeout))
+		host, port, err = sniffDestination(br)
+		client.SetReadDeadline(time.Time{})
+		if err != nil {
+			log.Printf("Transparent connection from %s: no destination (%v)", client.RemoteAddr(), err)
+			return
+		}
 	}
 
 	upstream, upstreamBr, rec, err := dialTarget("transparent", client.RemoteAddr().String(), host, port, "TRANSPARENT", "")

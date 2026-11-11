@@ -2052,12 +2052,27 @@ Licensed under the **Apache License 2.0**. See [LICENSE](LICENSE).
 For VPN clients that forbid changing the system proxy (Pulse/Ivanti
 disconnects when it is modified), `TransparentRoute` (a list of substrings of a
 network service name or interface, e.g. `pulse`, `en0`; also in the web UI)
-redirects the HTTP/HTTPS connections leaving through those interfaces to the
-proxy, with a `pf` anchor (`com.apple/250.ProxyRoute`). The destination is read
-from the SNI / the `Host` header. The connections the proxy itself opens carry
-a TOS mark (`0x20`) that the rules let through, which avoids loops.
+redirects the TCP connections leaving through those interfaces to the proxy,
+with a `pf` anchor (`com.apple/250.ProxyRoute`). The system proxy is not
+touched.
 
-Loading rules needs root: the program runs `sudo -n pfctl` and logs the
-`sudoers` line to add (with `visudo -f /etc/sudoers.d/proxyroute`) if it is not
-allowed. Emergency stop: `sudo pfctl -a com.apple/250.ProxyRoute -F all`.
-Limits: TCP 80/443 only, IPv4, no destination without SNI/Host.
+- **Destination.** The original destination of each connection is asked to a
+  privileged helper (the packet filter state table). When the client speaks
+  first and it is TLS or HTTP, the SNI / `Host` name replaces the address, so
+  that the routing rules (which work on names) apply. Without the helper only
+  HTTP and HTTPS can be recognised.
+- **Privileges.** Loading the rules needs root. When a matching service becomes
+  active the program asks (a dialog with the service and the interface; the
+  mode is `TransparentMode`: `ask` by default, `auto` or `never`) and macOS
+  asks for the fingerprint or the password. The helper is a root-owned copy of
+  the program in `/Library/PrivilegedHelperTools`, started with `--pf-helper`;
+  it builds the rules itself from a list of interface names, talks to the
+  program over a Unix socket only the user can open, and exits (removing the
+  rules) when the program ends or the option is turned off. Nothing is added to
+  `sudoers`.
+- **Loops.** The connections the proxy opens carry a TOS mark (`0x20`) that the
+  rules let through; `reply-to` brings the answers back on `lo0`, which a
+  tunnel's own address would otherwise route into the tunnel. Loopback,
+  link-local and multicast destinations are never redirected.
+- **Limits.** TCP and IPv4 only; the UDP traffic (DNS, QUIC, media of calls) is
+  not redirected. Emergency stop: `sudo pfctl -a com.apple/250.ProxyRoute -F all`.

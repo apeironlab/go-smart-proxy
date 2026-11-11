@@ -144,6 +144,9 @@ type Configuration struct {
 	// outgoing HTTP/HTTPS traffic is redirected to the proxy by the packet
 	// filter (macOS). Empty = disabled.
 	TransparentRoute []string `yaml:"TransparentRoute,omitempty"`
+	// TransparentMode: "" = ask before enabling (default), "auto" = only the
+	// authentication prompt, "never" = enable only from the UI button.
+	TransparentMode string `yaml:"TransparentMode,omitempty"`
 	// AllowRemoteClients lets machines other than this one use the HTTP and
 	// SOCKS5 listeners. The proxy has no client authentication and forwards with
 	// your upstream credentials, so it is off unless you explicitly enable it.

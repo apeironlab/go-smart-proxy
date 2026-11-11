@@ -96,6 +96,7 @@ export default function ConfigPage() {
   const [exclude, setExclude] = useState<string[]>([])
   const [forceChrome, setForceChrome] = useState(false)
   const [transparent, setTransparent] = useState<string[]>([])
+  const [transparentMode, setTransparentMode] = useState('ask')
   const [allowRemote, setAllowRemote] = useState(false)
   const [tab, setTab] = useState<string>(() => {
     try { return sessionStorage.getItem('gsp.configTab') || 'network' } catch { return 'network' }
@@ -128,6 +129,7 @@ export default function ConfigPage() {
         setExclude(s.systemProxyExclude ?? [])
         setForceChrome(s.forceChrome)
         setTransparent(s.transparentRoute ?? [])
+        setTransparentMode(s.transparentMode || 'ask')
         setAllowRemote(s.allowRemoteClients)
         setForceRoute(s.forceRoute || '')
         setConfigLoaded(true)
@@ -541,7 +543,7 @@ export default function ConfigPage() {
             <TagsInput
               mt="md"
               label={t('Transparent routing (macOS)')}
-              description={t('Services or interfaces (e.g. pulse, en0) whose web traffic (HTTP/HTTPS) is redirected to the proxy by the firewall, without touching the system proxy: it works with VPN clients that forbid changing it. Needs a one-time sudo permission, see the log.')}
+              description={t('Services or interfaces (e.g. pulse, en0) whose TCP traffic is redirected to the proxy by the firewall, without touching the system proxy: it works with VPN clients that forbid changing it. macOS asks for your fingerprint or password when it is activated.')}
               placeholder="pulse"
               value={transparent}
               onChange={(v) => {
@@ -553,6 +555,24 @@ export default function ConfigPage() {
             />
             {transparent.length > 0 && (
               <Stack gap={4} mt="xs">
+                <Select
+                  size="xs"
+                  label={t('When a matching service is active')}
+                  allowDeselect={false}
+                  data={[
+                    { value: 'ask', label: t('Ask before enabling') },
+                    { value: 'auto', label: t('Enable (only the authentication prompt)') },
+                    { value: 'never', label: t('Never ask: enable only with the button') },
+                  ]}
+                  value={transparentMode}
+                  onChange={(v) => {
+                    if (!v) return
+                    setTransparentMode(v)
+                    api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: exclude, forceChrome, transparentMode: v })
+                      .then(load)
+                      .catch((err) => setError(String(err)))
+                  }}
+                />
                 <Group gap="xs">
                   <Badge size="sm" variant="light" color={sysProxyState?.transparent?.loaded ? 'green' : 'red'} tt="none">
                     {sysProxyState?.transparent?.loaded ? t('Firewall rules loaded') : t('Firewall rules NOT loaded')}
@@ -561,10 +581,20 @@ export default function ConfigPage() {
                     {t('Interfaces:')} <Code>{(sysProxyState?.transparent?.interfaces ?? []).join(', ') || t('none')}</Code>
                   </Text>
                 </Group>
+                {sysProxyState?.transparent?.needsAuth && (
+                  <Group gap="xs">
+                    <Button
+                      size="xs"
+                      onClick={() => api.authorizeTransparent().then(() => setTimeout(load, 3000)).catch((err) => setError(String(err)))}
+                    >
+                      {t('Authorize')}
+                    </Button>
+                    <Text size="xs" c="dimmed">{t('Needed to load the firewall rules: macOS asks for your fingerprint or password.')}</Text>
+                  </Group>
+                )}
                 {sysProxyState?.transparent?.error && (
                   <Alert color="red" title={t('Transparent routing')}>
                     <Text size="sm">{sysProxyState.transparent.error}</Text>
-                    {sysProxyState.transparent.hint && <Code block mt="xs">{sysProxyState.transparent.hint}</Code>}
                   </Alert>
                 )}
                 {!sysProxyState?.transparent?.error && sysProxyState?.transparent?.hint && (

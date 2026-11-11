@@ -653,9 +653,15 @@
   "Force Chrome to use this proxy": "Forza Chrome a usare questo proxy",
   "Sets a Chrome policy that does not depend on the system proxy, so it keeps working when a VPN client overwrites it. Restart Chrome to apply.": "Imposta una policy di Chrome che non dipende dal proxy di sistema, così funziona anche quando un client VPN lo sovrascrive. Riavvia Chrome per applicarla.",
   "Transparent routing (macOS)": "Instradamento trasparente (macOS)",
-  "Services or interfaces (e.g. pulse, en0) whose web traffic (HTTP/HTTPS) is redirected to the proxy by the firewall, without touching the system proxy: it works with VPN clients that forbid changing it. Needs a one-time sudo permission, see the log.": "Servizi o interfacce (es. pulse, en0) il cui traffico web (HTTP/HTTPS) viene reindirizzato al proxy dal firewall, senza toccare il proxy di sistema: funziona con i client VPN che ne vietano la modifica. Richiede un permesso sudo una tantum, vedi il log.",
   "Firewall rules loaded": "Regole del firewall caricate",
   "Firewall rules NOT loaded": "Regole del firewall NON caricate",
   "Interfaces:": "Interfacce:",
-  "Transparent routing": "Instradamento trasparente"
+  "Transparent routing": "Instradamento trasparente",
+  "When a matching service is active": "Quando un servizio dell'elenco è attivo",
+  "Ask before enabling": "Chiedi prima di attivare",
+  "Enable (only the authentication prompt)": "Attiva (solo la richiesta di autenticazione)",
+  "Never ask: enable only with the button": "Non chiedere mai: attiva solo con il pulsante",
+  "Authorize": "Autorizza",
+  "Needed to load the firewall rules: macOS asks for your fingerprint or password.": "Serve per caricare le regole del firewall: macOS chiede l'impronta o la password.",
+  "Services or interfaces (e.g. pulse, en0) whose TCP traffic is redirected to the proxy by the firewall, without touching the system proxy: it works with VPN clients that forbid changing it. macOS asks for your fingerprint or password when it is activated.": "Servizi o interfacce (es. pulse, en0) il cui traffico TCP viene reindirizzato al proxy dal firewall, senza toccare il proxy di sistema: funziona con i client VPN che ne vietano la modifica. macOS chiede l'impronta o la password quando si attiva."
 }

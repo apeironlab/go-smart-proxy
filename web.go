@@ -57,6 +57,8 @@ type transparentStatusJSON struct {
 	Loaded     bool     `json:"loaded"`     // the packet filter rules are loaded
 	Error      string   `json:"error"`      // last problem
 	Hint       string   `json:"hint"`       // what to do about it
+	NeedsAuth  bool     `json:"needsAuth"`  // the user has to authorize the privileged helper
+	Mode       string   `json:"mode"`       // ask, auto or never
 }
 
 type ifaceProxyJSON struct {
@@ -97,7 +99,13 @@ func newAPIMux() *http.ServeMux {
 	m.HandleFunc("POST /api/config", apiSaveConfig)
 	m.HandleFunc("POST /api/onboarding", apiFinishOnboarding)
 	m.HandleFunc("GET /api/system-proxy", apiSystemProxy)
+	m.HandleFunc("POST /api/transparent/authorize", apiTransparentAuthorize)
 	return m
+}
+
+func apiTransparentAuthorize(w http.ResponseWriter, r *http.Request) {
+	go authorizeTransparent()
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 func apiSystemProxy(w http.ResponseWriter, r *http.Request) {
@@ -182,6 +190,7 @@ type stateJSON struct {
 	SystemProxy        bool              `json:"systemProxy"`
 	SystemProxyExclude []string          `json:"systemProxyExclude"`
 	TransparentRoute   []string          `json:"transparentRoute"`
+	TransparentMode    string            `json:"transparentMode"`
 	ForceChrome        bool              `json:"forceChrome"`
 	AllowRemoteClients bool              `json:"allowRemoteClients"`
 	Hosts              map[string]string `json:"hosts"`
@@ -201,6 +210,10 @@ func apiState(w http.ResponseWriter, r *http.Request) {
 	systemProxy := configuration.SystemProxy
 	systemProxyExclude := append([]string(nil), configuration.SystemProxyExclude...)
 	transparentRoute := append([]string{}, configuration.TransparentRoute...)
+	transparentMode := configuration.TransparentMode
+	if transparentMode == "" {
+		transparentMode = "ask"
+	}
 	forceChrome := configuration.ForceChrome
 	allowRemote := configuration.AllowRemoteClients
 	onboarding := configuration.OnboardingDone != nil && !*configuration.OnboardingDone
@@ -229,6 +242,7 @@ func apiState(w http.ResponseWriter, r *http.Request) {
 		SystemProxy:        systemProxy,
 		SystemProxyExclude: systemProxyExclude,
 		TransparentRoute:   transparentRoute,
+		TransparentMode:    transparentMode,
 		ForceChrome:        forceChrome,
 		AllowRemoteClients: allowRemote,
 		Hosts:              hosts,
@@ -594,6 +608,10 @@ func apiGetConfig(w http.ResponseWriter, r *http.Request) {
 	systemProxy := configuration.SystemProxy
 	systemProxyExclude := append([]string(nil), configuration.SystemProxyExclude...)
 	transparentRoute := append([]string{}, configuration.TransparentRoute...)
+	transparentMode := configuration.TransparentMode
+	if transparentMode == "" {
+		transparentMode = "ask"
+	}
 	forceChrome := configuration.ForceChrome
 	allowRemote := configuration.AllowRemoteClients
 	configMu.Unlock()
@@ -610,6 +628,7 @@ func apiGetConfig(w http.ResponseWriter, r *http.Request) {
 		"systemProxy":        systemProxy,
 		"systemProxyExclude": systemProxyExclude,
 		"transparentRoute":   transparentRoute,
+		"transparentMode":    transparentMode,
 		"forceChrome":        forceChrome,
 		"allowRemoteClients": allowRemote,
 	})
@@ -622,6 +641,7 @@ type configFormJSON struct {
 	SystemProxy        *bool              `json:"systemProxy"`
 	SystemProxyExclude *[]string          `json:"systemProxyExclude"`
 	TransparentRoute   *[]string          `json:"transparentRoute"`
+	TransparentMode    *string            `json:"transparentMode"`
 	ForceChrome        *bool              `json:"forceChrome"`
 	AllowRemoteClients *bool              `json:"allowRemoteClients"`
 }
@@ -709,6 +729,14 @@ func apiSaveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if form.TransparentRoute != nil {
 		configuration.TransparentRoute = append([]string(nil), (*form.TransparentRoute)...)
+	}
+	if form.TransparentMode != nil {
+		switch *form.TransparentMode {
+		case "ask":
+			configuration.TransparentMode = ""
+		case "auto", "never":
+			configuration.TransparentMode = *form.TransparentMode
+		}
 	}
 	forceChromeChanged := false
 	if form.ForceChrome != nil && *form.ForceChrome != configuration.ForceChrome {
