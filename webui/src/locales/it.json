@@ -650,8 +650,6 @@
   "System proxy on each active interface:": "Proxy di sistema su ogni interfaccia attiva:",
   "primary": "primario",
   "excluded": "escluso",
-  "Force Chrome to use this proxy": "Forza Chrome a usare questo proxy",
-  "Sets a Chrome policy that does not depend on the system proxy, so it keeps working when a VPN client overwrites it. Restart Chrome to apply.": "Imposta una policy di Chrome che non dipende dal proxy di sistema, così funziona anche quando un client VPN lo sovrascrive. Riavvia Chrome per applicarla.",
   "Transparent routing (macOS)": "Instradamento trasparente (macOS)",
   "Firewall rules loaded": "Regole del firewall caricate",
   "Firewall rules NOT loaded": "Regole del firewall NON caricate",

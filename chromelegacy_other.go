@@ -2,6 +2,4 @@
 
 package main
 
-func applyChromePolicy() {}
-
 func removeChromePolicy() {}

@@ -170,7 +170,7 @@ func main() {
 	relayHub.startAll()
 	blockingStart()
 
-	applyChromePolicy()
+	removeLegacyChromePolicy()
 	go watchSystemProxy()
 	go applySystemProxy()
 	go applyTransparentRouting()

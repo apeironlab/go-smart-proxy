@@ -94,7 +94,6 @@ export default function ConfigPage() {
   const [relayCA, setRelayCA] = useState('')
   const [sysProxy, setSysProxy] = useState(false)
   const [exclude, setExclude] = useState<string[]>([])
-  const [forceChrome, setForceChrome] = useState(false)
   const [transparent, setTransparent] = useState<string[]>([])
   const [transparentMode, setTransparentMode] = useState('ask')
   const [allowRemote, setAllowRemote] = useState(false)
@@ -127,7 +126,6 @@ export default function ConfigPage() {
         setHosts(Object.entries(s.hosts ?? {}).map(([host, ip]) => ({ host, ip })))
         setSysProxy(s.systemProxy)
         setExclude(s.systemProxyExclude ?? [])
-        setForceChrome(s.forceChrome)
         setTransparent(s.transparentRoute ?? [])
         setTransparentMode(s.transparentMode || 'ask')
         setAllowRemote(s.allowRemoteClients)
@@ -183,7 +181,6 @@ export default function ConfigPage() {
         hosts: hostsObject(),
         systemProxy: sysProxy,
         systemProxyExclude: exclude,
-        forceChrome,
       })
       load()
     } catch (e) {
@@ -429,7 +426,7 @@ export default function ConfigPage() {
               onChange={(e) => {
                 const v = e.currentTarget.checked
                 setAllowRemote(v)
-                api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: exclude, forceChrome, allowRemoteClients: v })
+                api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: exclude, allowRemoteClients: v })
                   .then(load)
                   .catch((err) => { setAllowRemote(!v); setError(String(err)) })
               }}
@@ -509,7 +506,7 @@ export default function ConfigPage() {
               onChange={(e) => {
                 const v = e.currentTarget.checked
                 setSysProxy(v)
-                api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: v, systemProxyExclude: exclude, forceChrome })
+                api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: v, systemProxyExclude: exclude })
                   .then(load)
                   .catch((err) => setError(String(err)))
               }}
@@ -522,20 +519,7 @@ export default function ConfigPage() {
               value={exclude}
               onChange={(v) => {
                 setExclude(v)
-                api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: v, forceChrome })
-                  .then(load)
-                  .catch((err) => setError(String(err)))
-              }}
-            />
-            <Switch
-              mt="md"
-              label={t('Force Chrome to use this proxy')}
-              description={t("Sets a Chrome policy that does not depend on the system proxy, so it keeps working when a VPN client overwrites it. Restart Chrome to apply.")}
-              checked={forceChrome}
-              onChange={(e) => {
-                const v = e.currentTarget.checked
-                setForceChrome(v)
-                api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: exclude, forceChrome: v })
+                api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: v })
                   .then(load)
                   .catch((err) => setError(String(err)))
               }}
@@ -548,7 +532,7 @@ export default function ConfigPage() {
               value={transparent}
               onChange={(v) => {
                 setTransparent(v)
-                api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: exclude, forceChrome, transparentRoute: v })
+                api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: exclude, transparentRoute: v })
                   .then(() => { load(); setTimeout(load, 2500) })
                   .catch((err) => setError(String(err)))
               }}
@@ -568,7 +552,7 @@ export default function ConfigPage() {
                   onChange={(v) => {
                     if (!v) return
                     setTransparentMode(v)
-                    api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: exclude, forceChrome, transparentMode: v })
+                    api.saveConfig({ address, socksAddress, hosts: hostsObject(), systemProxy: sysProxy, systemProxyExclude: exclude, transparentMode: v })
                       .then(load)
                       .catch((err) => setError(String(err)))
                   }}

@@ -26,30 +26,44 @@ const transparentAddr = "127.0.0.1:3129"
 // a name from them.
 const sniffWait = 250 * time.Millisecond
 
+// transparentListenAddr is where the listener really binds (tests change it).
+var transparentListenAddr = transparentAddr
+
+// originalDstLookup finds the destination a connection was redirected from
+// (tests replace it).
+var originalDstLookup = lookupOriginalDst
+
 // serveTransparent keeps the transparent listener open while at least one
 // interface is selected in the configuration.
 func serveTransparent() {
 	var ln net.Listener
 	for {
-		configMu.Lock()
-		on := len(configuration.TransparentRoute) > 0
-		configMu.Unlock()
-		switch {
-		case on && ln == nil:
-			l, err := net.Listen("tcp", transparentAddr)
-			if err != nil {
-				log.Printf("Error listening for transparent routing on %s: %+v", transparentAddr, err)
-			} else {
-				ln = l
-				log.Printf("Transparent routing listening on %s", transparentAddr)
-				go acceptTransparent(l)
-			}
-		case !on && ln != nil:
-			ln.Close()
-			ln = nil
-		}
+		ln = transparentStep(ln)
 		time.Sleep(2 * time.Second)
 	}
+}
+
+// transparentStep opens or closes the listener as the configuration asks and
+// returns the listener now open (nil when none).
+func transparentStep(ln net.Listener) net.Listener {
+	configMu.Lock()
+	on := len(configuration.TransparentRoute) > 0
+	configMu.Unlock()
+	switch {
+	case on && ln == nil:
+		l, err := net.Listen("tcp", transparentListenAddr)
+		if err != nil {
+			log.Printf("Error listening for transparent routing on %s: %+v", transparentListenAddr, err)
+			return nil
+		}
+		log.Printf("Transparent routing listening on %s", transparentListenAddr)
+		go acceptTransparent(l)
+		return l
+	case !on && ln != nil:
+		ln.Close()
+		return nil
+	}
+	return ln
 }
 
 func acceptTransparent(ln net.Listener) {
@@ -72,7 +86,7 @@ func handleTransparent(client net.Conn) {
 	defer client.Close()
 
 	br := bufio.NewReaderSize(client, 16*1024+8)
-	host, port, err := lookupOriginalDst(client.RemoteAddr().String())
+	host, port, err := originalDstLookup(client.RemoteAddr().String())
 	if err == nil {
 		// The address is known, whatever the protocol. If the client speaks
 		// first and it is TLS or HTTP, its name is better than the address

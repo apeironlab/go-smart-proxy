@@ -148,20 +148,6 @@ func splitSemicolons(s string) []string {
 	return out
 }
 
-// ---- Chrome ------------------------------------------------------------
-
-// chromeWinPolicy are the values written under Chrome's policy key.
-func chromeWinPolicy(address string) map[string]string {
-	host, port := winProxyTarget(address)
-	return map[string]string{
-		"ProxyMode":       "fixed_servers",
-		"ProxyServer":     net.JoinHostPort(host, port),
-		"ProxyBypassList": "localhost;127.0.0.1;*.local;169.254/16",
-	}
-}
-
-var chromeWinKeys = []string{"ProxyMode", "ProxyServer", "ProxyBypassList"}
-
 // ---- notifications -----------------------------------------------------
 
 // windowsToastScript shows a toast. The text is not in the script: it travels in

@@ -191,7 +191,6 @@ type stateJSON struct {
 	SystemProxyExclude []string          `json:"systemProxyExclude"`
 	TransparentRoute   []string          `json:"transparentRoute"`
 	TransparentMode    string            `json:"transparentMode"`
-	ForceChrome        bool              `json:"forceChrome"`
 	AllowRemoteClients bool              `json:"allowRemoteClients"`
 	Hosts              map[string]string `json:"hosts"`
 	UptimeSeconds      int64             `json:"uptimeSeconds"`
@@ -214,7 +213,6 @@ func apiState(w http.ResponseWriter, r *http.Request) {
 	if transparentMode == "" {
 		transparentMode = "ask"
 	}
-	forceChrome := configuration.ForceChrome
 	allowRemote := configuration.AllowRemoteClients
 	onboarding := configuration.OnboardingDone != nil && !*configuration.OnboardingDone
 	configMu.Unlock()
@@ -243,7 +241,6 @@ func apiState(w http.ResponseWriter, r *http.Request) {
 		SystemProxyExclude: systemProxyExclude,
 		TransparentRoute:   transparentRoute,
 		TransparentMode:    transparentMode,
-		ForceChrome:        forceChrome,
 		AllowRemoteClients: allowRemote,
 		Hosts:              hosts,
 		UptimeSeconds:      int64(time.Since(startedAt).Seconds()),
@@ -612,7 +609,6 @@ func apiGetConfig(w http.ResponseWriter, r *http.Request) {
 	if transparentMode == "" {
 		transparentMode = "ask"
 	}
-	forceChrome := configuration.ForceChrome
 	allowRemote := configuration.AllowRemoteClients
 	configMu.Unlock()
 	hosts := map[string]string{}
@@ -629,7 +625,6 @@ func apiGetConfig(w http.ResponseWriter, r *http.Request) {
 		"systemProxyExclude": systemProxyExclude,
 		"transparentRoute":   transparentRoute,
 		"transparentMode":    transparentMode,
-		"forceChrome":        forceChrome,
 		"allowRemoteClients": allowRemote,
 	})
 }
@@ -642,7 +637,6 @@ type configFormJSON struct {
 	SystemProxyExclude *[]string          `json:"systemProxyExclude"`
 	TransparentRoute   *[]string          `json:"transparentRoute"`
 	TransparentMode    *string            `json:"transparentMode"`
-	ForceChrome        *bool              `json:"forceChrome"`
 	AllowRemoteClients *bool              `json:"allowRemoteClients"`
 }
 
@@ -738,17 +732,11 @@ func apiSaveConfig(w http.ResponseWriter, r *http.Request) {
 			configuration.TransparentMode = *form.TransparentMode
 		}
 	}
-	forceChromeChanged := false
-	if form.ForceChrome != nil && *form.ForceChrome != configuration.ForceChrome {
-		configuration.ForceChrome = *form.ForceChrome
-		forceChromeChanged = true
-	}
 	if err := persistConfigurationLocked(); err != nil {
 		configMu.Unlock()
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	forceChromeEnabled := configuration.ForceChrome
 	socksAddress := configuration.SocksAddress
 	configMu.Unlock()
 
@@ -759,13 +747,6 @@ func apiSaveConfig(w http.ResponseWriter, r *http.Request) {
 	if socksRestart {
 		log.Printf("SOCKS5 listen address changed to %q, restarting listener", socksAddress)
 		restartSocksListener()
-	}
-	if forceChromeChanged {
-		if forceChromeEnabled {
-			applyChromePolicy()
-		} else {
-			removeChromePolicy()
-		}
 	}
 	if configuration.SystemProxy {
 		go applySystemProxy()

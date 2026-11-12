@@ -3,18 +3,23 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 )
 
 // Starting the privileged helper: when the transparent routing is needed and
 // the helper is not running, the user is asked (a dialog, unless the mode is
 // "auto") and then macOS asks for the fingerprint or the password.
+
+// helperStartTries is how many times (200 ms apart) the helper is waited for.
+var helperStartTries = 50
 
 const helperInstallPath = "/Library/PrivilegedHelperTools/proxyroute-helper"
 
@@ -119,13 +124,22 @@ func authorizeTransparent() {
 	}()
 }
 
+// runOsascript runs an AppleScript (replaced in tests: they must never open a
+// dialog or ask for the password).
+var runOsascript = func(script string) ([]byte, error) {
+	if testing.Testing() {
+		return nil, errors.New("osascript is not run in tests")
+	}
+	return exec.Command("osascript", "-e", script).CombinedOutput()
+}
+
 // askTransparent asks whether to enable the transparent routing: "yes",
 // "no" or "never".
 func askTransparent(desc string) string {
 	msg := fmt.Sprintf("Il servizio %s è attivo.\\n\\nVuoi instradare il suo traffico TCP attraverso il proxy, senza modificare il proxy di sistema?\\n\\nmacOS chiederà l'autenticazione per caricare le regole del firewall.", desc)
 	script := fmt.Sprintf(`display dialog "%s" with title "Proxy: instradamento trasparente" buttons {"Non chiedere più", "Non ora", "Attiva"} default button "Attiva" cancel button "Non ora" giving up after 120`,
 		strings.ReplaceAll(escapeAppleScript(msg), `\\n`, `\n`))
-	out, err := exec.Command("osascript", "-e", script).Output()
+	out, err := runOsascript(script)
 	if err != nil {
 		return "no" // cancelled
 	}
@@ -156,14 +170,14 @@ func startHelper(desc string) error {
 	prompt := "Proxy vuole attivare l'instradamento trasparente su " + desc + "."
 	script := fmt.Sprintf(`do shell script "%s" with prompt "%s" with administrator privileges`,
 		escapeAppleScript(shell), escapeAppleScript(prompt))
-	if out, err := exec.Command("osascript", "-e", script).CombinedOutput(); err != nil {
+	if out, err := runOsascript(script); err != nil {
 		msg := strings.TrimSpace(string(out))
 		if strings.Contains(msg, "-128") || strings.Contains(strings.ToLower(msg), "cancel") {
 			return fmt.Errorf("authorization cancelled")
 		}
 		return fmt.Errorf("authorization failed: %v (%s)", err, msg)
 	}
-	for i := 0; i < 50; i++ {
+	for i := 0; i < helperStartTries; i++ {
 		if helperAlive() {
 			log.Printf("Transparent routing: privileged helper started")
 			return nil

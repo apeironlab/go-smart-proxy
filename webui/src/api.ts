@@ -144,7 +144,6 @@ export interface StateInfo {
   systemProxyExclude: string[]
   transparentRoute: string[]
   transparentMode: string
-  forceChrome: boolean
   allowRemoteClients: boolean
   uptimeSeconds: number
   activeConns: number
@@ -356,8 +355,7 @@ export const api = {
     systemProxyExclude: string[]
     transparentRoute?: string[]
     transparentMode?: string
-    forceChrome: boolean
-    allowRemoteClients?: boolean
+      allowRemoteClients?: boolean
   }) => post('/api/config', form),
   finishOnboarding: () => post('/api/onboarding', {}),
   authorizeTransparent: () => post('/api/transparent/authorize', {}),

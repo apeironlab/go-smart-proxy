@@ -111,18 +111,6 @@ func TestWindowsStateForTheUI(t *testing.T) {
 	}
 }
 
-func TestChromeWindowsPolicy(t *testing.T) {
-	p := chromeWinPolicy("127.0.0.1:3128")
-	if p["ProxyMode"] != "fixed_servers" || p["ProxyServer"] != "127.0.0.1:3128" || !strings.Contains(p["ProxyBypassList"], "localhost") {
-		t.Fatalf("policy: %v", p)
-	}
-	for _, k := range chromeWinKeys {
-		if p[k] == "" {
-			t.Fatalf("no value for %s", k)
-		}
-	}
-}
-
 func TestToastTextNeverBecomesCode(t *testing.T) {
 	title := "Request from $(Remove-Item -Recurse C:\\) `calc`"
 	body := "'; Start-Process calc; '\nline two\x00\x07" + strings.Repeat("x", 500)

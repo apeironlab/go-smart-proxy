@@ -29,7 +29,12 @@ import (
 const pfAnchor = "com.apple/250.ProxyRoute"
 
 // pfSocket is the socket of the helper of this user.
-func pfSocket() string { return fmt.Sprintf("/var/run/proxyroute-%d.sock", os.Getuid()) }
+var pfSocketFn = func() string { return fmt.Sprintf("/var/run/proxyroute-%d.sock", os.Getuid()) }
+
+func pfSocket() string { return pfSocketFn() }
+
+// listActiveServices is replaced in tests.
+var listActiveServices = activeServices
 
 var (
 	pfMu      sync.Mutex
@@ -44,7 +49,7 @@ var (
 // active services.
 func transparentTargets(selectors []string) []activeService {
 	var out []activeService
-	for _, svc := range activeServices() {
+	for _, svc := range listActiveServices() {
 		if !ifaceNameRE.MatchString(svc.Iface) {
 			continue
 		}

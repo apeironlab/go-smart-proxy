@@ -216,11 +216,9 @@ func TestConfigAPI(t *testing.T) {
 	if len(configuration.SystemProxyExclude) != 1 {
 		t.Errorf("exclude = %v", configuration.SystemProxyExclude)
 	}
-	if code, _ := call("POST", "/api/config", `{"forceChrome":true,"systemProxy":false}`); code != 200 || !configuration.ForceChrome {
-		t.Errorf("forceChrome: %d", code)
-	}
-	if code, _ := call("POST", "/api/config", `{"forceChrome":false}`); code != 200 || configuration.ForceChrome {
-		t.Errorf("forceChrome off: %d", code)
+	// the setting of older versions is still accepted and ignored
+	if code, _ := call("POST", "/api/config", `{"forceChrome":true,"systemProxy":false}`); code != 200 || configuration.ForceChrome {
+		t.Errorf("legacy forceChrome: %d", code)
 	}
 
 	if code, _ := call("POST", "/api/onboarding", ""); code != 200 || configuration.OnboardingDone == nil || !*configuration.OnboardingDone {
@@ -234,5 +232,27 @@ func TestConfigAPI(t *testing.T) {
 	}
 	if code, out := call("POST", "/api/connections/999999/close", ""); code != 200 || out["closed"] != false {
 		t.Errorf("close unknown: %d %v", code, out)
+	}
+}
+
+func TestLegacyChromePolicyIsRemovedOnce(t *testing.T) {
+	apiFixture(t)
+	removed := 0
+	old := chromePolicyRemover
+	chromePolicyRemover = func() { removed++ }
+	defer func() { chromePolicyRemover = old }()
+
+	removeLegacyChromePolicy() // nothing to undo
+	if removed != 0 {
+		t.Fatal("the policy was removed without the old setting")
+	}
+	configuration.ForceChrome = true
+	removeLegacyChromePolicy()
+	if removed != 1 || configuration.ForceChrome {
+		t.Fatalf("removed %d times, ForceChrome %v", removed, configuration.ForceChrome)
+	}
+	removeLegacyChromePolicy() // the setting was forgotten: not again
+	if removed != 1 {
+		t.Fatalf("removed again: %d", removed)
 	}
 }

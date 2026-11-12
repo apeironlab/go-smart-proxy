@@ -138,7 +138,9 @@ type Configuration struct {
 	Rules              []ConfigRule       `yaml:"Rules,omitempty"`
 	SystemProxy        bool               `yaml:"SystemProxy"`
 	SystemProxyExclude []string           `yaml:"SystemProxyExclude"`
-	ForceChrome        bool               `yaml:"ForceChrome"`
+	// ForceChrome is legacy: older versions wrote a Chrome proxy policy. It is
+	// only read to remove it (see removeLegacyChromePolicy) and then cleared.
+	ForceChrome bool `yaml:"ForceChrome,omitempty"`
 	// TransparentRoute lists network services or interfaces (substring of the
 	// service name or of the interface name, e.g. "pulse", "en0") whose
 	// outgoing HTTP/HTTPS traffic is redirected to the proxy by the packet

@@ -131,8 +131,8 @@ The interface follows the system theme (light or dark) and speaks the 24 EU lang
 - **System tray** with dynamic route selection and a web UI for configuration,
   rules, credentials, connections, and relay management.
 - **System integration**: system proxy configuration on every active interface
-  and Chrome policy on macOS, and on Windows (untested there); desktop
-  notifications on macOS, Linux and Windows.
+  on macOS and Windows (untested there); desktop notifications on macOS, Linux
+  and Windows.
 - **Transparent routing** (macOS): for VPN clients that forbid changing the
   system proxy, the TCP traffic of the selected services or interfaces is
   redirected to the proxy by the packet filter, on request and with a
@@ -414,7 +414,6 @@ Relays:                        # one entry per relay server; you can connect to 
 
 SystemProxy: false             # macOS and Windows
 SystemProxyExclude: [utun4]    # macOS network services to leave untouched
-ForceChrome: false             # macOS and Windows
 TransparentRoute: [pulse]      # macOS: services/interfaces whose TCP traffic is redirected to the proxy
 TransparentMode: ask           # ask (default), auto or never
 AllowRemoteClients: false      # serve clients other than this machine (see Security)
@@ -451,7 +450,6 @@ Hosts:
 | `Rules[].ExitVPN`, `Rules[].ExitLabel` | Optional conditions on the exit of the route's relay hop, as for routes. When they do not hold the rule is skipped and the next one is tried. |
 | `SystemProxy` | Keep the system proxy pointed at this proxy, on every active interface (macOS) or in Internet Options (Windows). |
 | `SystemProxyExclude` | macOS services or interfaces (substring of the service or interface name) to leave untouched. |
-| `ForceChrome` | Install a Chrome proxy policy (see *Chrome policy*). |
 | `TransparentRoute` | macOS: services or interfaces (substring of the service name, identifier or interface) whose TCP traffic is redirected to the proxy; empty = off. See *Transparent routing*. |
 | `TransparentMode` | `ask` (default: a dialog before enabling), `auto` (only the authentication prompt) or `never` (enable only with the UI button). |
 | `Hosts` | Fixed IP per hostname, bypassing DNS. |
@@ -630,8 +628,8 @@ the HTTP proxy address. It is available only to loopback clients.
 
 Pages:
 
-- **Configurazione** — listeners, SOCKS5, system proxy, Chrome
-  policy, static hosts, relay connection settings, routes and chains, DNS cache.
+- **Configurazione** — listeners, SOCKS5, system proxy, transparent
+  routing, static hosts, relay connection settings, routes and chains, DNS cache.
 - **Regole** — destination rules and a route test tool.
 - **Credenziali** — named credentials; passwords are never returned by the API
   (an empty field keeps the current password).
@@ -645,7 +643,7 @@ Pages:
   access token for this interface.
 
 The **Configurazione** page is the single place for proxy-wide settings:
-listeners, SOCKS5, system proxy, Chrome policy, static hosts, relay
+listeners, SOCKS5, system proxy, transparent routing, static hosts, relay
 address/route/`AllowLocal`, manual relay certificate PEMs (write-only; the API
 never returns private keys), and route ordering. Relay certificate enrollment
 and device renaming remain on the Relay page.
@@ -655,7 +653,7 @@ and device renaming remain on the Relay page.
 | HTTP listener and web UI | Configurazione → Rete |
 | SOCKS5 listener | Configurazione → SOCKS5 |
 | System proxy and excluded services | Configurazione → Rete |
-| Chrome policy | Configurazione → Rete |
+| Transparent routing (macOS) | Configurazione → Rete |
 | Static host → IP mappings | Configurazione → Host fissi |
 | Routes, chains, PAC/dynamic hops, per-hop `RulesOnly`, route priority | Configurazione → Route |
 | Destination rules, rule order, destination test | Regole |
@@ -813,8 +811,7 @@ it.
   own `net.pulsesecure...` service) is the primary one **nothing is written**:
   the effective proxy comes from that service, the client watches it and drops
   the tunnel as soon as it is modified (the global proxy key belongs to
-  `configd` and cannot be written). Use *Transparent routing* below, or
-  *Chrome policy*, for that case. Switching the option off removes the proxy
+  `configd` and cannot be written). Use *Transparent routing* below for that case. Switching the option off removes the proxy
   this program had set on the services that still point here. The effective
   proxy of each active interface is listed in the UI.
 - **Windows**: the current user's *Internet Options* (`HKCU\Software\Microsoft\
@@ -829,21 +826,6 @@ it.
   settings are not touched. Not tested on a real Windows machine: the logic is
   tested with a simulated registry, and the Windows build is compiled and
   vetted, but the registry and notification calls have not been run.
-
-### Chrome policy (macOS and Windows)
-
-`ForceChrome: true` (a switch in the UI) installs/removes a Chrome policy
-(`ProxyMode`, `ProxyServer`, `ProxyBypassList`) so Chrome uses this proxy: in the
-macOS preferences, or on Windows under `HKCU\Software\Policies\Google\Chrome`.
-Restart Chrome to apply it. **Chrome ignores per-user policies on a computer that
-is not managed**, and on macOS it reads them only from managed preferences: on
-an unmanaged Mac the keys are written but may have no effect (check
-`chrome://policy`). A reliable alternative is to start Chrome, once fully quit,
-with the proxy on its command line:
-
-```bash
-open -na "Google Chrome" --args --proxy-server="http://127.0.0.1:3128"
-```
 
 ### Transparent routing (macOS)
 
@@ -1804,9 +1786,7 @@ rather than keeping the CA key in the cluster.
   exits, removing the rules, when the program ends. A process running as the
   same user can still ask it to redirect interfaces or to look up a connection.
 - Listen addresses are validated before use, and values that reach `scutil` or
-  Chrome's preferences are restricted to safe characters. Chrome's proxy policy
-  is written with `defaults` and only touches `ProxyMode`, `ProxyServer` and
-  `ProxyBypassList`; other Chrome preferences are preserved.
+  the `pf` rules are restricted to safe characters.
 - Configuration, relay state and enrollment state files are written through a
   uniquely named temporary file created next to them, never a predictable
   `.tmp` name.
@@ -2041,7 +2021,7 @@ that the `relay` package builds without Node.
 | `socks.go` | SOCKS5 listener and handler |
 | `device.go` | Per-installation device code generation |
 | `notify.go`, `notify_windows.go` | Desktop notifications |
-| `systemproxy_*.go`, `chromepolicy_*.go` | System proxy and Chrome policy (macOS, Windows) |
+| `systemproxy_*.go`, `chromelegacy*.go` | System proxy (macOS, Windows); the Chrome policy of older versions is removed once |
 | `transparent.go` | Transparent listener: reads the destination (helper, SNI, `Host`) and routes the connection |
 | `pfroute_darwin.go`, `pfhelper_darwin.go`, `pfauth_darwin.go` | Transparent routing on macOS: `pf` rules, privileged helper, dialog and authentication |
 | `egressmark*.go` | TOS mark on the connections the proxy opens, so the redirect never loops |
@@ -2081,7 +2061,7 @@ The Go module is `github.com/apeironlab/go-smart-proxy`; the packages
 | `wrong master password or corrupted file` | The password is wrong or the file was modified. There is no recovery without the password. |
 | Web UI returns `403` | UI/API are only available to loopback clients. |
 | System proxy keeps being reset | A VPN client is rewriting it; use `SystemProxyExclude` or turn off the VPN's proxy enforcement. |
-| Chrome ignores the proxy | Check PAC precedence and `ForceChrome` (macOS); on an unmanaged Mac Chrome ignores the policy, start it with `--proxy-server` (see *Chrome policy*). |
+| Chrome ignores the proxy | Check PAC precedence. With a VPN that replaces the system proxy use *Transparent routing*, or start Chrome (fully quit first) with `open -na "Google Chrome" --args --proxy-server="http://127.0.0.1:3128"`. |
 | VPN drops and reconnects in a loop when the proxy is set | The VPN client watches the system proxy of its service (Pulse/Ivanti). With such a service primary the program writes nothing; use *Transparent routing*. |
 | Applications stop working when a VPN is connected | They use the system proxy, which the VPN replaced. Use *Transparent routing* with the VPN's service name (e.g. `pulse`). |
 | Transparent routing: "Firewall rules NOT loaded" | Authorization is needed: use *Authorize*. The status shows the last error; the log has the details. |
@@ -2100,7 +2080,7 @@ Current limitations:
   seconds, against connections already open), not a CRL or OCSP endpoint.
 - The local API is protected by Host/Origin/Content-Type checks and,
   optionally, an access token (see above).
-- The Windows system proxy, Chrome policy and notifications are written but could not be run on Windows by the author; see *System proxy*.
+- The Windows system proxy and notifications are written but could not be run on Windows by the author; see *System proxy*.
 - Transparent routing is macOS only, TCP and IPv4; UDP, IPv6 and applications
   that bypass the network stack (some VPN clients' own tunnels) are not covered.
   It was written and verified against Pulse Secure/Ivanti; other VPN clients are
