@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"log"
 
-	"proxy/relay"
+	"github.com/apeironlab/go-smart-proxy/relay"
 )
 
 var deviceAdjectives = []string{

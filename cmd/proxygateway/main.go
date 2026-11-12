@@ -13,7 +13,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"proxy/relay"
+	"github.com/apeironlab/go-smart-proxy/relay"
 )
 
 func main() {

@@ -18,7 +18,7 @@ import (
 
 	"github.com/hashicorp/yamux"
 
-	"proxy/relay"
+	"github.com/apeironlab/go-smart-proxy/relay"
 )
 
 const (

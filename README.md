@@ -1,6 +1,9 @@
 # Go Smart Proxy
 
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![CI](https://github.com/apeironlab/go-smart-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/apeironlab/go-smart-proxy/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/apeironlab/go-smart-proxy/branch/main/graph/badge.svg)](https://codecov.io/gh/apeironlab/go-smart-proxy)
+[![Go Reference](https://pkg.go.dev/badge/github.com/apeironlab/go-smart-proxy.svg)](https://pkg.go.dev/github.com/apeironlab/go-smart-proxy)
 
 A local **HTTP/HTTPS and SOCKS5 proxy** with network-aware route selection, upstream
 proxy chains, destination rules, and an optional **end-to-end encrypted relay**
@@ -2057,8 +2060,8 @@ that the `relay` package builds without Node.
 | `deploy/` | Kubernetes example |
 | `Dockerfile.relay` | Relay image |
 
-The Go module is named `proxy`; internal packages are imported as
-`proxy/relay`.
+The Go module is `github.com/apeironlab/go-smart-proxy`; the packages
+`relay` and `blocklist` can be imported from it.
 
 ---
 

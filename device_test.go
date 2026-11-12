@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"proxy/relay"
+	"github.com/apeironlab/go-smart-proxy/relay"
 )
 
 func TestRandomDeviceID(t *testing.T) {

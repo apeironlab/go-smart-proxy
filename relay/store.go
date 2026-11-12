@@ -29,6 +29,8 @@ type storeFile struct {
 	Groups   map[string][]string `json:"groups,omitempty"`
 }
 
+// NewStore opens the address book kept in the JSON file at path; an empty path
+// keeps it in memory only.
 func NewStore(path string) (*Store, error) {
 	s := &Store{
 		path: path, contacts: map[string]map[string]bool{}, pending: map[string]map[string]bool{},
@@ -124,6 +126,7 @@ func (s *Store) saveLocked() {
 	WriteFileAtomic(s.path, b, 0o600)
 }
 
+// IsContact reports whether a and b are contacts of each other.
 func (s *Store) IsContact(a, b string) bool {
 	if s.sh != nil {
 		return s.sqlIsContact(a, b)

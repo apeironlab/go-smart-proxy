@@ -1056,3 +1056,26 @@ func TestAdminSendsInvitations(t *testing.T) {
 		t.Fatalf("events: %+v", ev)
 	}
 }
+
+func TestAddUserToAdminDB(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "admin.db")
+	if err := AddUserToAdminDB(db, "root", "first password", "root@example.org", "admins"); err != nil {
+		t.Fatal(err)
+	}
+	// again: the user is updated, not duplicated
+	if err := AddUserToAdminDB(db, "root", "second password", "root@example.org", "admins", "ops"); err != nil {
+		t.Fatal(err)
+	}
+	d, err := openAdminDB(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	u, ok, err := d.lookupUser("root")
+	if err != nil || !ok || len(u.groups) != 2 {
+		t.Errorf("user = %+v %v %v", u, ok, err)
+	}
+	if err := AddUserToAdminDB(filepath.Join(t.TempDir(), "no", "such", "dir", "x.db"), "a", "pw", "a@example.org"); err == nil {
+		t.Error("an unusable database path was accepted")
+	}
+}

@@ -5,7 +5,7 @@ import (
 	"path"
 	"strings"
 
-	"proxy/relay"
+	"github.com/apeironlab/go-smart-proxy/relay"
 )
 
 // This file connects the network context that relay devices share (a label the

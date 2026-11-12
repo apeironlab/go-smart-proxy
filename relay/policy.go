@@ -17,7 +17,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"proxy/blocklist"
+	"github.com/apeironlab/go-smart-proxy/blocklist"
 )
 
 // A policy says which hosts the relay does not want reached: rules written by

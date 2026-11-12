@@ -11,7 +11,7 @@ import (
 
 	"github.com/hashicorp/yamux"
 
-	"proxy/relay"
+	"github.com/apeironlab/go-smart-proxy/relay"
 )
 
 // The certificate is renewed by the proxy, over the connection it secures,

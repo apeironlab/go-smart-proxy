@@ -8,18 +8,21 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 var (
 	socksListenMu       sync.Mutex
 	activeSocksListener net.Listener
+	// socksStopped ends serveSOCKS; the program never sets it, tests do.
+	socksStopped atomic.Bool
 )
 
 // serveSOCKS runs the SOCKS5 listener, if configured. Like serve(), it
 // re-opens the listener when the configured address changes.
 func serveSOCKS() {
-	for {
+	for !socksStopped.Load() {
 		configMu.Lock()
 		addr := configuration.SocksAddress
 		configMu.Unlock()

@@ -151,6 +151,9 @@ type EnrollServer struct {
 	byTicket    map[string]string // confirmation ticket -> enrollment id
 }
 
+// NewEnrollServer returns the enrollment and management server: e-mail codes,
+// the sign-in methods, certificate issue and renewal, self-service revocation
+// and, when cfg.Admin is set, the management interface.
 func NewEnrollServer(cfg EnrollConfig) (*EnrollServer, error) {
 	s := &EnrollServer{
 		cfg:    cfg,
@@ -220,6 +223,7 @@ func NewEnrollServer(cfg EnrollConfig) (*EnrollServer, error) {
 	return s, nil
 }
 
+// Handler returns the HTTP handler to serve on the enrollment listener.
 func (s *EnrollServer) Handler() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("POST /enroll", s.handleEnroll)

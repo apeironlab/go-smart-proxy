@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"proxy/blocklist"
-	"proxy/relay"
+	"github.com/apeironlab/go-smart-proxy/blocklist"
+	"github.com/apeironlab/go-smart-proxy/relay"
 )
 
 // blockingEnv gives the engine a clean state, a cache in a temporary

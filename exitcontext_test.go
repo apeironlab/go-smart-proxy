@@ -4,7 +4,7 @@ import (
 	"net"
 	"testing"
 
-	"proxy/relay"
+	"github.com/apeironlab/go-smart-proxy/relay"
 )
 
 // setRelayState makes a single relay called "default" with the given address

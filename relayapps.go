@@ -2,10 +2,10 @@ package main
 
 import (
 	"errors"
+	"github.com/apeironlab/go-smart-proxy/relay"
 	"net"
 	"net/http"
 	"net/url"
-	"proxy/relay"
 	"strings"
 	"sync"
 )

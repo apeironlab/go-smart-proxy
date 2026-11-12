@@ -19,7 +19,7 @@ import (
 
 	"golang.org/x/term"
 
-	"proxy/relay"
+	"github.com/apeironlab/go-smart-proxy/relay"
 )
 
 const (

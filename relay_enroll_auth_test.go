@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"proxy/relay"
+	"github.com/apeironlab/go-smart-proxy/relay"
 )
 
 // enrollEnv gives a test an empty configuration that can be saved.

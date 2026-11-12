@@ -174,7 +174,7 @@ func TestProxiesAreToldThePolicy(t *testing.T) {
 	}
 	cfg := PolicyConfig{
 		Rules: []PolicyRule{{ID: "r", Name: "R", Mandatory: true, Domains: []string{"a.example.com"}}, {ID: "off", Name: "Off", Disabled: true, Domains: []string{"b.example.com"}}},
-		Lists: []PolicyList{{ID: "l", Name: "L", URL: "https://example.com/l", Format: "domains"}},
+		Lists: []PolicyList{{ID: "l", Name: "L", URL: "https://lists.invalid/l", Format: "domains"}},
 		Allow: []string{"ok.example.com"},
 	}
 	if err := pol.Set(cfg); err != nil {

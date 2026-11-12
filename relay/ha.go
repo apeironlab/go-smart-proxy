@@ -250,6 +250,8 @@ type PeerReq struct {
 }
 
 const (
+	// TPeer is the message type of a request one relay sends another over the
+	// mTLS listener, to reach a user connected to the other one.
 	TPeer     = "peer"
 	kindDial  = "dial"
 	kindPing  = "ping"
