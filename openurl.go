@@ -4,6 +4,7 @@ import (
 	"net"
 	"os/exec"
 	"runtime"
+	"testing"
 )
 
 // webUIURL returns the address of the management page, as reachable from this machine.
@@ -20,6 +21,9 @@ func webUIURL() string {
 
 // openBrowser opens url with the default browser.
 func openBrowser(url string) error {
+	if testing.Testing() {
+		return nil // tests must not open browser windows
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		return exec.Command("open", url).Start()

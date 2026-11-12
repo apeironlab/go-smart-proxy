@@ -331,6 +331,9 @@ func keychainEnabled() bool {
 	if os.Getenv(noKeychainEnv) != "" {
 		return false
 	}
+	if testing.Testing() && os.Getenv("PROXY_TEST_KEYCHAIN") == "" {
+		return false // tests must not touch the keychain or ask for Touch ID
+	}
 	return keychainAvailable()
 }
 
