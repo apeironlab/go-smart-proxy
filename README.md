@@ -127,9 +127,13 @@ The interface follows the system theme (light or dark) and speaks the 24 EU lang
   manually from the header menu, with English as fallback.
 - **System tray** with dynamic route selection and a web UI for configuration,
   rules, credentials, connections, and relay management.
-- **System integration**: system proxy configuration and Chrome policy on macOS
-  (including VPN-overridden proxies) and on Windows (untested there), desktop
+- **System integration**: system proxy configuration on every active interface
+  and Chrome policy on macOS, and on Windows (untested there); desktop
   notifications on macOS, Linux and Windows.
+- **Transparent routing** (macOS): for VPN clients that forbid changing the
+  system proxy, the TCP traffic of the selected services or interfaces is
+  redirected to the proxy by the packet filter, on request and with a
+  privileged helper that lives only while it is needed.
 - **PAC caching**: PAC files are fetched directly, cached, and never block
   request handling.
 - **Connection registry**: live connection log, byte counters, and fail-fast
@@ -408,6 +412,8 @@ Relays:                        # one entry per relay server; you can connect to 
 SystemProxy: false             # macOS and Windows
 SystemProxyExclude: [utun4]    # macOS network services to leave untouched
 ForceChrome: false             # macOS and Windows
+TransparentRoute: [pulse]      # macOS: services/interfaces whose TCP traffic is redirected to the proxy
+TransparentMode: ask           # ask (default), auto or never
 AllowRemoteClients: false      # serve clients other than this machine (see Security)
 Hosts:
   repo.intra.example.com: 192.0.2.40
@@ -440,6 +446,11 @@ Hosts:
 | `Rules[].Networks` | IP/CIDR matches; hostnames are resolved for this check. |
 | `Rules[].Route` | Route name to use. |
 | `Rules[].ExitVPN`, `Rules[].ExitLabel` | Optional conditions on the exit of the route's relay hop, as for routes. When they do not hold the rule is skipped and the next one is tried. |
+| `SystemProxy` | Keep the system proxy pointed at this proxy, on every active interface (macOS) or in Internet Options (Windows). |
+| `SystemProxyExclude` | macOS services or interfaces (substring of the service or interface name) to leave untouched. |
+| `ForceChrome` | Install a Chrome proxy policy (see *Chrome policy*). |
+| `TransparentRoute` | macOS: services or interfaces (substring of the service name, identifier or interface) whose TCP traffic is redirected to the proxy; empty = off. See *Transparent routing*. |
+| `TransparentMode` | `ask` (default: a dialog before enabling), `auto` (only the authentication prompt) or `never` (enable only with the UI button). |
 | `Hosts` | Fixed IP per hostname, bypassing DNS. |
 
 `Address` is required. Credentials and relay material are never written in
@@ -670,6 +681,8 @@ endpoint list:
 | GET/POST | `/api/credentials` | List/save credentials |
 | POST | `/api/force-route` | Force a route or Auto |
 | POST | `/api/pac/refresh` | Refresh a PAC |
+| GET | `/api/system-proxy` | The effective system proxy, the proxy of each active interface and the state of the transparent routing (`transparent`: rules loaded, interfaces, error, whether authorization is needed) |
+| POST | `/api/transparent/authorize` | Ask macOS to authorize the privileged helper of the transparent routing (the *Authorize* button) |
 | GET | `/api/connections` | Connection log |
 | GET | `/api/relays` | Status, contacts and approvals of every relay |
 | GET | `/api/relay` | The same for one relay (`?relay=name`, default: the first) |
@@ -788,9 +801,19 @@ proxy for the connection).
 The setting is re-applied every ten seconds because VPN clients often overwrite
 it.
 
-- **macOS**: through `networksetup` (and, with a VPN service primary, the VPN's
-  runtime proxy state). `SystemProxyExclude` lists network services/interfaces to
-  leave untouched (e.g. a VPN interface).
+- **macOS**: through `networksetup`, on **every active interface** (every
+  network service that has an address), service by service: one that already
+  points here is left alone, inactive ones are not touched, and the proxy is set
+  only where it differs. `SystemProxyExclude` lists network services or
+  interfaces (substring of either name) to leave untouched. While a VPN service
+  that is not configured in System Settings (Pulse/Ivanti, which publish their
+  own `net.pulsesecure...` service) is the primary one **nothing is written**:
+  the effective proxy comes from that service, the client watches it and drops
+  the tunnel as soon as it is modified (the global proxy key belongs to
+  `configd` and cannot be written). Use *Transparent routing* below, or
+  *Chrome policy*, for that case. Switching the option off removes the proxy
+  this program had set on the services that still point here. The effective
+  proxy of each active interface is listed in the UI.
 - **Windows**: the current user's *Internet Options* (`HKCU\Software\Microsoft\
   Windows\CurrentVersion\Internet Settings`), which browsers, .NET and most
   programs read; running programs are told of the change. The proxy is turned on
@@ -806,10 +829,63 @@ it.
 
 ### Chrome policy (macOS and Windows)
 
-`ForceChrome: true` installs/removes a Chrome policy (`ProxyMode`, `ProxyServer`,
-`ProxyBypassList`) so Chrome uses this proxy: in the macOS preferences, or on
-Windows under `HKCU\Software\Policies\Google\Chrome`. Restart Chrome to apply
-it. Chrome may ignore per-user policies on a computer that is not managed.
+`ForceChrome: true` (a switch in the UI) installs/removes a Chrome policy
+(`ProxyMode`, `ProxyServer`, `ProxyBypassList`) so Chrome uses this proxy: in the
+macOS preferences, or on Windows under `HKCU\Software\Policies\Google\Chrome`.
+Restart Chrome to apply it. **Chrome ignores per-user policies on a computer that
+is not managed**, and on macOS it reads them only from managed preferences: on
+an unmanaged Mac the keys are written but may have no effect (check
+`chrome://policy`). A reliable alternative is to start Chrome, once fully quit,
+with the proxy on its command line:
+
+```bash
+open -na "Google Chrome" --args --proxy-server="http://127.0.0.1:3128"
+```
+
+### Transparent routing (macOS)
+
+For VPN clients that forbid changing the system proxy (Pulse/Ivanti drops the
+tunnel as soon as it is modified) the system proxy cannot help: the
+applications that ignore it have no way to reach the proxy. `TransparentRoute`
+(a list of substrings of a network service name, service identifier or
+interface, e.g. `pulse`, `en0`; also in the web UI, under *System proxy*)
+redirects the **TCP** connections that leave through those interfaces to the
+proxy instead, with a `pf` anchor (`com.apple/250.ProxyRoute`). The system proxy
+is not touched, so nothing reacts. The destination of each connection then
+goes through the usual routes and rules, as if the application had used the
+proxy.
+
+- **Selection.** Services are matched by name, identifier or interface, so
+  `pulse` keeps following the VPN whatever `utunN` it gets. Nothing is loaded
+  while no active service matches, and the rules follow network changes (every
+  ten seconds and on each change).
+- **Destination.** The original destination of each connection is asked to a
+  privileged helper (the packet filter state table), for any port. When the
+  client speaks first and it is TLS or HTTP, the SNI or `Host` name replaces the
+  address, so that the rules (which work on names) apply; a protocol where the
+  server speaks first waits at most 250 ms. Without the helper only HTTP and
+  HTTPS can be recognised.
+- **Privileges.** Loading rules needs root, so it is asked when needed: when a
+  matching service becomes active a dialog names the service and the interface,
+  and macOS asks for the fingerprint or the password. `TransparentMode` selects
+  `ask` (default), `auto` (only the authentication prompt) or `never` (only
+  from the *Authorize* button of the UI). The helper is a root-owned copy of the
+  program in `/Library/PrivilegedHelperTools`, started with `--pf-helper`; it
+  builds the rules itself from a list of validated interface names, talks to the
+  program over a Unix socket that only your user can open, and ends, removing
+  the rules, when the program ends or the option is turned off. Nothing is added
+  to `sudoers`.
+- **Loops.** The connections the proxy itself opens carry a TOS mark (`0x20`)
+  that the rules let through; `reply-to` brings the answers back on `lo0`, which
+  a tunnel's own address would otherwise route into the tunnel. Loopback,
+  link-local and multicast destinations are never redirected.
+- **Status.** The UI shows whether the rules are loaded, on which interfaces,
+  and the last error; `GET /api/system-proxy` returns it as `transparent`.
+- **Limits.** TCP and IPv4 only: UDP traffic (DNS, QUIC, the media of calls) is
+  not redirected. Destinations without a name are matched by IP address.
+  Emergency stop: `sudo pfctl -a com.apple/250.ProxyRoute -F all` (the program
+  loads the rules again within a minute while the option is on: remove the entry
+  from the list to stop for good).
 
 ### Desktop notifications
 
@@ -1716,6 +1792,14 @@ rather than keeping the CA key in the cluster.
   that already listened on a non-loopback address keep working after the
   upgrade (the option is turned on and a warning is logged): bind to
   `127.0.0.1` to turn it off.
+- The transparent routing runs a root helper only while it is needed, after
+  the user authenticated: a root-owned copy of the program in
+  `/Library/PrivilegedHelperTools`, listening on a Unix socket that only that
+  user can open (the peer's uid is checked too). It accepts a handful of
+  operations, builds the `pf` rules itself from validated interface names (it
+  never loads rules sent by the client), reads the packet filter states, and
+  exits, removing the rules, when the program ends. A process running as the
+  same user can still ask it to redirect interfaces or to look up a connection.
 - Listen addresses are validated before use, and values that reach `scutil` or
   Chrome's preferences are restricted to safe characters. Chrome's proxy policy
   is written with `defaults` and only touches `ProxyMode`, `ProxyServer` and
@@ -1955,6 +2039,9 @@ that the `relay` package builds without Node.
 | `device.go` | Per-installation device code generation |
 | `notify.go`, `notify_windows.go` | Desktop notifications |
 | `systemproxy_*.go`, `chromepolicy_*.go` | System proxy and Chrome policy (macOS, Windows) |
+| `transparent.go` | Transparent listener: reads the destination (helper, SNI, `Host`) and routes the connection |
+| `pfroute_darwin.go`, `pfhelper_darwin.go`, `pfauth_darwin.go` | Transparent routing on macOS: `pf` rules, privileged helper, dialog and authentication |
+| `egressmark*.go` | TOS mark on the connections the proxy opens, so the redirect never loops |
 | `secret_recovery.go`, `security_web.go` | Master password change, recovery key, their API |
 | `localauth.go` | Access token for the local interface |
 | `relay_renew.go` | Automatic renewal of the proxy's certificate |
@@ -1991,7 +2078,11 @@ The Go module is named `proxy`; internal packages are imported as
 | `wrong master password or corrupted file` | The password is wrong or the file was modified. There is no recovery without the password. |
 | Web UI returns `403` | UI/API are only available to loopback clients. |
 | System proxy keeps being reset | A VPN client is rewriting it; use `SystemProxyExclude` or turn off the VPN's proxy enforcement. |
-| Chrome ignores the proxy | Check PAC precedence and `ForceChrome` (macOS). |
+| Chrome ignores the proxy | Check PAC precedence and `ForceChrome` (macOS); on an unmanaged Mac Chrome ignores the policy, start it with `--proxy-server` (see *Chrome policy*). |
+| VPN drops and reconnects in a loop when the proxy is set | The VPN client watches the system proxy of its service (Pulse/Ivanti). With such a service primary the program writes nothing; use *Transparent routing*. |
+| Applications stop working when a VPN is connected | They use the system proxy, which the VPN replaced. Use *Transparent routing* with the VPN's service name (e.g. `pulse`). |
+| Transparent routing: "Firewall rules NOT loaded" | Authorization is needed: use *Authorize*. The status shows the last error; the log has the details. |
+| Connections to the transparent listener stay in `SYN_RCVD` | The answers do not come back: check that the loaded rules contain `reply-to` (`sudo pfctl -a com.apple/250.ProxyRoute -sr`) and the routes of the interface. |
 | Relay server exits on startup | Missing `-cert/-key/-ca`; enrollment misconfiguration logs `enrollment disabled` but mTLS continues. |
 | Relay clients all show device `default` | They are older clients that do not send a device code; update them. |
 | `ld: warning: ignoring duplicate libraries: '-lobjc'` on macOS | Harmless linker warning from the combined systray/Keychain frameworks. |
@@ -2007,6 +2098,10 @@ Current limitations:
 - The local API is protected by Host/Origin/Content-Type checks and,
   optionally, an access token (see above).
 - The Windows system proxy, Chrome policy and notifications are written but could not be run on Windows by the author; see *System proxy*.
+- Transparent routing is macOS only, TCP and IPv4; UDP, IPv6 and applications
+  that bypass the network stack (some VPN clients' own tunnels) are not covered.
+  It was written and verified against Pulse Secure/Ivanti; other VPN clients are
+  untested.
 - Linux system tray requires the systray GTK/AppIndicator dependencies.
 - Without `-db` the relay state is in files and the relay must run alone; with
   `-db` (PostgreSQL or MySQL) several relays can share it. Rate limits are
@@ -2046,33 +2141,3 @@ Issues and pull requests are welcome.
 Copyright the Go Smart Proxy contributors.
 
 Licensed under the **Apache License 2.0**. See [LICENSE](LICENSE).
-
-## Transparent routing (macOS, experimental)
-
-For VPN clients that forbid changing the system proxy (Pulse/Ivanti
-disconnects when it is modified), `TransparentRoute` (a list of substrings of a
-network service name or interface, e.g. `pulse`, `en0`; also in the web UI)
-redirects the TCP connections leaving through those interfaces to the proxy,
-with a `pf` anchor (`com.apple/250.ProxyRoute`). The system proxy is not
-touched.
-
-- **Destination.** The original destination of each connection is asked to a
-  privileged helper (the packet filter state table). When the client speaks
-  first and it is TLS or HTTP, the SNI / `Host` name replaces the address, so
-  that the routing rules (which work on names) apply. Without the helper only
-  HTTP and HTTPS can be recognised.
-- **Privileges.** Loading the rules needs root. When a matching service becomes
-  active the program asks (a dialog with the service and the interface; the
-  mode is `TransparentMode`: `ask` by default, `auto` or `never`) and macOS
-  asks for the fingerprint or the password. The helper is a root-owned copy of
-  the program in `/Library/PrivilegedHelperTools`, started with `--pf-helper`;
-  it builds the rules itself from a list of interface names, talks to the
-  program over a Unix socket only the user can open, and exits (removing the
-  rules) when the program ends or the option is turned off. Nothing is added to
-  `sudoers`.
-- **Loops.** The connections the proxy opens carry a TOS mark (`0x20`) that the
-  rules let through; `reply-to` brings the answers back on `lo0`, which a
-  tunnel's own address would otherwise route into the tunnel. Loopback,
-  link-local and multicast destinations are never redirected.
-- **Limits.** TCP and IPv4 only; the UDP traffic (DNS, QUIC, media of calls) is
-  not redirected. Emergency stop: `sudo pfctl -a com.apple/250.ProxyRoute -F all`.
