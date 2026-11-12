@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"testing"
 
 	"golang.org/x/term"
 
@@ -366,6 +367,10 @@ func promptPassword(label string) (string, error) {
 // promptPasswordGUI asks for the password without a terminal (e.g. when the
 // app is started from Finder/launchd).
 func promptPasswordGUI(label string) (string, error) {
+	if testing.Testing() {
+		// tests must never open a real dialog
+		return "", errors.New("master password required: set " + secretEnv + " or start the proxy from a terminal")
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		script := fmt.Sprintf(`set d to display dialog "%s" default answer "" with hidden answer buttons {"OK"} default button 1 with title "Go Smart Proxy"
