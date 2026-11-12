@@ -18,7 +18,11 @@ func TestUseUserConfigDirMovesTheOldData(t *testing.T) {
 
 	useUserConfigDir()
 
-	dir := filepath.Join(home, "go-smart-proxy")
+	base, err := os.UserConfigDir() // Library/Application Support on macOS
+	if err != nil {
+		t.Skip(err)
+	}
+	dir := filepath.Join(base, "go-smart-proxy")
 	for _, name := range []string{encryptedConfig, "relay_state.json"} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Errorf("%s was not carried over: %v", name, err)

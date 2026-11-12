@@ -44,7 +44,7 @@ func TestHelpers(t *testing.T) {
 	if firstNonEmpty("", "b") != "b" || firstNonEmpty("a", "b") != "a" {
 		t.Error("firstNonEmpty")
 	}
-	if id := hostID(); len(id) > 29 || strings.ContainsAny(id, " .A-Z") {
+	if id := hostID(); len(id) > 29 || strings.ContainsAny(id, " .") || id != strings.ToLower(id) {
 		t.Errorf("hostID = %q", id)
 	}
 	for addr, want := range map[string]bool{"127.0.0.1:9": true, "localhost:9": true, "[::1]:9": true, "0.0.0.0:9": false, "example.org:9": false, "nope": false} {
