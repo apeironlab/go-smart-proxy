@@ -177,6 +177,7 @@ func TestRuleExitConditionsFallThroughToNextRule(t *testing.T) {
 }
 
 func TestSharedContext(t *testing.T) {
+	restoreNetworkAnalysis(t)
 	yes, no := true, false
 	rm := newRelayClient("default")
 	save := func(rc *RelayConfig, vpn []string) {
@@ -259,6 +260,7 @@ func TestLabelForNetwork(t *testing.T) {
 }
 
 func TestSharedContextFollowsTheNetworkTable(t *testing.T) {
+	restoreNetworkAnalysis(t)
 	cfg := &RelayConfig{NetworkLabel: "default", NetworkLabels: []NetworkLabel{{Label: "office-vpn", VPN: "up"}}}
 	setNet := func(vpn []string) {
 		stateMu.Lock()
@@ -318,6 +320,7 @@ func TestValidateNetworkLabels(t *testing.T) {
 }
 
 func TestRelayConfigInfoShowsWhatIsSharedNow(t *testing.T) {
+	restoreNetworkAnalysis(t)
 	cfg := &RelayConfig{Address: "r.example:8443", NetworkLabel: "default", NetworkLabels: []NetworkLabel{{Label: "office-vpn", VPN: "up"}}}
 	configMu.Lock()
 	old := configuration.Relays
@@ -343,4 +346,20 @@ func TestRelayConfigInfoShowsWhatIsSharedNow(t *testing.T) {
 	if len(info.NetworkLabels) != 1 || info.NetworkLabel != "default" {
 		t.Fatalf("table: %+v", info)
 	}
+}
+
+// restoreNetworkAnalysis puts the detected network analysis back when the test
+// ends. Tests that fake a VPN must not leave the empty analysis behind: the
+// background poller would see a "network change" at a random moment, refetch
+// every PAC and close every connection in whichever test is running then.
+func restoreNetworkAnalysis(t *testing.T) {
+	t.Helper()
+	stateMu.RLock()
+	orig := analysis
+	stateMu.RUnlock()
+	t.Cleanup(func() {
+		stateMu.Lock()
+		analysis = orig
+		stateMu.Unlock()
+	})
 }
