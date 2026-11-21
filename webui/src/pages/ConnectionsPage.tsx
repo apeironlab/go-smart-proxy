@@ -10,6 +10,49 @@ import { api } from '../api'
 import type { ConnInfo } from '../api'
 import { Dot, EmptyState, Info, PageHeader, StatCard } from '../components/ui'
 
+function ClientApp({ conn }: { conn: ConnInfo }) {
+  const { t } = useTranslation()
+  const p = conn.process
+  if (!p) return null
+  const chain = p.parents ?? []
+  return (
+    <div>
+      <Text fw={700} mb="xs">{t('Client program')}</Text>
+      {p.note && !p.pid && <Text size="sm" c="dimmed">{t('Not available: {{reason}}', { reason: p.note })}</Text>}
+      {p.pid > 0 && (
+        <>
+          <SimpleGrid cols={2}>
+            <Info label={t('Program')} value={p.name || '-'} />
+            <Info label={t('Window title')} value={p.window || '-'} />
+            <Info label={t('Process')} value={String(p.pid)} />
+            <Info label={t('User')} value={p.user || '-'} />
+            <Info label={t('Started')} value={p.started ? new Date(p.started).toLocaleString('it-IT') : '-'} />
+            <Info label={t('Executable')} value={<Code>{p.exe || '-'}</Code>} />
+          </SimpleGrid>
+          <div style={{ marginTop: 8 }}>
+            <Text size="xs" c="dimmed" mb={4}>{t('Command line')}</Text>
+            <Code block style={{ maxHeight: 120, overflow: 'auto' }}>{p.cmdline || '-'}</Code>
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <Text size="xs" c="dimmed" mb={4}>{t('Started by')}</Text>
+            {chain.length === 0 ? (
+              <Text size="sm">-</Text>
+            ) : (
+              <Stack gap={2}>
+                {chain.map((r) => (
+                  <Text size="sm" key={r.pid} title={r.exe}>
+                    {r.name || r.exe || '?'} <Text span size="xs" c="dimmed">({r.pid})</Text>
+                  </Text>
+                ))}
+              </Stack>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 const stateColors: Record<string, string> = {
   connecting: 'gray',
   authenticating: 'yellow',
@@ -74,6 +117,7 @@ function ConnDetails({ conn }: { conn: ConnInfo }) {
         <Info label={t('End')} value={conn.ended ? fmtTime(conn.ended) : '-'} />
         <Info label={t('Duration')} value={fmtDur(conn)} />
       </SimpleGrid>
+      <ClientApp conn={conn} />
       <SimpleGrid cols={4}>
         <Info label="Client → proxy" value={fmtBytes(conn.bytesClientIn)} />
         <Info label="Proxy → client" value={fmtBytes(conn.bytesClientOut)} />
@@ -113,7 +157,7 @@ export default function ConnectionsPage() {
     const q = filter.trim().toLowerCase()
     if (!q) return conns
     return conns.filter((c) =>
-      [c.host, c.url, c.target, c.client, c.proxy, c.route].some((v) => (v ?? '').toLowerCase().includes(q)),
+      [c.host, c.url, c.target, c.client, c.proxy, c.route, c.app, c.process?.exe].some((v) => (v ?? '').toLowerCase().includes(q)),
     )
   }, [conns, filter])
 
@@ -142,7 +186,7 @@ export default function ConnectionsPage() {
         actions={
           <>
             <TextInput
-              placeholder={t('Filter by host, URL, proxy, route...')}
+              placeholder={t('Filter by host, URL, program, proxy, route...')}
               leftSection={<IconSearch size={14} />}
               value={filter}
               onChange={(e) => setFilter(e.currentTarget.value)}
@@ -184,11 +228,12 @@ export default function ConnectionsPage() {
             text={filter ? undefined : t('Traffic will appear here as soon as an application uses the proxy.')}
           />
         ) : (
-          <Table.ScrollContainer minWidth={900}>
+          <Table.ScrollContainer minWidth={1050}>
             <Table highlightOnHover style={{ border: 0, borderRadius: 0 }}>
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>#</Table.Th>
+                  <Table.Th>{t('Application')}</Table.Th>
                   <Table.Th>{t('Destination')}</Table.Th>
                   <Table.Th>{t('Route')}</Table.Th>
                   <Table.Th>{t('State')}</Table.Th>
@@ -202,8 +247,16 @@ export default function ConnectionsPage() {
                   <Table.Tr key={c.id} onClick={() => setSelectedId(c.id)} style={{ cursor: 'pointer' }}>
                     <Table.Td c="dimmed">{c.id}</Table.Td>
                     <Table.Td>
+                      <Text size="sm" fw={500} truncate="end" maw={200} title={c.process?.exe || c.app}>{c.app || '-'}</Text>
+                      {c.process && c.process.pid > 0 && (
+                        <Text size="xs" c="dimmed" truncate="end" maw={200}>
+                          {c.process.window ? `${c.process.name} · ` : ''}{c.process.pid}
+                        </Text>
+                      )}
+                    </Table.Td>
+                    <Table.Td>
                       <Group gap={8} wrap="nowrap">
-                        <Badge variant="light" color="gray" size="sm" radius="sm">{c.type}</Badge>
+                        <Badge variant="light" color="gray" size="sm" radius="sm" style={{ flexShrink: 0 }}>{c.type}</Badge>
                         <div style={{ minWidth: 0 }}>
                           <Text size="sm" fw={600} truncate="end" maw={280} title={c.host || c.target}>
                             {c.host || c.target || '-'}

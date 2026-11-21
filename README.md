@@ -633,7 +633,8 @@ Pages:
 - **Regole** — destination rules and a route test tool.
 - **Credenziali** — named credentials; passwords are never returned by the API
   (an empty field keeps the current password).
-- **Connessioni** — live/recent connections, routes, bytes, errors, events.
+- **Connessioni** — live/recent connections, routes, bytes, errors, events, and
+  the program that opened each one (see below).
 - **Relay** — connection status, contacts, approved routes, device code,
   enrollment/reconfiguration, link latency.
 - **Applicazioni** — the catalog the relays publish to you (shown when there is one).
@@ -641,6 +642,27 @@ Pages:
   relays require, a host checker, counters.
 - **Configurazione → Sicurezza** — change the master password, recovery key,
   access token for this interface.
+
+### Which program opened a connection
+
+For a client on the same computer the proxy asks the operating system who owns
+the client end of the connection. The **Connessioni** table shows the title of
+the program's main window, or the name of its executable when it has none; the
+detail panel shows everything that could be read: executable path, command
+line, process number, user, start time and the chain of parents.
+
+| System | How it is found | Window title |
+|--------|-----------------|--------------|
+| Linux | `/proc/net/tcp*` and `/proc/<pid>/fd` | with X11 and `xprop`; not on Wayland |
+| Windows | `GetExtendedTcpTable` (owner process), process list | top-level window of the program |
+| macOS | `lsof` and `ps` | not available |
+
+It works without administrator rights and is best effort: on Linux and macOS a
+program of another user cannot be read, a short-lived program may be gone
+before it is looked at, and a program that detaches from its parent has no
+chain. The information is only shown. It is never used to allow or refuse a
+connection, and it stays on this computer. The Windows and macOS code could not
+be run by the author; the Linux code is covered by tests.
 
 The **Configurazione** page is the single place for proxy-wide settings:
 listeners, SOCKS5, system proxy, transparent routing, static hosts, relay

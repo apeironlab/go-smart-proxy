@@ -661,5 +661,15 @@
   "Never ask: enable only with the button": "Non chiedere mai: attiva solo con il pulsante",
   "Authorize": "Autorizza",
   "Needed to load the firewall rules: macOS asks for your fingerprint or password.": "Serve per caricare le regole del firewall: macOS chiede l'impronta o la password.",
-  "Services or interfaces (e.g. pulse, en0) whose TCP traffic is redirected to the proxy by the firewall, without touching the system proxy: it works with VPN clients that forbid changing it. macOS asks for your fingerprint or password when it is activated.": "Servizi o interfacce (es. pulse, en0) il cui traffico TCP viene reindirizzato al proxy dal firewall, senza toccare il proxy di sistema: funziona con i client VPN che ne vietano la modifica. macOS chiede l'impronta o la password quando si attiva."
+  "Services or interfaces (e.g. pulse, en0) whose TCP traffic is redirected to the proxy by the firewall, without touching the system proxy: it works with VPN clients that forbid changing it. macOS asks for your fingerprint or password when it is activated.": "Servizi o interfacce (es. pulse, en0) il cui traffico TCP viene reindirizzato al proxy dal firewall, senza toccare il proxy di sistema: funziona con i client VPN che ne vietano la modifica. macOS chiede l'impronta o la password quando si attiva.",
+  "Client program": "Programma client",
+  "Not available: {{reason}}": "Non disponibile: {{reason}}",
+  "Program": "Programma",
+  "Window title": "Titolo della finestra",
+  "Process": "Processo",
+  "Started": "Avviato",
+  "Executable": "Eseguibile",
+  "Command line": "Riga di comando",
+  "Started by": "Avviato da",
+  "Filter by host, URL, program, proxy, route...": "Filtra per host, URL, programma, proxy, rotta..."
 }

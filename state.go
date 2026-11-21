@@ -56,6 +56,11 @@ type connSnapshot struct {
 	BytesUpOut     int64 `json:"bytesUpOut"`
 
 	Events []ConnEvent `json:"events"`
+
+	// App is the client as the table shows it: the title of its main window, or
+	// the name of its executable. Process has everything the system says.
+	App     string         `json:"app,omitempty"`
+	Process *ClientProcess `json:"process,omitempty"`
 }
 
 // ConnInfo describes a live connection (tunnel, upstream transport
@@ -87,6 +92,14 @@ type ConnInfo struct {
 	mu      sync.Mutex
 	events  []ConnEvent
 	closeFn func()
+	proc    *ClientProcess
+}
+
+// setProcess records the program that opened the connection.
+func (c *ConnInfo) setProcess(p *ClientProcess) {
+	c.mu.Lock()
+	c.proc = p
+	c.mu.Unlock()
 }
 
 func (c *ConnInfo) setState(s ConnState) {
@@ -174,6 +187,12 @@ func (c *ConnInfo) snapshot() connSnapshot {
 		BytesUpOut:     c.bytesUpOut.Load(),
 		Events:         append([]ConnEvent(nil), c.events...),
 	}
+	if c.proc != nil {
+		cp := *c.proc
+		cp.Parents = append([]ProcessRef(nil), c.proc.Parents...)
+		s.Process = &cp
+		s.App = cp.App()
+	}
 	c.mu.Unlock()
 	return s
 }
@@ -206,6 +225,12 @@ func (r *connRegistry) newConn(typ, client, host, target, proxyAddr, route, cred
 	}
 	r.records[rec.ID] = rec
 	r.mu.Unlock()
+	if client != "" {
+		// The program is looked for at once and away from the connection: a
+		// short-lived program may be gone in a moment, and the data path must
+		// not wait for the system's tables.
+		go func() { rec.setProcess(describeClient(client)) }()
+	}
 	return rec
 }
 

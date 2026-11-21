@@ -57,6 +57,28 @@ export interface ConnInfo {
   bytesUpIn: number
   bytesUpOut: number
   events: ConnEvent[]
+  // The client, when it is a program on this computer: the title of its main
+  // window or the name of its executable, and everything the system says.
+  app?: string
+  process?: ClientProcess
+}
+
+export interface ProcessRef {
+  pid: number
+  name?: string
+  exe?: string
+}
+
+export interface ClientProcess {
+  pid: number
+  name?: string
+  exe?: string
+  cmdline?: string
+  user?: string
+  started?: string
+  window?: string
+  parents?: ProcessRef[]
+  note?: string
 }
 
 export interface DnsEntry {
